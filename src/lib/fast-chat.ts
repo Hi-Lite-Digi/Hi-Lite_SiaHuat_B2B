@@ -92,7 +92,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(stock|stocks|in stock|on hand|available right now|availability right now)\b/.test(simple) && /\b(definitely|confirm|check|right now|live|on hand|available)\b/.test(simple)) {
     return reply(
-      "I can’t confirm live stock yet because EPB is not connected to this demo. Tell me the exact item or SKU and I can first confirm the catalogue match and price; EPB stock is checked only after you confirm the item.",
+      "I can’t confirm live stock for a general result list yet. Tell me the exact item or SKU first; after you confirm the item, I’ll run a fresh check on its Sia Huat Add to cart listing.",
       ["Search by SKU", "Find a product"],
     );
   }

@@ -15,6 +15,11 @@ function expectedStockId(filePath: string) {
   return path.basename(filePath, path.extname(filePath)).toUpperCase();
 }
 
+function oracleStockIds(expected: string) {
+  const withoutSupplierPrefix = expected.replace(/^\d{3}[A-Z]{2}-/, "");
+  return [...new Set([expected, withoutSupplierPrefix])];
+}
+
 function words(value: string) {
   const ignored = new Set(["with", "and", "for", "the", "new", "version"]);
   return new Set(
@@ -38,17 +43,20 @@ function isSameProductFamily(expectedName: string, candidateName: string) {
 }
 
 async function getOracleProduct(expected: string) {
-  const { body } = await postChat({
-    message: expected,
-    sessionId: `image-oracle-${crypto.randomUUID()}`,
-  });
-  const products = [
-    ...(body.selectedProduct ? [body.selectedProduct] : []),
-    ...(body.products ?? []),
-  ];
-  return products.find((product) => product.stock_id.toUpperCase() === expected)
-    ?? products.find((product) => product.stock_id.toUpperCase().startsWith(expected))
-    ?? null;
+  for (const stockId of oracleStockIds(expected)) {
+    const { body } = await postChat({
+      message: stockId,
+      sessionId: `image-oracle-${crypto.randomUUID()}`,
+    });
+    const products = [
+      ...(body.selectedProduct ? [body.selectedProduct] : []),
+      ...(body.products ?? []),
+    ];
+    const exact = products.find((product) => product.stock_id.toUpperCase() === stockId)
+      ?? products.find((product) => product.stock_id.toUpperCase().startsWith(stockId));
+    if (exact) return exact;
+  }
+  return null;
 }
 
 async function validateImage(filePath: string, index: number) {
@@ -72,7 +80,7 @@ async function validateImage(filePath: string, index: number) {
   ];
   const relevant = oracle
     ? returned.filter((product) =>
-        product.stock_id.toUpperCase() === expected
+        product.stock_id.toUpperCase() === oracle.stock_id.toUpperCase()
         || isSameProductFamily(oracle.name, product.name))
     : [];
   const responseMessage = typeof body.message === "string" ? body.message : "";

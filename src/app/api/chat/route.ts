@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { chatRequestSchema, type ChatReply, type Product } from "@/lib/chat-contract";
+import { chatRequestSchema, type ChatReply, type ChatRequest, type Product } from "@/lib/chat-contract";
 import { sendChatToN8n } from "@/lib/n8n-client";
 import {
   detectProductUseCase,
+  findCatalogueProductByCode,
   findProductForStockCheck,
   matchesRequestedBrand,
   matchesProductUseCase,
@@ -12,9 +13,11 @@ import {
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
-import { fetchSiaHuatProduct } from "@/lib/siahuat-product";
+import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
+
+const sessionQueues = new Map<string, Promise<void>>();
 
 function customerReply<T extends { message: string }>(reply: T): T {
   return { ...reply, message: normalizeClaireMessage(reply.message) };
@@ -26,8 +29,11 @@ async function addLiveCatalogueState(reply: ChatReply): Promise<ChatReply> {
       ...reply.products,
       ...(reply.selectedProduct ? [reply.selectedProduct] : []),
     ];
-    const liveProducts = new Map(
-      await Promise.all(
+    type GroundedLiveProduct = {
+      catalogueProduct: Product & { source_url: string };
+      live: ScrapedSiaHuatProduct | null;
+    };
+    const liveEntries: Array<readonly [string, GroundedLiveProduct | null]> = await Promise.all(
         [...new Set(products.map((product) => product.stock_id))].map(async (stockId) => {
           const catalogueProduct = await findProductForStockCheck(stockId);
           if (!catalogueProduct) return [stockId, null] as const;
@@ -37,25 +43,29 @@ async function addLiveCatalogueState(reply: ChatReply): Promise<ChatReply> {
             if (live.stock_id.toLowerCase() !== stockId.toLowerCase()) {
               throw new Error("LIVE_ITEM_CODE_MISMATCH");
             }
-            return [stockId, live] as const;
+            return [stockId, { catalogueProduct, live }] as const;
           } catch (error) {
             console.error("[api/chat] early live stock check failed", { stockId, error });
-            return [stockId, null] as const;
+            return [stockId, { catalogueProduct, live: null }] as const;
           }
         }),
-      ),
     );
+    const liveProducts = new Map<string, GroundedLiveProduct | null>(liveEntries);
     const enrich = (product: Product): Product => {
-      const live = liveProducts.get(product.stock_id);
-      if (!live) return product;
+      const grounded = liveProducts.get(product.stock_id);
+      if (!grounded) return product;
+      const { catalogueProduct, live } = grounded;
       return {
         ...product,
-        source_url: live.source_url,
-        list_price: live.price_ex_gst,
-        in_stock: live.in_stock,
-        available_quantity: live.available_quantity,
-        stock_status: live.stock_status,
-        last_scraped_at: live.last_scraped_at,
+        ...catalogueProduct,
+        ...(live ? {
+          source_url: live.source_url,
+          list_price: live.price_ex_gst,
+          in_stock: live.in_stock,
+          available_quantity: live.available_quantity,
+          stock_status: live.stock_status,
+          last_scraped_at: live.last_scraped_at,
+        } : {}),
       };
     };
 
@@ -180,6 +190,7 @@ function productFamily(product: Product) {
   ].filter(Boolean).join(" ").toLowerCase();
   const families = [
     { name: "knife", pattern: /\b(?:knife|knives|cleaver|yanagi|yanagiba|slicer)\b/ },
+    { name: "utility-box", pattern: /\b(?:utility|storage|dish|bus|cutlery)\s+(?:box|boxes|bin|bins)\b|\bcambox\b/ },
     { name: "plate", pattern: /\b(?:plate|plates|platter|platters)\b/ },
     { name: "food-pan", pattern: /\b(?:melamine\s+)?gn\s+pan\b|\bgastronorm\s+pan\b|\bfood\s+pan\b/ },
     { name: "cookware-set", pattern: /\bcookware\s+set\b|\bset\b.*\b(?:pan|pot|skillet)s?\b/ },
@@ -191,6 +202,70 @@ function productFamily(product: Product) {
     { name: "machine", pattern: /\b(?:machine|machines|appliance|appliances)\b/ },
   ];
   return families.find((family) => family.pattern.test(text))?.name ?? null;
+}
+
+function exactCodeCandidates(message: string) {
+  return [...new Set(
+    message.toUpperCase().match(/\b(?=[A-Z0-9./-]*\d)[A-Z0-9]+(?:[./-][A-Z0-9]+)*\b/g) ?? [],
+  )].filter((candidate) =>
+    candidate.length >= 3
+    && candidate.length <= 50
+    && !/^\d+(?:\.\d+)?-?(?:CM|MM|IN|INCH)$/.test(candidate),
+  ).slice(0, 5);
+}
+
+function isConcreteCatalogueRequest(message: string) {
+  return /\b(?:chef|cleaver|boning|paring|bread|yanagi|sashimi|frying|fryng|saucepan|omele+t+e?|grill)\b/i.test(message)
+    || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
+    || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
+    || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i.test(message)
+    || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
+    || exactCodeCandidates(message).length > 0;
+}
+
+async function groundedCatalogueReply(message: string): Promise<ChatReply | null> {
+  for (const code of exactCodeCandidates(message)) {
+    const exactProduct = await findCatalogueProductByCode(code);
+    if (exactProduct) {
+      return {
+        message: `I found the exact catalogue item for code: ${exactProduct.stock_id}.`,
+        stage: "clarify",
+        products: [exactProduct],
+        selectedProduct: null,
+        suggestions: [],
+      };
+    }
+  }
+
+  if (!isConcreteCatalogueRequest(message)) return null;
+  const products = await searchCatalogue(message, { resultLimit: 30, outputLimit: 20 });
+  const diverseProducts = diversifyProducts(products);
+  if (diverseProducts.length === 0) return null;
+  return {
+    message: diverseProducts.length === 1
+      ? "I found this matching item in the Sia Huat catalogue:"
+      : `I found ${diverseProducts.length} different matching options in the Sia Huat catalogue:`,
+    stage: "clarify",
+    products: diverseProducts,
+    selectedProduct: null,
+    suggestions: [],
+  };
+}
+
+async function inSessionOrder<T>(sessionId: string, task: () => Promise<T>) {
+  const previous = sessionQueues.get(sessionId) ?? Promise.resolve();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => gate);
+  sessionQueues.set(sessionId, tail);
+
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+    if (sessionQueues.get(sessionId) === tail) sessionQueues.delete(sessionId);
+  }
 }
 
 function isSameProductType(source: Product, candidate: Product) {
@@ -243,6 +318,13 @@ function diversifyProducts(products: Product[], limit = 3) {
   }
 
   return selected;
+}
+
+function deduplicateReplyProducts(reply: ChatReply): ChatReply {
+  const products = [...new Map(
+    reply.products.map((product) => [product.stock_id.trim().toLowerCase(), product]),
+  ).values()];
+  return products.length === reply.products.length ? reply : { ...reply, products };
 }
 
 function isExactCodeRequest(message: string, products: Product[]) {
@@ -345,10 +427,12 @@ async function addAvailableAlternatives(reply: ChatReply): Promise<ChatReply> {
     ...reply,
     products: [...reply.products, ...candidates.values()],
   });
-  const availableAlternatives = enriched.products.filter(
-    (product) => product.stock_id !== unavailable.stock_id
-      && product.stock_status === "in_stock"
-      && isSameProductType(unavailable, product),
+  const availableAlternatives = diversifyProducts(
+    enriched.products.filter(
+      (product) => product.stock_id !== unavailable.stock_id
+        && product.stock_status === "in_stock"
+        && isSameProductType(unavailable, product),
+    ),
   );
 
   return availableAlternatives.length > 0
@@ -415,34 +499,42 @@ function enforceLiveCheckoutGate(reply: ChatReply): ChatReply {
   };
 }
 
-export async function POST(request: Request) {
-  const input = chatRequestSchema.safeParse(await request.json());
-
-  if (!input.success) {
-    return NextResponse.json(
-      { error: "Please enter a valid product request." },
-      { status: 400 },
-    );
-  }
-
+async function processChat(input: ChatRequest) {
   const startedAt = performance.now();
-  const fastReply = input.data.brain === "n8n" || input.data.image || isCatalogueRequest(input.data.message)
-    ? null
-    : getFastChatReply(input.data);
+  const fastReply = input.image ? null : getFastChatReply(input);
   if (fastReply) {
-    console.log("[api/chat] fast casual reply", {
+    console.log("[api/chat] fast deterministic reply", {
       durationMs: Math.round(performance.now() - startedAt),
       stage: fastReply.stage,
     });
     return NextResponse.json(customerReply(fastReply));
   }
 
+  const groundedReplyPromise = input.image
+    ? Promise.resolve<ChatReply | null>(null)
+    : groundedCatalogueReply(input.message).catch((error) => {
+        console.error("[api/chat] grounded catalogue search failed", { message: input.message, error });
+        return null;
+      });
+
   try {
-    const n8nReply = keepExactCodeMatches(await sendChatToN8n(input.data), input.data.message);
-    const prioritizedReply = await prioritizeRequestedUseCase(n8nReply, input.data.message);
-    const diverseReply = await addDiverseProductOptions(prioritizedReply, input.data.message);
+    const [n8nReply, groundedReply] = await Promise.all([
+      sendChatToN8n(input),
+      groundedReplyPromise,
+    ]);
+    const exactReply = keepExactCodeMatches(n8nReply, input.message);
+    const groundedOrN8n = groundedReply ?? {
+      ...exactReply,
+      stage: exactReply.products.length === 0 && isCatalogueRequest(input.message)
+        ? "clarify" as const
+        : exactReply.stage,
+    };
+    const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, input.message);
+    const diverseReply = await addDiverseProductOptions(prioritizedReply, input.message);
     const liveReply = await addLiveCatalogueState(diverseReply);
-    const reply = enforceLiveCheckoutGate(explainUnavailableProducts(await addAvailableAlternatives(liveReply)));
+    const reply = deduplicateReplyProducts(
+      enforceLiveCheckoutGate(explainUnavailableProducts(await addAvailableAlternatives(liveReply))),
+    );
     console.log("[api/chat] n8n brain reply", {
       durationMs: Math.round(performance.now() - startedAt),
       productCount: reply.products.length,
@@ -462,4 +554,17 @@ export async function POST(request: Request) {
       { status: 502 },
     );
   }
+}
+
+export async function POST(request: Request) {
+  const input = chatRequestSchema.safeParse(await request.json());
+
+  if (!input.success) {
+    return NextResponse.json(
+      { error: "Please enter a valid product request." },
+      { status: 400 },
+    );
+  }
+
+  return inSessionOrder(input.data.sessionId, () => processChat(input.data));
 }

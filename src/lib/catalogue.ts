@@ -4,10 +4,30 @@ import { productSchema, type Product } from "@/lib/chat-contract";
 
 const productSearchSchema = productSchema.extend({ score: z.coerce.number() });
 
-const stockCheckProductSchema = z.object({
-  stock_id: z.string(),
-  source_url: z.string().url(),
-});
+const catalogueProductSchema = productSchema.extend({ source_url: z.string().url() });
+
+const productSelect = [
+  "stock_id",
+  "name",
+  "brand_id",
+  "status",
+  "list_price",
+  "uom_id",
+  "source_url",
+  "image_url",
+  "description",
+  "size",
+  "dimensions",
+  "brand",
+  "model",
+  "in_stock",
+  "available_quantity",
+  "stock_status",
+  "category",
+  "subcategory",
+  "third_category",
+  "last_scraped_at",
+].join(",");
 
 const productUseCases = [
   { key: "omelette-pan", label: "omelette pan", search: "omelette pan", request: /\bomele+t+e?\b/i, candidate: /\bomele+t+e?\b/i },
@@ -70,7 +90,12 @@ export function prioritizeBrand(message: string, products: Product[]) {
 }
 
 export function normalizeCatalogueQuery(message: string) {
-  const cleaned = message
+  const corrected = message
+    .replace(/\bche+f+f?\b/gi, "chef")
+    .replace(/\b(?:knfie|kinife|knive)\b/gi, "knife")
+    .replace(/\b(?:fryng|fryin)\b/gi, "frying")
+    .replace(/\banot\b/gi, " ");
+  const cleaned = corrected
     .replace(/\b(hey|hi|hello|sure|wait|tell me|i am|i'm|im|i|we are|we're|can you|could you|please|do you|do u|would you|you|your)\b/gi, " ")
     .replace(/\b(need|want|looking for|look for|search for|search|find me|find|show me|show|have|sell|selling|carry|stock|price|pricing|cost|how much|add|also|while|there|too|a|an|some|the|and|or|if)\b/gi, " ")
     .replace(/[^a-z0-9'\-/\s]/gi, " ")
@@ -91,6 +116,7 @@ export function normalizeCatalogueQuery(message: string) {
 function matchesExplicitConstraints(query: string, product: Product) {
   const requested = query.toLowerCase();
   const candidate = searchableProductText(product).toLowerCase();
+  const productName = product.name.toLowerCase();
   const requiredCategories = [
     { requested: /\bchef\b.*\bknife\b|\bknife\b.*\bchef\b/, candidate: /\bchef(?:'s|s)?\s+knife\b/ },
     { requested: /\bcleaver\b/, candidate: /\bcleaver\b/ },
@@ -110,16 +136,32 @@ function matchesExplicitConstraints(query: string, product: Product) {
   if (requiredCategories.some((rule) => rule.requested.test(requested) && !rule.candidate.test(candidate))) return false;
   const requestedUseCase = detectProductUseCase(query);
   if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
-  if (/\bknife\b/.test(requested) && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(candidate)) return false;
+  if (/\bknife\b/.test(requested) && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
 
   const requestedColour = requested.match(/\b(red|yellow|blue|black|white|green|silver)\b/)?.[1];
   if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`).test(candidate)) return false;
 
   const requestedMetricSize = requested.match(/\b(\d+(?:\.\d+)?)\s*(cm|mm)\b/);
-  if (requestedMetricSize && !new RegExp(`\\b${requestedMetricSize[1]}\\s*${requestedMetricSize[2]}\\b`, "i").test(candidate)) return false;
+  if (requestedMetricSize) {
+    const [, size, unit] = requestedMetricSize;
+    const metricPattern = unit === "cm"
+      ? new RegExp(`(?:ø|diameter\\s*)?${size}(?:\\s*cm|(?=\\s*[x×]))`, "i")
+      : new RegExp(`(?:ø|diameter\\s*)?${size}(?:\\s*mm|(?=\\s*[x×]))`, "i");
+    if (!metricPattern.test(candidate)) return false;
+  }
 
   const requestedInchSize = requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
-  if (requestedInchSize && !new RegExp(`\\b${requestedInchSize[1]}\\s*-?\\s*(?:inch|in|\")`, "i").test(candidate)) return false;
+  if (requestedInchSize) {
+    const inches = Number.parseFloat(requestedInchSize[1]);
+    const directInches = new RegExp(`\\b${requestedInchSize[1]}\\s*-?\\s*(?:inch|in|\")`, "i");
+    const centimetres = inches * 2.54;
+    const equivalentCm = [...new Set([
+      Math.floor(centimetres),
+      Math.round(centimetres),
+      Math.ceil(centimetres),
+    ])].some((size) => new RegExp(`(?:ø|diameter\\s*)?${size}(?:\\s*cm|(?=\\s*[x×]))`, "i").test(candidate));
+    if (!directInches.test(candidate) && !equivalentCm) return false;
+  }
 
   return true;
 }
@@ -164,7 +206,7 @@ export async function findProductForStockCheck(stockId: string) {
 
   const query = new URLSearchParams({
     stock_id: `eq.${stockId}`,
-    select: "stock_id,source_url",
+    select: productSelect,
     limit: "1",
   });
   const response = await fetch(`${url}/rest/v1/products?${query}`, {
@@ -173,5 +215,9 @@ export async function findProductForStockCheck(stockId: string) {
     signal: AbortSignal.timeout(4_000),
   });
   if (!response.ok) throw new Error(`SUPABASE_PRODUCT_${response.status}`);
-  return stockCheckProductSchema.array().parse(await response.json())[0] ?? null;
+  return catalogueProductSchema.array().parse(await response.json())[0] ?? null;
+}
+
+export async function findCatalogueProductByCode(stockId: string) {
+  return findProductForStockCheck(stockId.trim());
 }

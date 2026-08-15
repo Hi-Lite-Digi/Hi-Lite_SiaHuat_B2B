@@ -10,16 +10,18 @@ function assert(condition: unknown, message: string): asserts condition {
 
 async function loadSourceProducts(stockIds: string[]) {
   const url = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  assert(url && serviceKey, "Supabase REST credentials are missing");
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY
+    ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+    ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  assert(url && key, "Supabase REST credentials are missing");
   const ids = stockIds.map((value) => `"${value.replaceAll('"', '\\"')}"`).join(",");
   const endpoint = new URL("/rest/v1/products", url);
   endpoint.searchParams.set("select", "stock_id,name,status,list_price,uom_id");
   endpoint.searchParams.set("stock_id", `in.(${ids})`);
   const response = await fetch(endpoint, {
     headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
+      apikey: key,
+      Authorization: `Bearer ${key}`,
     },
     signal: AbortSignal.timeout(30_000),
   });
@@ -39,6 +41,8 @@ async function main() {
   assert(reply.products.length > 0, "No chef-knife products were returned");
 
   const stockIds = reply.products.map((product) => product.stock_id);
+  const uniqueStockIds = new Set(stockIds.map((stockId) => stockId.trim().toLowerCase()));
+  assert(uniqueStockIds.size === stockIds.length, `Duplicate item codes were returned: ${stockIds.join(", ")}`);
   const source = await loadSourceProducts(stockIds);
   const sourceByStockId = new Map(source.map((product) => [product.stock_id, product]));
 

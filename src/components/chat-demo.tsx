@@ -94,6 +94,7 @@ export function ChatDemo() {
   const [draggingImage, setDraggingImage] = useState(false);
   const [pendingProduct, setPendingProduct] = useState<Product | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState<number | null>(null);
+  const [pendingQuote, setPendingQuote] = useState<QuoteSummary | null>(null);
   const [confirmedProduct, setConfirmedProduct] = useState<Product | null>(null);
   const [lastProducts, setLastProducts] = useState<Product[]>([]);
   const [checkingStock, setCheckingStock] = useState(false);
@@ -103,7 +104,7 @@ export function ChatDemo() {
   const sessionId = useRef(crypto.randomUUID());
   const conversationEnd = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
-  const queuedMessage = useRef<string | null>(null);
+  const queuedMessages = useRef<string[]>([]);
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageTimes = useRef(new Map<number, string>());
@@ -207,43 +208,34 @@ export function ChatDemo() {
     conversationEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading, suggestions]);
 
-  function recordQuantity(userText: string, quantity: number, product: Product) {
+  function quoteFor(quantity: number, product: Product): QuoteSummary {
     const estimate = product.list_price * quantity;
-    setMessages((current) => [...current,
-      { id: nextId.current++, role: "user", text: userText },
-      {
-        id: nextId.current++, role: "assistant",
-        text: "Thank you for buying the items. Here is your order summary:",
-        quoteSummary: {
-          item: product.name,
-          code: product.stock_id,
-          pricePerItem: product.list_price,
-          quantity,
-          total: estimate,
-          uom: product.uom_id,
-          sourceUrl: product.source_url,
-        },
-      },
-    ]);
-    setQuery(""); setStage("complete"); setSuggestions(["Change quantity", "Choose another item"]);
+    return {
+      item: product.name,
+      code: product.stock_id,
+      pricePerItem: product.list_price,
+      quantity,
+      total: estimate,
+      uom: product.uom_id,
+      sourceUrl: product.source_url,
+    };
   }
 
-  function completeRememberedQuantity(quantity: number, product: Product) {
-    const estimate = product.list_price * quantity;
-    setMessages((current) => [...current, {
-      id: nextId.current++, role: "assistant",
-      text: "Thank you for buying the items. Here is your order summary:",
-      quoteSummary: {
-        item: product.name,
-        code: product.stock_id,
-        pricePerItem: product.list_price,
-        quantity,
-        total: estimate,
-        uom: product.uom_id,
-        sourceUrl: product.source_url,
+  function showOrderReview(quantity: number, product: Product, userText?: string) {
+    const quote = quoteFor(quantity, product);
+    setMessages((current) => [...current,
+      ...(userText ? [{ id: nextId.current++, role: "user" as const, text: userText }] : []),
+      {
+        id: nextId.current++, role: "assistant" as const,
+        text: "Please review this enquiry. If everything is correct, choose Confirm order request. No purchase has been placed yet.",
+        quoteSummary: quote,
       },
-    }]);
-    setPendingQuantity(null); setStage("complete"); setSuggestions(["Change quantity", "Choose another item"]);
+    ]);
+    setPendingQuantity(null);
+    setPendingQuote(quote);
+    setQuery("");
+    setStage("clarify");
+    setSuggestions(["Confirm order request", "Change quantity", "Choose another item"]);
   }
 
   function showQuantityLimit(userText: string, quantity: number, product: Product, limit: number) {
@@ -275,7 +267,25 @@ export function ChatDemo() {
       return;
     }
     if (loadingRef.current) {
-      queuedMessage.current = clean;
+      queuedMessages.current.push(clean);
+      setQuery("");
+      return;
+    }
+
+    if (pendingQuote && /^(?:yes[,.!\s]*)?(?:confirm|confirmed|confirm order request|place the enquiry|submit for review)([.!\s]*)$/i.test(clean)) {
+      syncHandledTurnWithN8n(clean);
+      const confirmedQuote = pendingQuote;
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        {
+          id: nextId.current++, role: "assistant",
+          text: "Thank you for confirming. I’ve recorded this as an enquiry for Sia Huat staff review. No purchase has been placed yet; the sales team will confirm the final order with you.",
+          quoteSummary: confirmedQuote,
+        },
+      ]);
+      setPendingQuote(null);
+      setStage("submitted");
+      setSuggestions(["Choose another item"]);
       setQuery("");
       return;
     }
@@ -301,6 +311,7 @@ export function ChatDemo() {
 
     if (clean === "Change quantity" && confirmedProduct) {
       syncHandledTurnWithN8n(clean);
+      setPendingQuote(null);
       setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }, { id: nextId.current++, role: "assistant", text: `Sure. How many ${confirmedProduct.uom_id} of ${confirmedProduct.name} do you need?`, selectedProduct: confirmedProduct }]);
       setStage("quantity"); setSuggestions(["1", "6", "12", "24"]); return;
     }
@@ -309,7 +320,7 @@ export function ChatDemo() {
       syncHandledTurnWithN8n(clean);
       const excludedStockId = confirmedProduct?.stock_id ?? pendingProduct?.stock_id;
       const alternatives = lastProducts.filter((product) => product.stock_id !== excludedStockId);
-      setPendingProduct(null); setPendingQuantity(null); setConfirmedProduct(null); setStage("clarify");
+      setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify");
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
         {
@@ -354,7 +365,7 @@ export function ChatDemo() {
     if (confirmedProduct && changedItem) {
       syncHandledTurnWithN8n(clean);
       const item = changedItem[1].toLowerCase();
-      setPendingProduct(null); setPendingQuantity(null); setConfirmedProduct(null); setStage("discover"); setQuery("");
+      setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setStage("discover"); setQuery("");
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
         { id: nextId.current++, role: "assistant", text: `No problem. We’ll stop the ${confirmedProduct.name} enquiry. What kind of ${item} do you want instead?` },
@@ -364,13 +375,13 @@ export function ChatDemo() {
     }
 
     const naturalQuantity = clean.match(/^(?:actually\s+)?(?:make it|change(?: the)? quantity to|quantity)\s*(\d+)$/i)?.[1];
-    if (confirmedProduct && stage === "complete" && naturalQuantity) {
+    if (confirmedProduct && (stage === "complete" || pendingQuote) && naturalQuantity) {
       syncHandledTurnWithN8n(clean);
       const quantity = Number.parseInt(naturalQuantity, 10);
       const limit = availableLimit(confirmedProduct);
       if (quantity >= 1 && quantity <= 100_000) {
         if (limit !== null && quantity > limit) showQuantityLimit(clean, quantity, confirmedProduct, limit);
-        else recordQuantity(clean, quantity, confirmedProduct);
+        else showOrderReview(quantity, confirmedProduct, clean);
       }
       return;
     }
@@ -391,7 +402,17 @@ export function ChatDemo() {
         showQuantityLimit(clean, quantity, confirmedProduct, limit); return;
       }
 
-      recordQuantity(clean, quantity, confirmedProduct); return;
+      showOrderReview(quantity, confirmedProduct, clean); return;
+    }
+
+    if (pendingQuote) {
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        { id: nextId.current++, role: "assistant", text: "I haven’t submitted this enquiry yet. Please choose Confirm order request, Change quantity, or Choose another item." },
+      ]);
+      setQuery("");
+      setSuggestions(["Confirm order request", "Change quantity", "Choose another item"]);
+      return;
     }
 
     await brainTurnQueue.current;
@@ -441,9 +462,8 @@ export function ChatDemo() {
       if (sessionId.current !== requestSession) return;
       loadingRef.current = false;
       setLoading(false);
-      const queued = queuedMessage.current;
+      const queued = queuedMessages.current.shift();
       if (queued) {
-        queuedMessage.current = null;
         setTimeout(() => void submit(queued), 0);
       }
     }
@@ -463,7 +483,7 @@ export function ChatDemo() {
       setSuggestions(["Choose another item", "No, thank you"]); return;
     }
     const quantity = requestedQuantity(userText);
-    setPendingProduct(product); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
+    setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
     setMessages((current) => [...current,
       { id: nextId.current++, role: "user", text: userText },
       {
@@ -480,7 +500,7 @@ export function ChatDemo() {
   async function confirmProduct(userText = "Yes, this is the item.") {
     if (!pendingProduct || checkingStock) return;
     const product = pendingProduct;
-    setPendingProduct(null); setConfirmedProduct(product); setStage("clarify"); setSuggestions([]); setCheckingStock(true);
+    setPendingProduct(null); setPendingQuote(null); setConfirmedProduct(product); setStage("clarify"); setSuggestions([]); setCheckingStock(true);
     const quantity = pendingQuantity;
     setMessages((current) => [...current, { id: nextId.current++, role: "user", text: userText }]);
 
@@ -506,7 +526,7 @@ export function ChatDemo() {
           return;
         }
         if (quantity !== null) {
-          completeRememberedQuantity(quantity, liveProduct);
+          showOrderReview(quantity, liveProduct);
           return;
         }
         setStage("quantity");
@@ -545,7 +565,7 @@ export function ChatDemo() {
   function rejectProduct(userText = "No, that’s not the item.") {
     if (!pendingProduct) return;
     const alternatives = lastProducts.filter((product) => product.stock_id !== pendingProduct.stock_id);
-    setPendingProduct(null); setPendingQuantity(null); setStage("clarify");
+    setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setStage("clarify");
     setMessages((current) => [...current,
       { id: nextId.current++, role: "user", text: userText },
       { id: nextId.current++, role: "assistant", text: alternatives.length > 0 ? "No problem. Here are the other catalogue options and prices. Which one is closer?" : "No problem. Tell me another name, brand or detail and I’ll search again.", products: alternatives },
@@ -558,7 +578,7 @@ export function ChatDemo() {
     messageTimes.current.clear();
     sessionId.current = crypto.randomUUID();
     loadingRef.current = false;
-    queuedMessage.current = null;
+    queuedMessages.current = [];
     brainTurnQueue.current = Promise.resolve();
     setMessages([firstMessage]);
     setStage("discover");
@@ -569,6 +589,7 @@ export function ChatDemo() {
     setLoading(false);
     setPendingProduct(null);
     setPendingQuantity(null);
+    setPendingQuote(null);
     setConfirmedProduct(null);
     setLastProducts([]);
     setCheckingStock(false);
@@ -714,20 +735,20 @@ export function ChatDemo() {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); void submit(query); }
 
-  return <div onPaste={handleImagePaste} className="conversation-export w-full max-w-[490px] rounded-[3.3rem] bg-[#112f29] p-3 shadow-[0_35px_90px_rgba(21,54,47,.24)]">
-    <div className="chat-phone flex h-[70dvh] min-h-[540px] flex-col overflow-hidden rounded-[2.55rem] bg-[#f8f5ee] lg:h-[min(720px,calc(100dvh-3rem))] lg:min-h-[560px]">
-      <header className="chat-screen-header flex items-center gap-3 bg-[#176853] px-5 py-5 text-white"><div className="grid size-11 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f]">C</div><div className="min-w-0 flex-1"><h2 className="truncate font-semibold">Claire · Sia Huat</h2><p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#5be08f]" /> online</p></div><div className="print-hide flex items-center gap-1"><Button aria-label="Download conversation PDF" title="Download conversation PDF" disabled={exportingPdf} variant="ghost" className="h-9 rounded-full px-2.5 text-white hover:bg-white/10 hover:text-white" onClick={() => void saveConversationAsPdf()}>{exportingPdf ? <LoaderCircle className="size-4 animate-spin" /> : <FileDown className="size-4" />}<span className="text-[11px] font-semibold">PDF</span></Button><Button aria-label="Reset conversation" size="icon" variant="ghost" className="rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button></div></header>
-      <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-5">
-        {messages.map((message) => <div key={`${sessionId.current}-${message.id}`} className={`chat-message ${message.role === "user" ? "ml-auto max-w-[82%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm" : "max-w-[94%] rounded-2xl rounded-tl-sm bg-white p-4 text-sm shadow-sm"}`}>
+  return <div onPaste={handleImagePaste} className="conversation-export min-w-0 w-full max-w-[490px] rounded-[2.5rem] bg-[#112f29] p-2 shadow-[0_35px_90px_rgba(21,54,47,.24)] sm:rounded-[3.3rem] sm:p-3">
+    <div className="chat-phone flex h-[70dvh] min-h-[540px] min-w-0 flex-col overflow-hidden rounded-[2rem] bg-[#f8f5ee] sm:rounded-[2.55rem] lg:h-[min(720px,calc(100dvh-3rem))] lg:min-h-[560px]">
+      <header className="chat-screen-header flex min-w-0 items-center gap-2 bg-[#176853] px-3 py-4 text-white sm:gap-3 sm:px-5 sm:py-5"><div className="grid size-10 shrink-0 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f] sm:size-11">C</div><div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold sm:text-base">Claire · Sia Huat</h2><p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#5be08f]" /> online</p></div><div className="print-hide flex shrink-0 items-center gap-0.5 sm:gap-1"><Button aria-label="Download conversation PDF" title="Download conversation PDF" disabled={exportingPdf} variant="ghost" className="h-9 rounded-full px-2 text-white hover:bg-white/10 hover:text-white sm:px-2.5" onClick={() => void saveConversationAsPdf()}>{exportingPdf ? <LoaderCircle className="size-4 animate-spin" /> : <FileDown className="size-4" />}<span className="hidden text-[11px] font-semibold min-[350px]:inline">PDF</span></Button><Button aria-label="Reset conversation" size="icon" variant="ghost" className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button></div></header>
+      <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
+        {messages.map((message) => <div key={`${sessionId.current}-${message.id}`} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
           <p className="whitespace-pre-line leading-6 text-[#334b44]">{message.text}</p>
           {message.quoteSummary && <div className="mt-3 overflow-hidden rounded-xl border border-[#176853]/15 bg-[#f8f5ee]">
             <div className="bg-[#176853] px-3 py-2 text-xs font-semibold uppercase tracking-[.12em] text-white">Order summary</div>
             <dl className="divide-y divide-[#15362f]/10 px-3 text-xs text-[#526861]">
-              <div className="grid grid-cols-[92px_1fr] gap-3 py-2.5"><dt>Item</dt><dd className="font-semibold leading-5 text-[#15362f]">{message.quoteSummary.item}<span className="mt-0.5 block text-[11px] font-normal text-[#667a74]">code: {message.quoteSummary.code}</span></dd></div>
-              <div className="grid grid-cols-[92px_1fr] gap-3 py-2.5"><dt>Price per item</dt><dd className="font-semibold text-[#15362f]">${message.quoteSummary.pricePerItem.toFixed(2)} / {message.quoteSummary.uom}<span className="ml-1 text-[10px] font-normal text-[#667a74]">ex GST</span></dd></div>
-              <div className="grid grid-cols-[92px_1fr] gap-3 py-2.5"><dt>Quantity</dt><dd className="font-semibold text-[#15362f]">{message.quoteSummary.quantity} {message.quoteSummary.uom}</dd></div>
-              <div className="grid grid-cols-[92px_1fr] gap-3 py-3"><dt className="font-semibold text-[#15362f]">Total</dt><dd className="text-base font-bold text-[#176853]">${message.quoteSummary.total.toFixed(2)}<span className="ml-1 text-[10px] font-normal text-[#667a74]">ex GST</span></dd></div>
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-2.5 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt>Item</dt><dd className="min-w-0 break-words font-semibold leading-5 text-[#15362f]">{message.quoteSummary.item}<span className="mt-0.5 block break-all text-[11px] font-normal text-[#667a74]">code: {message.quoteSummary.code}</span></dd></div>
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-2.5 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt>Price per item</dt><dd className="min-w-0 break-words font-semibold text-[#15362f]">${message.quoteSummary.pricePerItem.toFixed(2)} / {message.quoteSummary.uom}<span className="ml-1 text-[10px] font-normal text-[#667a74]">ex GST</span></dd></div>
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-2.5 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt>Quantity</dt><dd className="font-semibold text-[#15362f]">{message.quoteSummary.quantity} {message.quoteSummary.uom}</dd></div>
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-3 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt className="font-semibold text-[#15362f]">Total</dt><dd className="min-w-0 break-words text-base font-bold text-[#176853]">${message.quoteSummary.total.toFixed(2)}<span className="ml-1 text-[10px] font-normal text-[#667a74]">ex GST</span></dd></div>
             </dl>
             {message.quoteSummary.sourceUrl && <a href={message.quoteSummary.sourceUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 border-t border-[#15362f]/10 px-3 py-2.5 text-[11px] font-semibold text-[#176853]">View Sia Huat listing <ExternalLink className="size-3" /></a>}
           </div>}
@@ -751,7 +772,7 @@ export function ChatDemo() {
           <ImagePlus className="size-4" /> Paste, drop, or click to add a product photo
         </button>}
         {attachmentError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{attachmentError}</p>}
-        <form onSubmit={handleSubmit} className="flex gap-2"><Input aria-label="Product question" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(query); } }} placeholder={stage === "quantity" ? `Enter quantity in ${confirmedProduct?.uom_id ?? "units"}…` : attachment ? "Add a note, or send the photo…" : "Ask about a product…"} className="h-12 rounded-full border-0 bg-[#f3f3f0] px-5" /><Button type="submit" aria-label="Send question" disabled={(!query.trim() && !attachment) || loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button></form>
+        <form onSubmit={handleSubmit} className="flex min-w-0 gap-2"><Input aria-label="Product question" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(query); } }} placeholder={stage === "quantity" ? `Enter quantity in ${confirmedProduct?.uom_id ?? "units"}…` : attachment ? "Add a note, or send the photo…" : "Ask about a product…"} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4 sm:px-5" /><Button type="submit" aria-label="Send question" disabled={(!query.trim() && !attachment) || loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button></form>
       </div>
     </div>
   </div>;

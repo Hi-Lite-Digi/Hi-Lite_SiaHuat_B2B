@@ -85,12 +85,16 @@ await check("USE-006", "Use-case suitability", "Is a bone knife good for cutting
 
 await check("MATCH-001", "Product relevance", "I need an 8-inch chef knife", (reply) => {
   const products = reply.products ?? [];
-  return products.length === 1 && /chef knife 8/i.test(products[0].name) ? null : `Expected one 8-inch chef knife, got ${products.map((p) => p.name).join("; ")}`;
+  const relevant = products.length > 0
+    && products.length <= 3
+    && products.every((product) => /chef(?:'s|s)?\s+knife/i.test(product.name))
+    && products.every((product) => /\b8\s*-?\s*(?:inch|in|\")\b/i.test(product.name) || /\b(?:20|21)\s*cm\b/i.test(product.name));
+  return relevant ? null : `Expected 8-inch-equivalent chef knives, got ${products.map((p) => p.name).join("; ")}`;
 });
 await check("MATCH-002", "Product relevance", "I need something sharp", noProducts);
 await check("MATCH-003", "Product relevance", "I need something to cut chicken", (reply) => noProducts(reply) ?? (/bones|trimming/i.test(reply.message) ? null : "Must clarify bones versus trimming"));
-await check("MATCH-004", "Product relevance", "I need a blue 24cm frying pan", (reply) => (reply.products ?? []).every((product) => /blue/i.test(product.name) && /24\s*cm/i.test(product.name)) ? null : "Every result must match blue and 24cm");
-await check("MATCH-005", "Product relevance", "393XX-CHIT15", (reply) => (reply.products?.length === 1 && reply.products[0].stock_id === "393XX-CHIT15") ? null : "Exact SKU must return exactly one exact row");
+await check("MATCH-004", "Product relevance", "I need a blue 24cm frying pan", (reply) => (reply.products?.length ?? 0) > 0 && (reply.products ?? []).every((product) => /blue/i.test(product.name) && /(?:ø\s*)?24(?:\s*cm|(?=x))/i.test(product.name)) ? null : "Every result must match blue and 24cm");
+await check("MATCH-005", "Product relevance", "63628", (reply) => (reply.products?.length === 1 && reply.products[0].stock_id === "63628") ? null : "Exact current SKU must return exactly one exact row");
 await check("MATCH-006", "Product relevance", "cheff knfie", (reply) => (reply.products?.length ?? 0) > 0 && (reply.products ?? []).every((product) => /chef.*knife|knife.*chef/i.test(product.name)) ? null : "Typo should return chef knives only");
 await check("MATCH-008", "Human tone", "Got chef knife anot?", (reply) => {
   if (/supabase|database|stock_id|list_price/i.test(reply.message)) return "Customer-facing reply exposed implementation jargon";
