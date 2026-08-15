@@ -1,0 +1,492 @@
+import {
+  createFastReply as reply,
+  isCatalogueRequest,
+  productCategories,
+  productCategory,
+  productWords,
+  rememberedActiveCategories,
+  rememberedPurpose,
+  simplifyMessage,
+  type FastChatInput,
+  type FastReply,
+} from "@/lib/chat-intent";
+
+export { isCatalogueRequest } from "@/lib/chat-intent";
+
+export function getFastChatReply(input: FastChatInput): FastReply | null {
+  const message = input.message.trim();
+  const simple = simplifyMessage(message);
+  const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const hasProductContext = userHistory.slice(-6).some((content) => productWords.test(content));
+  const mentionedCategories = userHistory.flatMap((content) => productCategories.filter((category) => category.pattern.test(content)).map((category) => category.label));
+  const previousCategories = rememberedActiveCategories(userHistory);
+  const lastCategory = previousCategories.at(-1) ?? null;
+  const purposeCategory = mentionedCategories[0] ?? null;
+  const currentCategory = productCategory(message);
+  const currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
+  const purpose = rememberedPurpose([...userHistory, message]);
+  const activeTask = lastCategory ? `your ${lastCategory}${purpose && lastCategory === purposeCategory ? ` for ${purpose}` : ""}` : null;
+  const awaitingItemConfirmation = [...input.history].reverse().some((item) => item.role === "assistant" && /exact item|is this.*item|confirm.*item/i.test(item.content));
+  const coffeeContext = [...userHistory, message].some((content) => /\b(coffee|cofee|cofe|kopi)\b/i.test(content));
+  const prataContext = [...userHistory, message].some((content) => /\b(prata|roti prata|paratha)\b/i.test(content));
+  const cookedPrataContext = [...userHistory, message].some((content) => /\b(cooked prata|cut cooked|serving prata|prata.*serving)\b/i.test(content));
+  const rawPrataContext = [...userHistory, message].some((content) => /\b(raw prata|prata dough|raw dough|divide.*dough)\b/i.test(content));
+  const humanHandoffContext = input.history.some((item) => /human|person|team member|sales team|colleague/i.test(item.content) && /contact|speak|handoff|follow.?up|notified|flag|alerted/i.test(item.content));
+
+  const asksAboutIdentity = /\b(are you|r u|am i (talking|speaking) (to|with))\b.*\b(ai|bot|robot|human|real person)\b/i.test(message);
+  const requestsHuman =
+    /\b(get|bring|find|send|give|connect|transfer|alert|call)\b.{0,30}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
+    || /\b(speak|talk|chat)\b.{0,20}\b(to|with)\b.{0,12}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
+    || /\b(real person|human agent|customer service)\b/i.test(message);
+
+  if (requestsHuman && !asksAboutIdentity) {
+    return reply("I’ve alerted a human colleague. They’ll be here in about 5–10 minutes.", []);
+  }
+
+  const asksClaireForProductPhoto = /\b(can|could|will|would)\s+(?:you|u)\s+(?:please\s+)?(?:send|show|share|post)\b.{0,40}\b(pic|photo|image|picture)s?\b/i.test(message)
+    || /\b(pic|photo|image|picture)s?\b.{0,30}\b(send|show|share|post)\b/i.test(message);
+
+  if (asksClaireForProductPhoto) {
+    return reply(
+      "I can’t send product photos from this chat yet, sorry. If you send me a photo, SKU or product name, I can still help check the item.",
+      ["Send a photo", "Enter a SKU", "Enter product name"],
+    );
+  }
+
+  if (humanHandoffContext && /^(no thanks|no thank you|not anymore|cancel (the )?(human )?(request|follow up)|never mind)$/.test(simple)) {
+    return reply(
+      `No problem—I won’t request human follow-up.${activeTask ? ` Your ${activeTask.replace(/^your /, "")} enquiry is still here.` : " What else can I help you find?"}`,
+      activeTask ? ["Continue with my enquiry", "Start again"] : ["Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/\b(what(?:'s| is) your (issue|problem|deal)|do you have (an? )?(issue|problem)|what is wrong with you|what's wrong with you)\b/.test(simple)) {
+    return reply(
+      activeTask
+        ? `No issue on my side 😄 I’m Claire, and I’m here to help with ${activeTask}. Want to carry on?`
+        : "No issue on my side 😄 I’m Claire from Sia Huat. I’m here to help you find the right product and prepare an enquiry—what are you looking for?",
+      activeTask ? ["Yes, continue", "Start something else"] : ["Tell me what you sell", "Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/\b(are you (okay|ok|alright)|you (okay|ok|alright))\b/.test(simple)) {
+    return reply(
+      activeTask ? `I’m good, thanks for asking 😊 We can carry on with ${activeTask} whenever you’re ready.` : "I’m good, thanks for asking 😊 How can I help you today?",
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Tell me what you sell", "Search by SKU"],
+    );
+  }
+
+  if (/\b(what are [a-z]{2,16} here for|what are you here for|why are you here|what do you do here|what(?:'s| is) your purpose|how can you help me)\b/.test(simple)) {
+    return reply(
+      "I’m Claire from Sia Huat. I’m here to understand what you need, find the closest catalogue options and prices, confirm the exact item with you, then help prepare the quantity enquiry for the sales team.",
+      ["Tell me what you sell", "Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/^(i changed my mind|changed my mind|actually never mind|actually nevermind|i want something else)$/.test(simple)) {
+    return reply(
+      activeTask ? `No problem—what would you like to change about ${activeTask}: the item, type, size, brand or quantity?` : "No problem—what would you like to look for instead?",
+      activeTask ? ["Change the item", "Add a size or brand", "Start again"] : ["Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/\b(stock|stocks|in stock|on hand|available right now|availability right now)\b/.test(simple) && /\b(definitely|confirm|check|right now|live|on hand|available)\b/.test(simple)) {
+    return reply(
+      "I can’t confirm live stock yet because EPB is not connected to this demo. Tell me the exact item or SKU and I can first confirm the catalogue match and price; EPB stock is checked only after you confirm the item.",
+      ["Search by SKU", "Find a product"],
+    );
+  }
+
+  if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s!?.,]+$/u.test(message)) {
+    return reply("Hi 👋 I can help you find Sia Huat catalogue products, compare published prices, confirm the exact SKU and prepare an enquiry. What are you looking for?", ["Chef knives", "Cookware", "Glassware", "Search by SKU"]);
+  }
+
+  if ((/[鸡雞]/u.test(message) && /[骨]/u.test(message)) || (/[鸡雞]/u.test(message) && /\bbones?\b/.test(simple))) {
+    return reply("如果需要切鸡骨，建议找砍骨刀（cleaver）。要我显示目录里的砍骨刀吗？", ["显示砍骨刀", "我只需要去骨/修肉"]);
+  }
+
+  if (coffeeContext && /\b(bottled|bottle|canned|can|ready to drink|ready-to-drink)\b/.test(simple)) {
+    return reply(
+      "Got it—you mean ready-to-drink bottled kopi kosong. I don’t see a confirmed ready-to-drink kopi kosong product in the current Sia Huat catalogue, so I won’t show unrelated bottles. Would coffee beans or brewing supplies work instead?",
+      ["Show coffee beans", "Show brewing supplies", "No, bottled only"],
+    );
+  }
+
+  if (coffeeContext && /^(yes|yes please|yes pls|yup|yeah|correct|that one|ok|okay|sure)$/.test(simple)) {
+    return reply("Which coffee format do you mean: coffee beans, ground/instant coffee, or ready-to-drink bottled kopi?", ["Coffee beans", "Ground or instant", "Ready-to-drink bottled"]);
+  }
+
+  if (/\b(kopi\s*kosong|cof+e+\s*kosong|cofe\s*kosong|coffee\s*kosong)\b/.test(simple) || (/\b(coffee|cofee|cofe|kopi)\b/.test(simple) && /\b(ice|iced|icoe|kosong)\b/.test(simple))) {
+    return reply("Do you mean kopi kosong? Which format do you need: coffee beans, ground/instant coffee, or ready-to-drink bottled kopi?", ["Coffee beans", "Ground or instant", "Ready-to-drink bottled"]);
+  }
+
+  if (awaitingItemConfirmation && /^(yes|yes please|yup|yeah|correct|this is it|confirm|(?:yes[,\s-]*)?(?:that's|thats) the one|no|nope|wrong item|not this|(?:no[,\s-]*)?(?:that's|thats) not it|no[,\s-]*(?:show|give)( me)? (the )?(other|others|alternatives|options))([.!\s]*)$/i.test(message)) {
+    return reply(
+      /^(no|nope|wrong|not)/i.test(simple)
+        ? "Okay, I won’t use that item. Please choose another option or tell me what was wrong with the match."
+        : "Got it—you’re confirming the item shown. I’ll continue with that exact SKU and ask for the quantity.",
+      /^(no|nope|wrong|not)/i.test(simple) ? ["Show other options", "Add a detail"] : ["1", "6", "12", "24"],
+    );
+  }
+
+  if (/^(yes[ ,]?)?(please )?(continue|continue helping|continue helping me|help me continue|let's continue|lets continue|carry on|get back to it|go ahead|back to (it|the knife))$/.test(simple) && activeTask) {
+    if (lastCategory === "knife" && purpose === "cutting chicken") {
+      return reply("Sure—we were finding a knife for cutting chicken. Are you cutting through bones or trimming the meat?", ["Cleaver", "Boning knife"]);
+    }
+    return reply(`Sure—let’s continue with ${activeTask}. What detail would you like to add?`, ["Add a brand", "Add a size", "Search now"]);
+  }
+
+  if (/\b(ignore( all| previous| the)? instructions|system prompt|password|api key|secret key|show.*credentials|reveal.*secret)\b/.test(simple)) {
+    return reply(
+      `I can’t help with passwords, credentials or internal instructions.${activeTask ? ` We can continue with ${activeTask}.` : " I can help with Sia Huat products and prices."}`,
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Search by SKU"],
+    );
+  }
+
+  const unsupportedProductFamilies = [
+    { pattern: /\b(ppe|personal protective equipment|safety helmets?|hard hats?|safety vests?|safety boots?)\b/, label: "PPE" },
+    { pattern: /\b(electrical cable|electric cable|power cable|electrical wire|electric wire|circuit breaker|switchgear)\b/, label: "electrical supplies" },
+  ].filter((family) => family.pattern.test(simple));
+
+  if (unsupportedProductFamilies.length > 0) {
+    const requested = [...new Set(unsupportedProductFamilies.map((family) => family.label))].join(" or ");
+    return reply(
+      `We don’t appear to carry ${requested} in the Sia Huat catalogue. We focus on commercial kitchen and F&B supplies—things like cookware, knives, tableware, glassware, barware, buffet equipment and beverage products. What do you need for your kitchen or F&B operation?`,
+      ["Kitchen equipment", "Cookware", "Tableware", "Glassware"],
+    );
+  }
+
+  if (prataContext && /\b(bone|boning)\s+(?:knife|knives)\b/.test(simple)) {
+    return reply(
+      "No, I wouldn't recommend a bone knife for prata. It is made for meat and bone work. For cooked prata, kitchen scissors or a pizza cutter would make more sense. A chef's knife can work too.",
+      ["Show kitchen scissors", "Show pizza cutters", "Show chef knives"],
+    );
+  }
+
+  if (prataContext && /\b(which|what)\b.*\b(recommend|choose|best|good)|\b(recommend|which one|what knife|these knives)\b/.test(simple)) {
+    if (rawPrataContext) {
+      return reply(
+        "For raw prata dough, I would look for a dough scraper or divider first. A bone knife is not suitable. Do you want me to check for dough scrapers?",
+        ["Show dough scrapers", "I need a preparation surface", "It is for cooked prata"],
+      );
+    }
+
+    return reply(
+      `${cookedPrataContext ? "For cooked prata" : "If this is for cooked prata"}, kitchen scissors are practical, and a pizza cutter can work for quick portions. A chef's knife is another option. I would not use a bone knife. Which style do you prefer?`,
+      ["Show kitchen scissors", "Show pizza cutters", "Show chef knives"],
+    );
+  }
+
+  if (prataContext && /\b(board|tray|cutting board)\b/.test(simple) && /\b(is|use|used|suitable|right|correct|for)\b/.test(simple)) {
+    return reply(
+      "I can't confirm that the board-with-tray is made for prata from the catalogue description alone. It looks like a general preparation board, so I shouldn't recommend it just because its name contains 'cutting'. Are you cutting cooked prata for serving, dividing raw dough, or looking for a preparation surface?",
+      ["Cut cooked prata for serving", "Divide raw prata dough", "Need a preparation surface"],
+    );
+  }
+
+  if (prataContext && /\b(cooked|ready|serving|serve|portion|portions)\b/.test(simple)) {
+    return reply(
+      "Got it. This is for cooked prata. Do you want a handheld cutter, or a surface to cut and serve it on?",
+      ["Handheld knife or cutter", "Board or workstation", "Not sure, help me choose"],
+    );
+  }
+
+  if (prataContext && /\b(raw|dough|divide|dividing|portion dough|dough portions)\b/.test(simple)) {
+    return reply(
+      "Got it. This is for raw prata dough. Do you need a dough scraper, a knife, or a preparation surface?",
+      ["Dough scraper or divider", "Knife", "Preparation surface"],
+    );
+  }
+
+  if (prataContext && /\b(prep|preparation|surface|workstation)\b/.test(simple)) {
+    return reply(
+      "Okay. What size and material do you prefer? Is it for raw dough, or for cutting cooked prata?",
+      ["Raw dough preparation", "Cut cooked prata", "Add size and material"],
+    );
+  }
+
+  if (/\b(prata|roti prata|paratha)\b/.test(simple)) {
+    return reply(
+      "Sure. What do you need to do with the prata? Are you cutting cooked prata, dividing raw dough, or looking for a work surface?",
+      ["Cut cooked prata for serving", "Divide raw prata dough", "Need a preparation surface"],
+    );
+  }
+
+  if (!currentCategory && !/\b(chicken|poultry)\b/.test(simple) && /\b(something|things?|stuff|tools?|equipment)\b/.test(simple) && /\b(cut|cutting|prepare|preparing|serve|serving|make|making)\b/.test(simple)) {
+    return reply(
+      "Sure. What are you working with, and what do you need to do with it? I’ll narrow down the right product after that.",
+      ["Describe the food or item", "Describe the task", "I know the product name"],
+    );
+  }
+
+  if (/\b(something sharp|blue thing|red thing|kitchen stuff|kitchen things|something for the kitchen)\b/.test(simple)) {
+    return reply(
+      "Can you narrow it down a little—what will you use it for? The item type, size or material would help.",
+      ["Describe how I’ll use it", "Add a size", "Add a material"],
+    );
+  }
+
+  if (currentCategory === "pan" && /\b(cut|cutting|chop|chopping|slice|slicing)\b/.test(simple) && /\b(chicken|meat|food)\b/.test(simple)) {
+    return reply(
+      "Just checking—you mentioned a pan, but cutting chicken needs a knife. Are you looking for a knife to cut it, a pan to cook it, or both?",
+      ["A knife for cutting", "A pan for cooking", "Both"],
+    );
+  }
+
+  if (/\b(chicken|poultry)\b/.test(simple) && /\b(cut|cutting|chop|chopping|prepare|preparing|good for)\b/.test(simple) && !currentCategory) {
+    return reply(
+      "Are you looking for a knife to cut the chicken? If yes, will you be cutting through bones or trimming the meat?",
+      ["Cutting through bones", "Trimming meat or joints", "No, I need something else"],
+    );
+  }
+
+  if (currentCategories.length > 1) {
+    const [first, second] = currentCategories;
+    return reply(
+      `Just checking—are you looking for both a ${first} and a ${second}, or only one of them?`,
+      [`Both—start with ${first}`, `${first} only`, `${second} only`],
+    );
+  }
+
+  if (/\b(knife|blade)\b/.test(simple) && /\b(machine|slicer|slicing machine)\b/.test(simple)) {
+    const suppliedModel = message.match(/\b(?=[a-z0-9-]*\d)[a-z0-9]+(?:-[a-z0-9]+)+\b/i)?.[0];
+    return reply(
+      suppliedModel
+        ? `Got it—the machine model is ${suppliedModel}. What is the machine brand, or do you have the exact spare-part SKU?`
+        : "Which machine model is this for? Please send the machine name, model number or spare-part SKU so I don’t match the wrong blade.",
+      suppliedModel ? ["Enter machine brand", "Search by SKU"] : ["Enter machine model", "Search by SKU"],
+    );
+  }
+
+  if (/\bknife\b/.test(simple) && /\b(chicken|poultry)\b/.test(simple) && /\b(cut|cutting|chop|chopping|prepare|preparing|good for)\b/.test(simple)) {
+    return reply(
+      "For chicken, it depends—are you cutting through bones or trimming the meat? A cleaver is better for bones; a boning knife is better for meat and joints.",
+      ["Cutting through bones", "Trimming meat or joints"],
+    );
+  }
+
+  if ((/\b(chicken|poultry)\b/.test(simple) || purpose === "cutting chicken") && /\b(bone|bones|through bones)\b/.test(simple)) {
+    return reply("For cutting through chicken bones, a cleaver is the better choice. Want me to show you the cleavers?", ["Show cleavers", "I only need to trim meat"]);
+  }
+
+  if ((/\b(chicken|poultry)\b/.test(simple) || purpose === "cutting chicken") && /\b(trim|trimming|debone|deboning|joint|joints|meat)\b/.test(simple)) {
+    return reply("For trimming chicken meat or working around joints, a boning knife is the better fit. Want me to show those?", ["Show boning knives", "I need to cut bones"]);
+  }
+
+  if (/^(start something else|something else|new search|start again)$/.test(simple)) {
+    return reply("Sure—what would you like to look for instead?", ["Chef knives", "Cookware", "Glassware", "Search by SKU"]);
+  }
+
+  const rememberedCategorySet = [...new Set(previousCategories)];
+  if (/^(show both|both items|both|both start with (knife|pan)|start with (knife|pan))$/.test(simple) && rememberedCategorySet.length > 1) {
+    if (/knife$/.test(simple)) return reply("Okay—let’s start with the knife. What will you use it for?", ["Cutting chicken", "General food prep", "Bread"]);
+    if (/pan$/.test(simple)) return reply("Okay—let’s start with the pan. What kind do you need?", ["Frying pan", "Non-stick pan", "Sauce pan"]);
+    return reply(`Sure—we’ll keep both the ${rememberedCategorySet[0]} and the ${rememberedCategorySet[1]}. Which one should we handle first?`, [`Start with ${rememberedCategorySet[0]}`, `Start with ${rememberedCategorySet[1]}`]);
+  }
+
+  if (/\b(what did i originally (want|ask for|come here for)|what was my original (item|request|enquiry)|what did i first (want|ask for))\b/.test(simple)) {
+    const originalCategory = mentionedCategories[0] ?? null;
+    const originalDisplay = originalCategory === "glassware" || originalCategory === "tableware" ? originalCategory : originalCategory ? `a ${originalCategory}` : null;
+    return reply(
+      originalDisplay
+        ? `You originally came here looking for ${originalDisplay}${purpose && originalCategory === purposeCategory ? ` for ${purpose}` : ""}.`
+        : "I don’t have an original product saved yet. What would you like to find?",
+      originalDisplay ? ["Go back to that", "Continue with current item"] : ["Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/\b(what did i (say|tell you|come here (for|to (buy|get)))|what did i want to (buy|get)|what am i (buying|getting|looking for)( now)?|why did i come here|do you remember|can you remember|remember what i (said|wanted|asked)|what was i looking for)\b/.test(simple)) {
+    const rememberedItems = [...new Set(previousCategories)];
+    const summary = rememberedItems.length > 0
+      ? purpose && rememberedItems.includes(purposeCategory ?? "")
+        ? `You came here for ${purpose}. You were looking for ${rememberedItems.map((item) => item === "glassware" || item === "tableware" ? item : `a ${item}`).join(" and also mentioned ")}.`
+        : `You came here looking for ${rememberedItems.map((item) => item === "glassware" || item === "tableware" ? item : `a ${item}`).join(" and ")}.`
+      : null;
+    return reply(
+      summary ? `${summary} Want to continue from there?` : "We’ve only just started, so I don’t have an item or purpose saved yet. What are you looking for?",
+      summary ? ["Yes, continue", "Start again"] : ["Chef knives", "Glassware", "Coffee beans"],
+    );
+  }
+
+  if (/\b(add|also|too|as well)\b/.test(simple) && currentCategory === "pan") {
+    const originalCategory = previousCategories.find((category) => category !== currentCategory) ?? lastCategory ?? "first item";
+    return reply(
+      `Got it—I’ll keep the ${originalCategory}${purpose ? ` for ${purpose}` : ""} and add a pan as well. What kind of pan do you need?`,
+      ["Frying pan", "Non-stick pan", "Sauce pan"],
+    );
+  }
+
+  if (/\b(switch|change|replace|instead|only)\b/.test(simple) && currentCategory) {
+    const display = currentCategory === "glassware" || currentCategory === "tableware" ? currentCategory : `a ${currentCategory}`;
+    const options = currentCategory === "pan" ? ["Frying pan", "Non-stick pan", "Sauce pan"] : currentCategory === "knife" ? ["Chef’s knife", "Cleaver", "Boning knife"] : [`Search ${currentCategory}`, "Add a brand", "Add a size"];
+    return reply(`Okay—we’ll switch to ${display}. What kind do you need?`, options);
+  }
+
+  if (/^keep (the )?knife$/.test(simple)) {
+    return reply(
+      `Okay—we’ll stick with the knife${purpose ? ` for ${purpose}` : ""}. Are you cutting through bones or trimming meat?`,
+      ["Cleaver", "Boning knife"],
+    );
+  }
+
+  if (currentCategory && lastCategory && currentCategory !== lastCategory) {
+    const previousDisplay = lastCategory === "glassware" || lastCategory === "tableware" ? lastCategory : `a ${lastCategory}`;
+    const currentDisplay = currentCategory === "glassware" || currentCategory === "tableware" ? currentCategory : `a ${currentCategory}`;
+    return reply(
+      `Just checking—you were looking for ${previousDisplay}${purpose && lastCategory === purposeCategory ? ` for ${purpose}` : ""}. Do you want to add ${currentDisplay} as well, or switch to ${currentDisplay}?`,
+      [`Add ${currentDisplay} too`, `Switch to ${currentDisplay}`, `Keep the ${lastCategory}`],
+    );
+  }
+
+  if (/^(hey )?(i (need|want|am looking for) |do you have |show me |find me |looking for |got )?(a |some )?(knife|knives)$/.test(simple)) {
+    return reply(
+      "Sure—what kind of knife do you need? For example: chef’s knife, cleaver, bread knife, or paring knife.",
+      ["Chef’s knife", "Cleaver", "Bread knife", "Paring knife"],
+    );
+  }
+
+  if (hasProductContext && /\b(chicken|poultry)\b/.test(simple) && /\b(cut|cutting|chop|chopping|knife|good for)\b/.test(simple)) {
+    return reply(
+      "For chicken, it depends—are you cutting through bones or trimming the meat? A cleaver is better for bones; a boning knife is better for meat and joints.",
+      ["Cleaver", "Boning knife"],
+    );
+  }
+
+  if (/^(i want|i need|can i get|give me) (chicken rice|nasi lemak|fried rice|noodles|pizza|burger|pasta)$/.test(simple)) {
+    const food = simple.replace(/^(i want|i need|can i get|give me) /, "");
+    return reply(
+      `We don’t sell cooked ${food} 😅 We supply kitchen and F&B equipment. Are you looking for serving ware or equipment for it instead?`,
+      food === "chicken rice" ? ["Chicken rice bowls", "Rice scoops", "Serving trays"] : ["Serving ware", "Kitchen equipment"],
+    );
+  }
+
+  if (/^(hi|hello|hey|hiya|yo|good morning|good afternoon|good evening)( there)?( what('s| is) up)?$/.test(simple)) {
+    return reply(
+      activeTask
+        ? `Hey! Good to see you again 😊 We were looking at ${activeTask}. Want to carry on?`
+        : "Hey! I’m Claire from Sia Huat 😊 What are you looking for today?",
+      activeTask ? ["Yes, continue", "Start something else"] : ["I need a knife", "Find coffee beans", "Search by SKU"],
+    );
+  }
+
+  if (/^(how are you|how's it going|how is it going|what's up|what is up|sup)$/.test(simple)) {
+    return reply(
+      activeTask ? `I’m good 😊 We can carry on with ${activeTask} whenever you’re ready.` : "I’m doing well and ready to help 😊 What are you shopping for?",
+      ["I need a knife", "Find coffee beans", "Search by SKU"],
+    );
+  }
+
+  if (/\b(tell me a joke|another joke|make me laugh)\b/.test(simple)) {
+    return reply(
+      `Okay, quick one: Why did the chef bring a ladder? To reach the top shelf 😄${activeTask ? ` Anyway—want to continue with ${activeTask}?` : " What shall we look for?"}`,
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Get a quote"],
+    );
+  }
+
+  if (/\b(weather[a-z]*|wheather|forecast|football|soccer|movie|movies|latest news|the news)\b/.test(simple)) {
+    return reply(
+      `I’m not the best person for that one 😅${activeTask ? ` Shall we get back to ${activeTask}?` : " I can help you find Sia Huat products and prices though."}`,
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Get a quote"],
+    );
+  }
+
+  if (/\b(python|javascript|typescript|java|c\+\+|programming|write (me )?(a )?(function|script|program|code)|merge sort|sorting algorithm|debug my code)\b/.test(simple)) {
+    return reply(
+      `I can only help with Sia Huat products and enquiries here.${activeTask ? ` Shall we get back to ${activeTask}?` : " What product are you looking for?"}`,
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/^(thanks|thank you|thanks a lot|thank you very much|thx|cheers)$/.test(simple)) {
+    return reply("You’re welcome! What else can I help you find?", ["Find another product", "Search by SKU"]);
+  }
+
+  if (/^(ok|okay|alright|sure|got it|i see|understood|nice|great|sounds good)$/.test(simple)) {
+    return reply("Great 👍 Tell me what you’d like to look for next.", ["Find a product", "Search by SKU"]);
+  }
+
+  if (/^(bye|goodbye|see you|see ya|talk to you later|have a good day)$/.test(simple)) {
+    return reply("Goodbye! 👋 Come back anytime you need help with the catalogue.", ["Start another enquiry"]);
+  }
+
+  if (/\b(are you (an? )?(ai|bot|chatbot)|is this (an? )?(ai|bot|chatbot))\b/.test(simple)) {
+    return reply(
+      "Yes—I’m an AI chat assistant for Sia Huat. I can help with the catalogue, while the sales team reviews enquiries before anything is confirmed.",
+      ["Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/\b(who are you|what are you|what is your name|what's your name)\b/.test(simple)) {
+    return reply(
+      "I’m Claire from Sia Huat. I can help you find catalogue items, check prices and prepare your enquiry.",
+      ["What can you do?", "Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/\b(where are you from|where you from|you from where|which company are you from)\b/.test(simple)) {
+    return reply("I’m Claire, chatting on behalf of Sia Huat in Singapore. What can I help you find?", ["Find a product", "Get a quote"]);
+  }
+
+  if (/\b(are you (a )?(human|real person)|am i talking to (a )?(human|person))\b/.test(simple)) {
+    return reply(
+      "I’m Claire, Sia Huat’s AI chat assistant—not a human. I can help with the catalogue, and the sales team reviews enquiries before anything is confirmed.",
+      ["Find a product", "Search by SKU"],
+    );
+  }
+
+  if (/^(help|help me|what can you do|how can you help|how does this work)$/.test(simple)) {
+    return reply(
+      "Tell me a product name, type, brand or SKU. I’ll narrow down the options, show the current catalogue price, ask for the quantity and prepare the enquiry for sales review.",
+      ["I need a knife", "Find coffee beans", "Search by SKU"],
+    );
+  }
+
+  if (/\b(what should i (even )?need|what do i need|why am i here|what can i ask|what (do|u|you|ypu).*sell|show me (the )?categories|what products)\b/.test(simple)) {
+    return reply(
+      "We mainly carry kitchen and F&B supplies—knives, cookware, plates, glassware, barware, buffet equipment, coffee and tea items. What are you looking for?",
+      ["Chef knives", "Glassware", "Coffee beans", "Search by SKU"],
+    );
+  }
+
+  if (/^(get|prepare|make)( me)? a quote$/.test(simple)) {
+    return reply("Sure—which product do you need a quote for? You can tell me its name, type, brand or SKU.", ["Search for a product", "Search by SKU"]);
+  }
+
+  if (/^(search by sku|i have (a )?sku|use (a )?sku)$/.test(simple)) {
+    return reply("Sure—paste the SKU or stock ID here and I’ll look it up in the catalogue.", []);
+  }
+
+  if (/^(sorry|my bad|oops)$/.test(simple)) {
+    return reply("No worries at all 😊 What would you like help finding?", ["Find a product", "Search by SKU"]);
+  }
+
+  if (/\b(chill|relax|take it easy|no rush)\b/.test(simple)) {
+    return reply("All good 😄 Take your time—I’m here when you’re ready.", ["Tell you what I need", "Search for a product"]);
+  }
+
+  if (/\b(a few things|few things|need your help|need some help|can you help me)\b/.test(simple)) {
+    return reply("Of course—tell me the first thing you need help with, and we’ll take it one step at a time.", ["Search for a product", "Get a quote"]);
+  }
+
+  if (/\b(can|could|will|would).*help( me)?\b/.test(simple)) {
+    return reply("Can. What do you need help with?", ["Find a product", "Get a quote"]);
+  }
+
+  if (/\b(too slow|so slow|slow as|taking (too )?long|why .*long|response time|still loading|hanging)\b/i.test(message)) {
+    return reply(
+      "Yeah, sorry about that. Tell me the product name or SKU and I’ll get straight to it.",
+      ["I need a knife", "Search by SKU"],
+    );
+  }
+
+  if (/\b(lol|lmao|wow|wah|damn|oh shit|nice one|cool sia)\b/.test(simple)) {
+    return reply("Haha 😄 What do you want to look for next?", ["Find a product", "Get a quote"]);
+  }
+
+  // Once a product conversation starts, n8n remains responsible for product context.
+  if (hasProductContext || isCatalogueRequest(message)) return null;
+
+  // Open-ended conversation belongs to the conversational model. This local
+  // layer only handles fast, deterministic business and navigation replies.
+  return null;
+}

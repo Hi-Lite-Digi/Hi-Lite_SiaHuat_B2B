@@ -1,0 +1,134 @@
+{
+  "name": "Sia Huat B2B - Phase 1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sia-huat-b2b-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Web Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-760, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst action = body.action === 'live_stock' ? 'live_stock' : 'search';\nif (action === 'live_stock') {\n  const url = new URL(String(body.sourceUrl ?? ''));\n  if (url.protocol !== 'https:' || url.hostname !== 'store.siahuat.com' || !/^\\/product\\/\\d+$/.test(url.pathname)) throw new Error('Invalid Sia Huat product URL');\n}\nreturn [{ json: { action, sessionId: String(body.sessionId ?? ''), message: String(body.message ?? ''), sourceUrl: body.sourceUrl ?? null, resultLimit: Math.min(Math.max(Number(body.resultLimit ?? 5), 1), 10) } }];"
+      },
+      "id": "normalize",
+      "name": "Normalize Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-540, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "conditions": [
+            { "id": "live-check", "leftValue": "={{ $json.action }}", "rightValue": "live_stock", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route",
+      "name": "Live Stock Check?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-320, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL + '/rest/v1/rpc/search_products' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_PUBLISHABLE_KEY }}" },
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.SUPABASE_PUBLISHABLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ search_query: $json.message, result_limit: $json.resultLimit }) }}",
+        "options": {}
+      },
+      "id": "search",
+      "name": "Search Supabase Catalogue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-80, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { action: 'search', products: $json, requiresHumanApproval: true } }}",
+        "options": {}
+      },
+      "id": "search-response",
+      "name": "Return Catalogue Matches",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [180, 180]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.sourceUrl }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "User-Agent", "value": "Hi-Lite-SiaHuat-B2B/1.0" }] },
+        "options": { "response": { "response": { "responseFormat": "text" } }, "timeout": 30000 }
+      },
+      "id": "live-page",
+      "name": "Fetch Live Sia Huat Product",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-80, -60]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = String($json.data ?? $json.body ?? $json);\nconst quantity = html.match(/\\\\\"availableQty\\\\\":(-?\\d+(?:\\.\\d+)?)/);\nconst price = html.match(/\\\\\"b2bPrice\\\\\":(-?\\d+(?:\\.\\d+)?)/);\nconst itemCode = html.match(/code:\\s*([^<]+)/i);\nconst availableQuantity = quantity ? Number(quantity[1]) : null;\nreturn [{ json: { itemCode: itemCode?.[1]?.trim() ?? null, inStock: availableQuantity === null ? null : availableQuantity > 0, availableQuantity, priceExGst: price ? Number(price[1]) : null, checkedAt: new Date().toISOString(), sourceUrl: $('Normalize Request').first().json.sourceUrl, requiresHumanApproval: true } }];"
+      },
+      "id": "parse-live",
+      "name": "Parse Live Price and Stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, -60]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "live-response",
+      "name": "Return Live Check",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [400, -60]
+    }
+  ],
+  "connections": {
+    "Web Chat Webhook": { "main": [[{ "node": "Normalize Request", "type": "main", "index": 0 }]] },
+    "Normalize Request": { "main": [[{ "node": "Live Stock Check?", "type": "main", "index": 0 }]] },
+    "Live Stock Check?": {
+      "main": [
+        [{ "node": "Fetch Live Sia Huat Product", "type": "main", "index": 0 }],
+        [{ "node": "Search Supabase Catalogue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Search Supabase Catalogue": { "main": [[{ "node": "Return Catalogue Matches", "type": "main", "index": 0 }]] },
+    "Fetch Live Sia Huat Product": { "main": [[{ "node": "Parse Live Price and Stock", "type": "main", "index": 0 }]] },
+    "Parse Live Price and Stock": { "main": [[{ "node": "Return Live Check", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "versionId": "0f0f943c-9bd5-45ef-83ee-b41cefc4f5e0",
+  "meta": { "templateCredsSetupCompleted": false },
+  "tags": []
+}

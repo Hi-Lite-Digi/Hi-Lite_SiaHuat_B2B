@@ -1,0 +1,304 @@
+SIA HUAT QA CONTINUATION NOTES
+Updated: 9 August 2026, Singapore time
+
+USER REQUEST
+Run the complete Sia Huat SOP and regression suite, report every failure, fix every failure, then rerun everything. Include the two pixel-only image tests and do not use attachment filenames as model evidence.
+
+IMPORTANT
+Do not include or recover API keys, database passwords, Meta tokens, or other secrets from chat history. Existing credentials are already stored in n8n and local environment files.
+
+CURRENT STATUS
+
+1. SOP inspected and mapped
+   Source SOP:
+   D:\Programing\Simple Wa Chat bot\Chatbot QA SOP and Regression Standard (1).xlsx
+
+   Sia Huat mapped workbook:
+   D:\Programing\Hi-Lite_SiaHuat\SiaHuat Chatbot QA SOP and Regression Standard.xlsx
+
+   Existing workbook audit script:
+   D:\Programing\Hi-Lite_SiaHuat\tmp\qa-workbook\audit-sop.mjs
+
+2. Text and conversation tests
+   Result: 46 of 46 passed during the latest full run.
+
+3. Image tests
+   Result: 0 of 2 currently pass.
+   Report:
+   D:\Programing\Hi-Lite_SiaHuat\tmp\qa-reports\image-regression.json
+
+4. Root cause already fixed
+   The local web n8n workflow previously ignored image pixels entirely.
+   A pixel-only OpenAI vision branch is now published in:
+   https://hilitedigi.app.n8n.cloud/workflow/2EYtx9wy5YBouoxa
+
+   Published workflow name:
+   Sia Huat Web Chat — AI Brain
+
+   The vision branch now:
+   - routes image and text requests separately
+   - sends the data URL pixels to OpenAI vision
+   - hides the real filename
+   - performs visual recognition and OCR
+   - sends grounded search instructions to Claire
+   - requires Supabase to provide product name, SKU, price, UOM and status
+
+   Latest execution evidence confirmed that vision correctly identified:
+   - the second image as a deep black rigid plastic utility or storage bin
+   - the first image as an insulated rectangular beverage dispenser
+
+CURRENT IMAGE FAILURES TO FIX
+
+FAILURE 1: Structured product price field is dropped
+
+For the black utility box, Claire found this catalogue candidate:
+PLC UTILITY BIN w/LID D50xH57cm,18gal, BLACK
+SKU 1924-07-00700
+$21.83/PC
+Status Active
+
+The agent returned the price as unitPrice. The Normalize Response node currently accepts list_price or price, but not unitPrice. It therefore removes the product from the final products array.
+
+Required fix in:
+D:\Programing\Hi-Lite_SiaHuat\tmp\n8n-backups\build-web-image-workflow.mjs
+
+Change the normalizer price expression from:
+Number(value.list_price ?? value.price)
+
+to:
+Number(value.list_price ?? value.unitPrice ?? value.price)
+
+Regenerate the workflow JSON afterward:
+node tmp\n8n-backups\build-web-image-workflow.mjs
+
+FAILURE 2: CAMTAINER search alias is too narrow
+
+Image:
+D:\Downloades\101CA-1000LCD.jpg
+
+The model correctly recognizes an insulated rectangular beverage dispenser, but the catalogue search fails to find the CAMTAINER family.
+
+Expected family reference from the catalogue:
+SKU family 101CA-1000LCD
+POLYETHYLENE CAMTAINER
+Dark brown
+10 gallon / 44.5 litre family
+
+Add deterministic aliases to the image enquiry builder when the visual family contains insulated beverage dispenser, drink dispenser, beverage container, tap, or spigot. Search terms should include:
+- polyethylene CAMTAINER
+- insulated beverage dispenser CAMBRO
+- dark brown CAMTAINER
+- beverage container with tap
+
+Do not return stainless steel countertop juice dispensers for a plastic insulated beverage container.
+
+FILES CHANGED DURING THIS QA SESSION
+
+1. D:\Programing\Hi-Lite_SiaHuat\scripts\validate-images.ts
+   - source filenames are hidden from the bot
+   - partial family codes can be used only as the post-response oracle
+   - invalid chat responses now fail cleanly instead of crashing the test
+
+2. D:\Programing\Hi-Lite_SiaHuat\tmp\n8n-backups\build-web-image-workflow.mjs
+   - builds the corrected web workflow with a pixel-only vision branch
+   - adds product-field normalization
+
+3. Generated workflow:
+   D:\Programing\Hi-Lite_SiaHuat\tmp\n8n-backups\web-chat-with-image-fix.json
+
+4. Backups:
+   D:\Programing\Hi-Lite_SiaHuat\tmp\n8n-backups\web-chat-before-image-fix.json
+   D:\Programing\Hi-Lite_SiaHuat\tmp\n8n-backups\whatsapp-vision-reference.json
+
+HOW TO UPDATE THE N8N WEB WORKFLOW AFTER EDITING THE BUILDER
+
+1. Run:
+   node tmp\n8n-backups\build-web-image-workflow.mjs
+
+2. Open the existing n8n workflow:
+   https://hilitedigi.app.n8n.cloud/workflow/2EYtx9wy5YBouoxa
+
+3. In Editor, select the workflow nodes, select all, then delete them.
+
+4. Open Actions, choose Import from file, and select:
+   D:\Programing\Hi-Lite_SiaHuat\tmp\n8n-backups\web-chat-with-image-fix.json
+
+5. Publish the workflow and describe the change.
+
+6. Confirm that the workflow has exactly one copy of every node. There must not be nodes ending in 1 such as Web Chat Webhook1 or Sales Assistant1.
+
+TESTS TO RUN AFTER BOTH IMAGE FIXES
+
+Run in this order from:
+D:\Programing\Hi-Lite_SiaHuat
+
+1. Image tests:
+   pnpm qa:image
+
+2. Full automated suite:
+   pnpm qa:all
+
+3. Twenty repeat cycles:
+   pnpm qa:repeat
+
+4. Quote verification:
+   pnpm qa:quote
+
+5. Database verification:
+   pnpm db:verify
+
+6. Type check:
+   pnpm typecheck
+
+7. Lint:
+   pnpm lint
+
+8. Production build:
+   pnpm build
+
+IMAGE TEST RULES
+
+The image validator currently uses:
+D:\Downloades\101CA-1000LCD.jpg
+D:\Downloades\101CA-1520CBP-110.jpg
+
+Also check E:\Downloads for the two user-provided test images before the final run, because the user previously referred to that folder.
+
+The model must never receive or rely on the real filename. The filename is only a post-response test oracle.
+
+Pass conditions:
+- pixels are actually analyzed
+- visible text may be read with OCR
+- missing SKU digits are never invented
+- no exact match is claimed without a complete visible and Supabase-confirmed SKU
+- without a visible exact SKU, return two to five same-family possible matches when available
+- all displayed product facts come from Supabase
+- no unrelated product family is returned
+- food-preparation knife photos must exclude dessert, table, butter and place-setting knives
+- image replies must remain natural and easy to read
+
+FINAL SOP WORKBOOK UPDATE
+
+After every test passes, update:
+D:\Programing\Hi-Lite_SiaHuat\SiaHuat Chatbot QA SOP and Regression Standard.xlsx
+
+Record the real latest results and evidence. Do not retain old PASS values for any case that was not rerun.
+
+FINAL RESPONSE TO USER
+
+Report:
+- total tests run
+- passed count
+- failed count
+- every original failure
+- what fixed each failure
+- evidence from the final rerun
+- any genuine external limitation
+
+Do not claim success until the final complete rerun passes.
+
+ADDED REQUIREMENT (10 AUGUST 2026)
+
+Tone consistency and normal-chat speed:
+
+1. Claire must sound like the same person across every response path:
+   - local fast conversation replies
+   - direct catalogue replies
+   - n8n/OpenAI replies
+   - image/OCR replies
+   - quotations and human handoff
+2. Use one warm, concise, natural Singapore customer-service voice. Avoid robotic headings,
+   implementation jargon, repeated introductions, and unnecessary dash punctuation.
+3. Normal conversational messages that do not need vision or catalogue searching must reply
+   in under 5 seconds. Add regression checks for voice consistency and response duration.
+4. Do not fake speed by guessing catalogue facts. Product facts must still come from Supabase.
+5. Stability loop finding to fix: iteration 2 returned HTTP 502 after an image request reached
+   the 60-second limit. Add safe image timeout/retry handling and rerun the full stability suite.
+
+IMAGE RESPONSE SCOPE (10 AUGUST 2026)
+
+1. Image requests may take longer than five seconds because vision and catalogue matching are
+   heavier operations. The under-five-second requirement applies to ordinary conversation only.
+2. For an incoming image, Claire should explain what the item appears to be, read any visible
+   SKU, barcode, brand or label, and return grounded catalogue suggestions with SKU and price.
+3. A visual-only match is a suggestion, not an exact SKU match. Exact identity may only be stated
+   when readable identifying text is verified against the catalogue.
+4. Claire does not need to send catalogue product images back to the customer in this phase.
+
+FINAL COMPLETION UPDATE (10 AUGUST 2026)
+
+- Normal conversation now uses the fast path and the same Claire voice across local replies,
+  catalogue replies, n8n replies, quotations and handoff messages.
+- Normal-chat performance cases are required to complete in under five seconds. The latest
+  focused cases completed in roughly 22 to 119 milliseconds locally.
+- Image recognition uses the full GPT-5 model for better visual accuracy. Ordinary text chat
+  remains on the faster mini model.
+- Image filenames are replaced before n8n. Recognition is based on pixels only; the real
+  filename is used only by the QA oracle after the response.
+- Image replies identify the object and return grounded possible matches with Supabase SKU,
+  price, UOM and status. They do not send product images back.
+- The intermittent utility-box versus GN-pan drift was fixed by tightening visible-marking
+  rules and upgrading the vision path.
+- Five consecutive utility-box stress tests passed after the final image upgrade.
+- The complete regression suite passed 20 of 20 sequential cycles. Every cycle included
+  52 text cases, two pixel-only image cases and quotation validation.
+- Final evidence: tmp/qa-reports/repeated-regression.json
+- Updated workbook: SiaHuat Chatbot QA SOP and Regression Standard.xlsx
+
+LATEST SOP RERUN AND FIX (10 AUGUST 2026)
+
+- Added timed starter coverage for Hello, Hey, Good morning and What do you sell.
+- The fresh suite now contains 55 live dialogue cases, two pixel-only image cases,
+  three quote/flow checks and one repeated-stability result: 61 reported checks total.
+- The first repeated cycle found intermittent image drift for the black CAMBOX photo:
+  a tall black utility bin and red/blue containers were included as padding results.
+- Fixed the published n8n image-grounding workflow by prioritising visible colour and
+  physical form, placing colour-specific CAMBOX queries first, and preferring fewer
+  strong matches over unrelated padding results.
+- A deployment edit briefly duplicated the code block and produced a clear n8n syntax
+  error. The node was replaced with one clean script and republished before retesting.
+- Final stability result: 20/20 complete sequential cycles passed, zero failures.
+- Across those 20 runs, Hi took 18-40 ms and What do you sell took 106-136 ms.
+- Image 101CA-1000LCD.jpg took 38.6-62.9 seconds across 20 runs.
+- Image 101CA-1520CBP-110.jpg took 29.5-61.5 seconds across 20 runs.
+- TypeScript, ESLint, production build and direct Supabase verification all passed.
+- Final workbook deliverable:
+  D:\Programing\Hi-Lite_SiaHuat\outputs\sia-huat-chat-sop-rerun\SiaHuat Chatbot QA SOP and Regression Standard.xlsx
+
+LIVE WHATSAPP RECOVERY AND TIMING (10 AUGUST 2026)
+
+- The customer resent `//Reset Sia Huat` at 5:12 pm and received the reset confirmation at
+  5:12 pm. This confirms that Meta is delivering inbound WhatsApp messages to n8n again.
+- No Meta account settings were changed during this recovery check.
+- Published n8n workflow version: `Fast WhatsApp conversation starters`.
+- Exact high-confidence greetings and catalogue-scope questions now bypass the slower AI brain;
+  product, quotation, reset, image and other conversational paths remain available.
+- Before the change, live WhatsApp starters took about 16.6 to 17.4 seconds.
+- After the change, the measured live WhatsApp `Good morning` round trip was 6.476 seconds.
+- The associated n8n executions completed in 2.318 to 2.562 seconds. The remaining delay was
+  between Meta/WhatsApp webhook delivery and message delivery, not OpenAI catalogue reasoning.
+- Therefore the strict live-WhatsApp target of under five seconds is not yet a pass, although
+  the normal-starter response time improved substantially and the webhook is operational.
+
+PRODUCTION UPDATE INCIDENT AND DEPLOYMENT RULE (10 AUGUST 2026, 7:31 PM)
+
+- This was not a temporary Meta outage. Meta delivered every affected message to n8n.
+- Live executions 18770, 18771 and 18772 failed inside `Extract Incoming Message` with
+  `SyntaxError: Identifier 'value' has already been declared`.
+- The Code-node editor had partially inserted the updated script instead of replacing the old
+  script, leaving a corrupted duplicate block. Publishing that invalid version stopped all
+  inbound text paths, including `//Reset Sia Huat` and `good morning`.
+- Replaced the whole Code-node program, renamed the payload variable to `whatsappValue`,
+  verified that no legacy `const value` declaration remained, and republished.
+- Live WhatsApp verification after the repair passed: `//Reset Sia Huat` replied successfully,
+  and `good morning` / `hello` returned the new Claire welcome. The fast greeting executions
+  completed in approximately 2.4 seconds inside n8n.
+- Mandatory production update procedure from now on:
+  1. Validate generated Code-node JavaScript before editing n8n.
+  2. In the n8n editor, select all existing Code-node text before replacing it.
+  3. Read the saved node back and confirm the old declaration/block is absent.
+  4. Publish only after that verification.
+  5. Immediately run one real WhatsApp reset and one normal greeting.
+  6. Check the matching n8n executions and WhatsApp replies before declaring the update done.
+- Do not describe this incident as an expected post-update delay. It was a published code
+  regression, and the post-publish smoke test must prevent it from reaching the user again.

@@ -1,0 +1,15 @@
+.next/
+node_modules/
+.vercel/
+.env*
+!.env.example
+tmp/
+outputs/
+.n8n/
+*.pdf
+*.xlsx
+n8n/local-data/
+coverage/
+*.log
+*.tsbuildinfo
+picture.zip
