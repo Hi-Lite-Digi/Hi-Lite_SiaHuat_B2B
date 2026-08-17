@@ -1,5 +1,7 @@
 import {
   createFastReply as reply,
+  extractExplicitShoeSize,
+  extractShoeStyle,
   isCatalogueRequest,
   productCategories,
   productCategory,
@@ -28,6 +30,12 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const activeTask = lastCategory ? `your ${lastCategory}${purpose && lastCategory === purposeCategory ? ` for ${purpose}` : ""}` : null;
   const awaitingItemConfirmation = [...input.history].reverse().some((item) => item.role === "assistant" && /exact item|is this.*item|confirm.*item/i.test(item.content));
   const coffeeContext = [...userHistory, message].some((content) => /\b(coffee|cofee|cofe|kopi)\b/i.test(content));
+  const shoeContext = currentCategory === "shoe" || previousCategories.includes("shoe");
+  const shoeMessages = [...userHistory, message];
+  const shoeSize = extractExplicitShoeSize(shoeMessages);
+  const shoeStyle = extractShoeStyle(shoeMessages);
+  const hasShoeSize = Boolean(shoeSize);
+  const hasShoeStyle = Boolean(shoeStyle);
   const prataContext = [...userHistory, message].some((content) => /\b(prata|roti prata|paratha)\b/i.test(content));
   const cookedPrataContext = [...userHistory, message].some((content) => /\b(cooked prata|cut cooked|serving prata|prata.*serving)\b/i.test(content));
   const rawPrataContext = [...userHistory, message].some((content) => /\b(raw prata|prata dough|raw dough|divide.*dough)\b/i.test(content));
@@ -118,6 +126,21 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(kopi\s*kosong|cof+e+\s*kosong|cofe\s*kosong|coffee\s*kosong)\b/.test(simple) || (/\b(coffee|cofee|cofe|kopi)\b/.test(simple) && /\b(ice|iced|icoe|kosong)\b/.test(simple))) {
     return reply("Do you mean kopi kosong? Which format do you need: coffee beans, ground/instant coffee, or ready-to-drink bottled kopi?", ["Coffee beans", "Ground or instant", "Ready-to-drink bottled"]);
+  }
+
+  if (currentCategory === "shoe" && !hasShoeSize && !hasShoeStyle) {
+    return reply(
+      "Can 👍 We carry work shoes rather than fashion loafers. What size do you wear? Slip-on or lace-up?",
+      ["Slip-on", "Lace-up", "Show both"],
+    );
+  }
+
+  if (shoeContext && hasShoeStyle && !hasShoeSize) {
+    return reply("Okay. What size do you wear? EU or US size also can.", []);
+  }
+
+  if (shoeContext && hasShoeSize && !hasShoeStyle) {
+    return reply(`Got it, ${shoeSize}. Slip-on or lace-up?`, ["Slip-on", "Lace-up", "Show both"]);
   }
 
   if (awaitingItemConfirmation && /^(yes|yes please|yup|yeah|correct|this is it|confirm|(?:yes[,\s-]*)?(?:that's|thats) the one|no|nope|wrong item|not this|(?:no[,\s-]*)?(?:that's|thats) not it|no[,\s-]*(?:show|give)( me)? (the )?(other|others|alternatives|options))([.!\s]*)$/i.test(message)) {

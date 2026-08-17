@@ -62,6 +62,35 @@ await check("CONV-006", "Conversation", "Can u send me a pic for item 1?", (repl
   if (/I(?:’|')ll (send|post|share)|I can send/i.test(reply.message)) return "Must not promise to send product photos without a connected photo library";
   return /can(?:not|’t|'t) send product photos/i.test(reply.message) ? null : "Must explain the current product-photo limitation honestly";
 });
+const shoePhotoHistory: HistoryItem[] = [
+  { role: "user", content: "Hi, I want this shoe" },
+  { role: "assistant", content: "What kind of item is it?" },
+];
+await check("CONV-007", "Sales conversation", "It's a shoe", (reply) =>
+  noProducts(reply)
+  ?? avoidsRoboticVoice(reply)
+  ?? (/size/i.test(reply.message) && /slip.?on|lace.?up/i.test(reply.message)
+    ? null
+    : "Shoe follow-up should continue the sale by asking for size and style"),
+shoePhotoHistory, 5_000);
+await check("CONV-008", "Sales conversation", "I want the shoe. UK 9", (reply) =>
+  noProducts(reply)
+  ?? (/uk 9/i.test(reply.message) && !/what size/i.test(reply.message) && /slip.?on|lace.?up/i.test(reply.message)
+    ? null
+    : "Known UK shoe size must be remembered while asking only for style"),
+[], 5_000);
+const shoeSizeHistory: HistoryItem[] = [
+  { role: "user", content: "I want the shoe. UK 9" },
+  { role: "assistant", content: "Got it, UK 9. Slip-on or lace-up?" },
+];
+await check("CONV-009", "Sales conversation", "Slip-on", (reply) => {
+  if (/what size/i.test(reply.message)) return "Must not ask for the shoe size again";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected matching slip-on shoes";
+  return products.every((product) => /slip/i.test(product.name) && /euro size 43/i.test(product.name))
+    ? null
+    : `Expected UK 9 slip-ons (EU 43), got ${products.map((product) => product.name).join("; ")}`;
+}, shoeSizeHistory, 15_000);
 const consistentClaireTone = (reply: Reply) => {
   return noProducts(reply) ?? avoidsRoboticVoice(reply) ?? avoidsSkuPromotion(reply);
 };
@@ -103,12 +132,10 @@ await check("MATCH-004", "Product relevance", "I need a blue 24cm frying pan", (
 await check("MATCH-005", "Product relevance", "63628", (reply) => (reply.products?.length === 1 && reply.products[0].stock_id === "63628") ? null : "Exact current SKU must return exactly one exact row");
 await check("MATCH-006", "Product relevance", "cheff knfie", (reply) => (reply.products?.length ?? 0) > 0 && (reply.products ?? []).every((product) => /chef.*knife|knife.*chef/i.test(product.name)) ? null : "Typo should return chef knives only");
 await check("MATCH-009", "Product relevance", "Do you have shows?", (reply) => {
-  const products = reply.products ?? [];
-  if (products.length === 0) return "The common 'shows' typo should return shoes";
-  if (!products.every((product) => /\bshoes?\b/i.test(product.name))) return "Shoe request returned an unrelated product";
-  return products.some((product, index) => products.some((other, otherIndex) => otherIndex !== index && other.name.replace(/\b(?:euro|us)\s+size\s+\d+\b/gi, "").replace(/\bsize\s+\d+\b/gi, "") !== product.name.replace(/\b(?:euro|us)\s+size\s+\d+\b/gi, "").replace(/\bsize\s+\d+\b/gi, "")))
-    ? null
-    : products.length === 1 ? null : "Shoe results repeated only the same product line in different sizes";
+  return noProducts(reply)
+    ?? (/size/i.test(reply.message) && /slip.?on|lace.?up/i.test(reply.message)
+      ? null
+      : "The common 'shows' typo should start the shoe sales flow without unrelated products");
 });
 await check("MATCH-008", "Human tone", "Got chef knife anot?", (reply) => {
   if (/supabase|database|stock_id|list_price/i.test(reply.message)) return "Customer-facing reply exposed implementation jargon";

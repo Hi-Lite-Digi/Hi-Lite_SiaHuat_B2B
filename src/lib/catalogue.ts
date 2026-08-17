@@ -90,11 +90,17 @@ export function prioritizeBrand(message: string, products: Product[]) {
 }
 
 export function normalizeCatalogueQuery(message: string) {
+  const ukToEuro: Record<string, string> = {
+    "3": "36", "3.5": "37", "4": "37", "4.5": "38", "5": "38", "5.5": "39",
+    "6": "39", "6.5": "40", "7": "41", "7.5": "41", "8": "42", "8.5": "42",
+    "9": "43", "9.5": "44", "10": "44", "10.5": "45", "11": "45", "12": "46",
+  };
   const corrected = message
     .replace(/\bche+f+f?\b/gi, "chef")
     .replace(/\b(?:knfie|kinife|knive)\b/gi, "knife")
     .replace(/\b(?:fryng|fryin)\b/gi, "frying")
     .replace(/\bshows\b/gi, "shoes")
+    .replace(/\buk\s*(?:size\s*)?(\d{1,2}(?:\.5)?)\b/gi, (match, size: string) => ukToEuro[size] ? `Euro Size ${ukToEuro[size]}` : match)
     .replace(/\banot\b/gi, " ");
   const cleaned = corrected
     .replace(/\b(hey|hi|hello|sure|wait|tell me|i am|i'm|im|i|we are|we're|can you|could you|please|do you|do u|would you|you|your)\b/gi, " ")
@@ -164,6 +170,15 @@ function matchesExplicitConstraints(query: string, product: Product) {
     ])].some((size) => new RegExp(`(?:ø|diameter\\s*)?${size}(?:\\s*cm|(?=\\s*[x×]))`, "i").test(candidate));
     if (!directInches.test(candidate) && !equivalentCm) return false;
   }
+
+  const requestedShoeSize = requested.match(/\b(euro|us)\s+size\s+(\d{1,2}(?:\.5)?)\b/);
+  if (requestedShoeSize) {
+    const [, sizingSystem, size] = requestedShoeSize;
+    if (!new RegExp(`\\b${sizingSystem}\\s+size\\s+${size}\\b`, "i").test(candidate)) return false;
+  }
+
+  if (/\bslip[ -]?on\b/.test(requested) && !/\bslip\b/.test(candidate)) return false;
+  if (/\blace[ -]?up\b/.test(requested) && !/\blace\b/.test(candidate)) return false;
 
   return true;
 }

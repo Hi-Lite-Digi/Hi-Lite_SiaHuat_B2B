@@ -51,6 +51,38 @@ export function productCategory(message: string) {
   return productCategories.find((category) => category.pattern.test(message))?.label ?? null;
 }
 
+const explicitShoeSizePattern = /\b(?:(?:eu|euro|uk|us)\s*(?:size\s*)?\d{1,2}(?:\.5)?|size\s*\d{1,2}(?:\.5)?)\b/i;
+const shoeStylePattern = /\b(slip[ -]?on|lace[ -]?up|loafer|sneaker|work shoe|safety shoe|show both|both styles?)\b/i;
+
+export function extractExplicitShoeSize(messages: string[]) {
+  for (const content of [...messages].reverse()) {
+    const size = content.match(explicitShoeSizePattern)?.[0];
+    if (size) return size.replace(/\s+/g, " ").toUpperCase();
+  }
+  return null;
+}
+
+export function extractShoeStyle(messages: string[]) {
+  for (const content of [...messages].reverse()) {
+    const style = content.match(shoeStylePattern)?.[0]?.toLowerCase();
+    if (!style) continue;
+    if (/^slip/.test(style)) return "slip-on";
+    if (/^lace/.test(style)) return "lace-up";
+    if (/show both|both styles?/.test(style)) return "work";
+    return style;
+  }
+  return null;
+}
+
+export function catalogueMessageWithContext(message: string, userHistory: string[]) {
+  const customerMessages = [...userHistory, message];
+  if (!customerMessages.some((content) => productCategory(content) === "shoe")) return message;
+
+  const size = extractExplicitShoeSize(customerMessages);
+  const style = extractShoeStyle(customerMessages);
+  return ["shoe", style ?? "work", size].filter(Boolean).join(" ");
+}
+
 export function rememberedPurpose(messages: string[]) {
   const isChickenTask = (message: string) =>
     /\b(chicken|poultry)\b/i.test(message)

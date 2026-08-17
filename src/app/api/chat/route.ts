@@ -13,6 +13,7 @@ import {
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
+import { catalogueMessageWithContext } from "@/lib/chat-intent";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
@@ -366,6 +367,10 @@ async function addDiverseProductOptions(reply: ChatReply, message: string): Prom
     return reply;
   }
 
+  if (/\b(?:shoe|shoes|footwear)\b/i.test(message) && /\b(?:euro|uk|us)\s*(?:size\s*)?\d/i.test(message)) {
+    return { ...reply, products: diversifyProducts(reply.products) };
+  }
+
   const anchor = reply.products[0];
   const sameTypeProducts = reply.products.filter((product) => isSameProductType(anchor, product));
   const initialSelection = diversifyProducts(sameTypeProducts);
@@ -525,18 +530,18 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
 
   if (input.image) {
     return {
-      message: "I couldn’t match that photo quickly enough. Add the item type, brand or code and I’ll narrow it down.",
+      message: "Can help 👍 What item is this? Just tell me roughly, like shoe or pan.",
       stage: "clarify",
       products: [],
       selectedProduct: null,
-      suggestions: ["Add item type", "Add a brand", "Add item code"],
+      suggestions: ["Footwear", "Cookware", "Equipment", "Send another photo"],
     };
   }
 
   return {
     message: isCatalogueRequest(input.message)
-      ? "That search took too long. Send the item name or brand again and I’ll retry."
-      : "Sorry, that took too long. What product are you looking for?",
+      ? "Sorry, I couldn’t pull that up. What item or brand are you looking for? I’ll try another way."
+      : "Sorry, I missed that. What are you looking for?",
     stage: "clarify",
     products: [],
     selectedProduct: null,
@@ -545,6 +550,8 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
 }
 
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
+  const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const catalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   let n8nError: unknown = null;
   const n8nReplyPromise = sendChatToN8n(input).catch((error) => {
     n8nError = error;
@@ -553,8 +560,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   });
   const groundedReply = input.image
     ? null
-    : await groundedCatalogueReply(input.message).catch((error) => {
-        console.error("[api/chat] grounded catalogue search failed", { message: input.message, error });
+    : await groundedCatalogueReply(catalogueMessage).catch((error) => {
+        console.error("[api/chat] grounded catalogue search failed", { message: catalogueMessage, error });
         return null;
       });
 
@@ -574,8 +581,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       ? "clarify" as const
       : exactReply.stage,
   };
-  const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, input.message);
-  const diverseReply = await addDiverseProductOptions(prioritizedReply, input.message);
+  const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, catalogueMessage);
+  const diverseReply = await addDiverseProductOptions(prioritizedReply, catalogueMessage);
   const liveReply = await addLiveCatalogueState(diverseReply);
   return deduplicateReplyProducts(
     enforceLiveCheckoutGate(explainUnavailableProducts(await addAvailableAlternatives(liveReply))),
@@ -584,7 +591,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
 
 async function processChat(input: ChatRequest) {
   const startedAt = performance.now();
-  const fastReply = input.image || input.brain === "n8n" ? null : getFastChatReply(input);
+  const fastReply = input.brain === "n8n" ? null : getFastChatReply(input);
   if (fastReply) {
     console.log("[api/chat] fast deterministic reply", {
       durationMs: Math.round(performance.now() - startedAt),
