@@ -2,6 +2,12 @@
 
 Phase 1 is a conversational product-enquiry web application backed by n8n Cloud, OpenAI, and a Sia Huat catalogue in Supabase Postgres.
 
+## Live demo
+
+[Open the Hi-Lite × Sia Huat Product Assistant](https://hi-lite-sia-huat-b2-b.vercel.app/)
+
+Current release: `V_3.1.2`
+
 The website catalogue is discovered from Sia Huat's public sitemap and imported with the displayed item code as the unique identifier. Product discovery uses the cached Supabase catalogue; after the customer confirms an exact item, the app performs a fresh website check for the displayed price and stock status.
 
 The assistant clarifies broad requests, searches real catalogue data, asks for quantity, calculates an estimated total deterministically, and prepares the result for human sales review. It never confirms an order or sends a customer message automatically.
