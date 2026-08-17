@@ -15,7 +15,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|tea|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|tea|shoe|shoes|shows|footwear|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -24,6 +24,7 @@ export const productCategories = [
   { pattern: /\b(glass|glassware|tumbler)\b/i, label: "glassware" },
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
   { pattern: /\b(coffee|coffee beans)\b/i, label: "coffee product" },
+  { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
 ] as const;
 
 export function simplifyMessage(message: string) {

@@ -1,11 +1,11 @@
 import "server-only";
 import { chatReplySchema, type ChatRequest } from "@/lib/chat-contract";
 
-// Leave enough time for the API route to validate and format the response
-// without letting a text turn cross the one-minute customer-facing budget.
-const TEXT_TIMEOUT_MS = 40_000;
-const IMAGE_TIMEOUT_MS = 90_000;
-const IMAGE_ATTEMPTS = 2;
+// These leave time for catalogue grounding and response formatting while
+// keeping the complete customer-facing turn below 30 seconds.
+const TEXT_TIMEOUT_MS = 18_000;
+const IMAGE_TIMEOUT_MS = 23_000;
+const IMAGE_ATTEMPTS = 1;
 
 async function postWorkflow(
   webhookUrl: string,

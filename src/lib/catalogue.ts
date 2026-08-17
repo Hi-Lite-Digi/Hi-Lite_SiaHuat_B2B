@@ -94,6 +94,7 @@ export function normalizeCatalogueQuery(message: string) {
     .replace(/\bche+f+f?\b/gi, "chef")
     .replace(/\b(?:knfie|kinife|knive)\b/gi, "knife")
     .replace(/\b(?:fryng|fryin)\b/gi, "frying")
+    .replace(/\bshows\b/gi, "shoes")
     .replace(/\banot\b/gi, " ");
   const cleaned = corrected
     .replace(/\b(hey|hi|hello|sure|wait|tell me|i am|i'm|im|i|we are|we're|can you|could you|please|do you|do u|would you|you|your)\b/gi, " ")
@@ -131,6 +132,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\b(?:electrical|electric|power)\s+(?:cable|wire)s?\b/, candidate: /\b(?:cable|wire)s?\b/ },
     { requested: /\bsafety\s+vests?\b/, candidate: /\bvests?\b/ },
     { requested: /\bsafety\s+boots?\b/, candidate: /\bboots?\b/ },
+    { requested: /\b(?:shoe|shoes|footwear)\b/, candidate: /\b(?:shoe|shoes|footwear)\b/ },
   ];
 
   if (requiredCategories.some((rule) => rule.requested.test(requested) && !rule.candidate.test(candidate))) return false;

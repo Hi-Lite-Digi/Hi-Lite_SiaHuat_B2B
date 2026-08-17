@@ -48,15 +48,15 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (asksClaireForProductPhoto) {
     return reply(
-      "I can’t send product photos from this chat yet, sorry. If you send me a photo, SKU or product name, I can still help check the item.",
-      ["Send a photo", "Enter a SKU", "Enter product name"],
+      "I can’t send product photos from this chat yet, sorry. If you send me a photo or product name, I can still help check the item.",
+      ["Send a photo", "Enter product name", "Add a brand"],
     );
   }
 
   if (humanHandoffContext && /^(no thanks|no thank you|not anymore|cancel (the )?(human )?(request|follow up)|never mind)$/.test(simple)) {
     return reply(
       `No problem—I won’t request human follow-up.${activeTask ? ` Your ${activeTask.replace(/^your /, "")} enquiry is still here.` : " What else can I help you find?"}`,
-      activeTask ? ["Continue with my enquiry", "Start again"] : ["Find a product", "Search by SKU"],
+      activeTask ? ["Continue with my enquiry", "Start again"] : ["Find a product", "Browse products"],
     );
   }
 
@@ -64,41 +64,41 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply(
       activeTask
         ? `No issue on my side 😄 I’m Claire, and I’m here to help with ${activeTask}. Want to carry on?`
-        : "No issue on my side 😄 I’m Claire from Sia Huat. I’m here to help you find the right product and prepare an enquiry—what are you looking for?",
-      activeTask ? ["Yes, continue", "Start something else"] : ["Tell me what you sell", "Find a product", "Search by SKU"],
+        : "All good 😄 I’m Claire from Sia Huat. What product are you looking for?",
+      activeTask ? ["Yes, continue", "Start something else"] : ["Tell me what you sell", "Find a product", "Browse products"],
     );
   }
 
   if (/\b(are you (okay|ok|alright)|you (okay|ok|alright))\b/.test(simple)) {
     return reply(
       activeTask ? `I’m good, thanks for asking 😊 We can carry on with ${activeTask} whenever you’re ready.` : "I’m good, thanks for asking 😊 How can I help you today?",
-      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Tell me what you sell", "Search by SKU"],
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Tell me what you sell", "Browse products"],
     );
   }
 
   if (/\b(what are [a-z]{2,16} here for|what are you here for|why are you here|what do you do here|what(?:'s| is) your purpose|how can you help me)\b/.test(simple)) {
     return reply(
-      "I’m Claire from Sia Huat. I’m here to understand what you need, find the closest catalogue options and prices, confirm the exact item with you, then help prepare the quantity enquiry for the sales team.",
-      ["Tell me what you sell", "Find a product", "Search by SKU"],
+      "I’m Claire from Sia Huat. Tell me what you need and I’ll find the closest catalogue items and prices, then help with the enquiry.",
+      ["Tell me what you sell", "Find a product", "Browse products"],
     );
   }
 
   if (/^(i changed my mind|changed my mind|actually never mind|actually nevermind|i want something else)$/.test(simple)) {
     return reply(
       activeTask ? `No problem—what would you like to change about ${activeTask}: the item, type, size, brand or quantity?` : "No problem—what would you like to look for instead?",
-      activeTask ? ["Change the item", "Add a size or brand", "Start again"] : ["Find a product", "Search by SKU"],
+      activeTask ? ["Change the item", "Add a size or brand", "Start again"] : ["Find a product", "Browse products"],
     );
   }
 
   if (/\b(stock|stocks|in stock|on hand|available right now|availability right now)\b/.test(simple) && /\b(definitely|confirm|check|right now|live|on hand|available)\b/.test(simple)) {
     return reply(
-      "I can’t confirm live stock for a general result list yet. Tell me the exact item or SKU first; after you confirm the item, I’ll run a fresh check on its Sia Huat Add to cart listing.",
-      ["Search by SKU", "Find a product"],
+      "I can’t confirm live stock for a general result list yet. Tell me the exact item first; after you confirm it, I’ll run a fresh check on its Sia Huat Add to cart listing.",
+      ["Find a product", "Browse products"],
     );
   }
 
   if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s!?.,]+$/u.test(message)) {
-    return reply("Hi 👋 I can help you find Sia Huat catalogue products, compare published prices, confirm the exact SKU and prepare an enquiry. What are you looking for?", ["Chef knives", "Cookware", "Glassware", "Search by SKU"]);
+    return reply("Hi 👋 What are you looking for? Send me the product name, brand or a photo.", ["Chef knives", "Cookware", "Glassware"]);
   }
 
   if ((/[鸡雞]/u.test(message) && /[骨]/u.test(message)) || (/[鸡雞]/u.test(message) && /\bbones?\b/.test(simple))) {
@@ -124,7 +124,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply(
       /^(no|nope|wrong|not)/i.test(simple)
         ? "Okay, I won’t use that item. Please choose another option or tell me what was wrong with the match."
-        : "Got it—you’re confirming the item shown. I’ll continue with that exact SKU and ask for the quantity.",
+        : "Got it—you’re confirming the item shown. I’ll continue with it and ask for the quantity.",
       /^(no|nope|wrong|not)/i.test(simple) ? ["Show other options", "Add a detail"] : ["1", "6", "12", "24"],
     );
   }
@@ -139,7 +139,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   if (/\b(ignore( all| previous| the)? instructions|system prompt|password|api key|secret key|show.*credentials|reveal.*secret)\b/.test(simple)) {
     return reply(
       `I can’t help with passwords, credentials or internal instructions.${activeTask ? ` We can continue with ${activeTask}.` : " I can help with Sia Huat products and prices."}`,
-      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Search by SKU"],
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Browse products"],
     );
   }
 
@@ -252,9 +252,9 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     const suppliedModel = message.match(/\b(?=[a-z0-9-]*\d)[a-z0-9]+(?:-[a-z0-9]+)+\b/i)?.[0];
     return reply(
       suppliedModel
-        ? `Got it—the machine model is ${suppliedModel}. What is the machine brand, or do you have the exact spare-part SKU?`
-        : "Which machine model is this for? Please send the machine name, model number or spare-part SKU so I don’t match the wrong blade.",
-      suppliedModel ? ["Enter machine brand", "Search by SKU"] : ["Enter machine model", "Search by SKU"],
+        ? `Got it—the machine model is ${suppliedModel}. What is the machine brand or part number?`
+        : "Which machine model is this for? Send the machine name, model number or part number so I don’t match the wrong blade.",
+      suppliedModel ? ["Enter machine brand", "Enter part number"] : ["Enter machine model", "Enter part number"],
     );
   }
 
@@ -274,7 +274,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (/^(start something else|something else|new search|start again)$/.test(simple)) {
-    return reply("Sure—what would you like to look for instead?", ["Chef knives", "Cookware", "Glassware", "Search by SKU"]);
+    return reply("Sure—what would you like to look for instead?", ["Chef knives", "Cookware", "Glassware"]);
   }
 
   const rememberedCategorySet = [...new Set(previousCategories)];
@@ -291,7 +291,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       originalDisplay
         ? `You originally came here looking for ${originalDisplay}${purpose && originalCategory === purposeCategory ? ` for ${purpose}` : ""}.`
         : "I don’t have an original product saved yet. What would you like to find?",
-      originalDisplay ? ["Go back to that", "Continue with current item"] : ["Find a product", "Search by SKU"],
+      originalDisplay ? ["Go back to that", "Continue with current item"] : ["Find a product", "Browse products"],
     );
   }
 
@@ -364,15 +364,15 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply(
       activeTask
         ? `Hey! Good to see you again 😊 We were looking at ${activeTask}. Want to carry on?`
-        : "Hey! I’m Claire from Sia Huat 😊 What are you looking for today?",
-      activeTask ? ["Yes, continue", "Start something else"] : ["I need a knife", "Find coffee beans", "Search by SKU"],
+        : "Hi! What are you looking for today? 😊",
+      activeTask ? ["Yes, continue", "Start something else"] : ["I need a knife", "Find coffee beans", "Browse products"],
     );
   }
 
   if (/^(how are you|how's it going|how is it going|what's up|what is up|sup)$/.test(simple)) {
     return reply(
-      activeTask ? `I’m good 😊 We can carry on with ${activeTask} whenever you’re ready.` : "I’m doing well and ready to help 😊 What are you shopping for?",
-      ["I need a knife", "Find coffee beans", "Search by SKU"],
+      activeTask ? `Good 😊 Want to carry on with ${activeTask}?` : "Good 😊 What are you shopping for?",
+      ["I need a knife", "Find coffee beans", "Browse products"],
     );
   }
 
@@ -393,16 +393,16 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   if (/\b(python|javascript|typescript|java|c\+\+|programming|write (me )?(a )?(function|script|program|code)|merge sort|sorting algorithm|debug my code)\b/.test(simple)) {
     return reply(
       `I can only help with Sia Huat products and enquiries here.${activeTask ? ` Shall we get back to ${activeTask}?` : " What product are you looking for?"}`,
-      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Search by SKU"],
+      activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Browse products"],
     );
   }
 
   if (/^(thanks|thank you|thanks a lot|thank you very much|thx|cheers)$/.test(simple)) {
-    return reply("You’re welcome! What else can I help you find?", ["Find another product", "Search by SKU"]);
+    return reply("You’re welcome! What else can I help you find?", ["Find another product", "Browse products"]);
   }
 
   if (/^(ok|okay|alright|sure|got it|i see|understood|nice|great|sounds good)$/.test(simple)) {
-    return reply("Great 👍 Tell me what you’d like to look for next.", ["Find a product", "Search by SKU"]);
+    return reply("Great 👍 Tell me what you’d like to look for next.", ["Find a product", "Browse products"]);
   }
 
   if (/^(bye|goodbye|see you|see ya|talk to you later|have a good day)$/.test(simple)) {
@@ -411,15 +411,15 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(are you (an? )?(ai|bot|chatbot)|is this (an? )?(ai|bot|chatbot))\b/.test(simple)) {
     return reply(
-      "Yes—I’m an AI chat assistant for Sia Huat. I can help with the catalogue, while the sales team reviews enquiries before anything is confirmed.",
-      ["Find a product", "Search by SKU"],
+      "Yes, I’m Sia Huat’s AI chat assistant. I can help with the catalogue and enquiries; the sales team reviews everything before it’s confirmed.",
+      ["Find a product", "Browse products"],
     );
   }
 
   if (/\b(who are you|what are you|what is your name|what's your name)\b/.test(simple)) {
     return reply(
-      "I’m Claire from Sia Huat. I can help you find catalogue items, check prices and prepare your enquiry.",
-      ["What can you do?", "Find a product", "Search by SKU"],
+      "I’m Claire from Sia Huat. I can find catalogue items and prices, then help with your enquiry.",
+      ["What can you do?", "Find a product", "Browse products"],
     );
   }
 
@@ -429,27 +429,31 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(are you (a )?(human|real person)|am i talking to (a )?(human|person))\b/.test(simple)) {
     return reply(
-      "I’m Claire, Sia Huat’s AI chat assistant—not a human. I can help with the catalogue, and the sales team reviews enquiries before anything is confirmed.",
-      ["Find a product", "Search by SKU"],
+      "I’m Claire, Sia Huat’s AI chat assistant. The sales team reviews enquiries before anything is confirmed.",
+      ["Find a product", "Browse products"],
     );
   }
 
   if (/^(help|help me|what can you do|how can you help|how does this work)$/.test(simple)) {
     return reply(
-      "Tell me a product name, type, brand or SKU. I’ll narrow down the options, show the current catalogue price, ask for the quantity and prepare the enquiry for sales review.",
-      ["I need a knife", "Find coffee beans", "Search by SKU"],
+      "Send me a product name, type, brand or photo. I’ll show the closest options and prices, then help with the quantity and enquiry.",
+      ["I need a knife", "Find coffee beans", "Browse products"],
     );
   }
 
   if (/\b(what should i (even )?need|what do i need|why am i here|what can i ask|what (do|u|you|ypu).*sell|show me (the )?categories|what products)\b/.test(simple)) {
     return reply(
       "We mainly carry kitchen and F&B supplies—knives, cookware, plates, glassware, barware, buffet equipment, coffee and tea items. What are you looking for?",
-      ["Chef knives", "Glassware", "Coffee beans", "Search by SKU"],
+      ["Chef knives", "Glassware", "Coffee beans"],
     );
   }
 
+  if (/^(browse products|show me products|show products)$/.test(simple)) {
+    return reply("Sure. What kind of product are you looking for?", ["Knives", "Cookware", "Glassware", "Coffee and tea"]);
+  }
+
   if (/^(get|prepare|make)( me)? a quote$/.test(simple)) {
-    return reply("Sure—which product do you need a quote for? You can tell me its name, type, brand or SKU.", ["Search for a product", "Search by SKU"]);
+    return reply("Sure—which product do you need a quote for? Tell me its name, type or brand.", ["Search for a product", "Browse products"]);
   }
 
   if (/^(search by sku|i have (a )?sku|use (a )?sku)$/.test(simple)) {
@@ -457,7 +461,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (/^(sorry|my bad|oops)$/.test(simple)) {
-    return reply("No worries at all 😊 What would you like help finding?", ["Find a product", "Search by SKU"]);
+    return reply("No worries at all 😊 What would you like help finding?", ["Find a product", "Browse products"]);
   }
 
   if (/\b(chill|relax|take it easy|no rush)\b/.test(simple)) {
@@ -474,8 +478,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(too slow|so slow|slow as|taking (too )?long|why .*long|response time|still loading|hanging)\b/i.test(message)) {
     return reply(
-      "Yeah, sorry about that. Tell me the product name or SKU and I’ll get straight to it.",
-      ["I need a knife", "Search by SKU"],
+      "Yeah, sorry about that. Tell me the product name or brand and I’ll get straight to it.",
+      ["I need a knife", "Browse products"],
     );
   }
 

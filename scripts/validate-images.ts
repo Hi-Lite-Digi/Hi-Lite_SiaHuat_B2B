@@ -88,6 +88,7 @@ async function validateImage(filePath: string, index: number) {
   const qualifiedAsSuggestion = /\b(suggest|possible|likely|looks like|could be|appears to be)\b/i.test(responseMessage);
   const claimsExactWithoutEvidence = positiveExactClaim && !qualifiedAsSuggestion;
   const failures = [
+    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
     status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
     oracle ? null : `Could not load the catalogue oracle for ${expected}`,
     returned.length > 0 ? null : "The image produced no catalogue suggestions",

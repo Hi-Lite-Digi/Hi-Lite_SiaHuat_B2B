@@ -18,9 +18,17 @@ import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-p
 export const runtime = "nodejs";
 
 const sessionQueues = new Map<string, Promise<void>>();
+const CUSTOMER_REPLY_DEADLINE_MS = 27_000;
+const EARLY_LIVE_CHECK_TIMEOUT_MS = 5_000;
 
-function customerReply<T extends { message: string }>(reply: T): T {
-  return { ...reply, message: normalizeClaireMessage(reply.message) };
+function customerReply<T extends { message: string; suggestions?: string[] }>(reply: T): T {
+  return {
+    ...reply,
+    message: normalizeClaireMessage(reply.message),
+    ...(reply.suggestions
+      ? { suggestions: reply.suggestions.filter((suggestion) => !/\bsku\b/i.test(suggestion)) }
+      : {}),
+  };
 }
 
 async function addLiveCatalogueState(reply: ChatReply): Promise<ChatReply> {
@@ -39,7 +47,7 @@ async function addLiveCatalogueState(reply: ChatReply): Promise<ChatReply> {
           if (!catalogueProduct) return [stockId, null] as const;
 
           try {
-            const live = await fetchSiaHuatProduct(catalogueProduct.source_url);
+            const live = await fetchSiaHuatProduct(catalogueProduct.source_url, EARLY_LIVE_CHECK_TIMEOUT_MS);
             if (live.stock_id.toLowerCase() !== stockId.toLowerCase()) {
               throw new Error("LIVE_ITEM_CODE_MISMATCH");
             }
@@ -130,7 +138,7 @@ async function prioritizeRequestedUseCase(reply: ChatReply, message: string): Pr
     if (exactCatalogueMatches.length > 0) {
       return {
         ...reply,
-        message: `I found ${requestedBrand ? `${requestedBrand} ` : ""}${useCase.label} options in the Sia Huat catalogue. Here are the closest matches:`,
+        message: `Here are the closest ${requestedBrand ? `${requestedBrand} ` : ""}${useCase.label} options:`,
         stage: "clarify",
         products: exactCatalogueMatches,
         selectedProduct: null,
@@ -141,8 +149,8 @@ async function prioritizeRequestedUseCase(reply: ChatReply, message: string): Pr
       return {
         ...reply,
         message: requestedBrand
-          ? `The ${requestedBrand} ${useCase.label} you asked for isn't available in the Sia Huat catalogue. I found these ${useCase.label} options from other brands instead:`
-          : `I found these ${useCase.label} options in the Sia Huat catalogue:`,
+          ? `${requestedBrand} doesn't have the ${useCase.label} you asked for. These other brands do:`
+          : `Here are the ${useCase.label} options I found:`,
         stage: "clarify",
         products: catalogueMatches,
         selectedProduct: null,
@@ -199,6 +207,7 @@ function productFamily(product: Product) {
     { name: "glass", pattern: /\b(?:glass|glasses|glassware|goblet|tumbler)\b/ },
     { name: "bowl", pattern: /\b(?:bowl|bowls)\b/ },
     { name: "cup", pattern: /\b(?:cup|cups|mug|mugs)\b/ },
+    { name: "shoe", pattern: /\b(?:shoe|shoes|footwear)\b/ },
     { name: "machine", pattern: /\b(?:machine|machines|appliance|appliances)\b/ },
   ];
   return families.find((family) => family.pattern.test(text))?.name ?? null;
@@ -217,6 +226,7 @@ function exactCodeCandidates(message: string) {
 function isConcreteCatalogueRequest(message: string) {
   return /\b(?:chef|cleaver|boning|paring|bread|yanagi|sashimi|frying|fryng|saucepan|omele+t+e?|grill)\b/i.test(message)
     || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
+    || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
     || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i.test(message)
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
@@ -228,7 +238,7 @@ async function groundedCatalogueReply(message: string): Promise<ChatReply | null
     const exactProduct = await findCatalogueProductByCode(code);
     if (exactProduct) {
       return {
-        message: `I found the exact catalogue item for code: ${exactProduct.stock_id}.`,
+        message: `Found it. Code: ${exactProduct.stock_id}.`,
         stage: "clarify",
         products: [exactProduct],
         selectedProduct: null,
@@ -241,10 +251,11 @@ async function groundedCatalogueReply(message: string): Promise<ChatReply | null
   const products = await searchCatalogue(message, { resultLimit: 30, outputLimit: 20 });
   const diverseProducts = diversifyProducts(products);
   if (diverseProducts.length === 0) return null;
+  const resultType = /\b(?:shoe|shoes|shows|footwear)\b/i.test(message) ? "shoe " : "";
   return {
     message: diverseProducts.length === 1
-      ? "I found this matching item in the Sia Huat catalogue:"
-      : `I found ${diverseProducts.length} different matching options in the Sia Huat catalogue:`,
+      ? "This looks like the closest match:"
+      : `Here are ${diverseProducts.length} different ${resultType}options:`,
     stage: "clarify",
     products: diverseProducts,
     selectedProduct: null,
@@ -280,6 +291,8 @@ function isSameProductType(source: Product, candidate: Product) {
 function productLineSignature(product: Product) {
   return product.name
     .toLowerCase()
+    .replace(/\b(?:euro|us)\s+size\s+\d+(?:\s*\/\s*\d+)?\b/gi, " ")
+    .replace(/\bsize\s+\d+(?:\s*\/\s*\d+)?\b/gi, " ")
     .replace(/[øø]\s*\d+(?:\.\d+)?(?:\s*[x×]\s*[a-z]?\d+(?:\.\d+)?)*(?:\s*(?:mm|cm|m|l))?/gi, " ")
     .replace(/\b(?:l|w|h)\s*\d+(?:\.\d+)?(?:\s*(?:mm|cm|m))?\b/gi, " ")
     .replace(/\b\d+(?:\.\d+)?\s*(?:mm|cm|inch|inches|in|litre|litres|liter|liters|l|ml)\b/gi, " ")
@@ -345,7 +358,7 @@ function diverseOptionMessage(message: string, anchor: Product, count: number) {
   const catalogueType = anchor.third_category?.trim().toLowerCase();
   const productType = useCase ?? catalogueType ?? productFamily(anchor) ?? "product";
   const pluralType = count === 1 || productType.endsWith("s") ? productType : `${productType}s`;
-  return `Here are ${count} different ${pluralType} from the Sia Huat catalogue:`;
+  return `Here are ${count} different ${pluralType}:`;
 }
 
 async function addDiverseProductOptions(reply: ChatReply, message: string): Promise<ChatReply> {
@@ -449,8 +462,8 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
     return {
       ...reply,
       message: available.length > 0
-        ? `${product.name} (code: ${product.stock_id}) is currently out of stock. The live Sia Huat Add to cart check shows Available: 0 ${product.uom_id}. Here ${available.length === 1 ? "is an available alternative" : "are available alternatives"} with live-confirmed stock:`
-        : `${product.name} (code: ${product.stock_id}) is currently out of stock. The live Sia Huat Add to cart check shows Available: 0 ${product.uom_id}. I couldn't confirm an in-stock alternative yet. Would you like me to search again?`,
+        ? `${product.name} (code: ${product.stock_id}) is out of stock right now. ${available.length === 1 ? "This option is" : "These options are"} available instead:`
+        : `${product.name} (code: ${product.stock_id}) is out of stock right now. I couldn't confirm another available option yet. Want me to search again?`,
       stage: "clarify",
       products: available.length > 0 ? available : [product],
       selectedProduct: null,
@@ -466,7 +479,7 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
     const product = unavailable[0];
     return {
       ...reply,
-      message: `${product.name} (code: ${product.stock_id}) is currently out of stock. The live Sia Huat Add to cart check shows Available: 0 ${product.uom_id}. Would you like another option instead?`,
+      message: `${product.name} (code: ${product.stock_id}) is out of stock right now. Want another option?`,
       stage: "clarify",
       suggestions: ["Choose another item", "Search again"],
     };
@@ -476,8 +489,8 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
   return {
     ...reply,
     message: available.length > 0
-      ? `I checked live stock before showing these results. ${codes} ${unavailable.length === 1 ? "is" : "are"} currently out of stock. Here ${available.length === 1 ? "is an available alternative" : "are available alternatives"} with live-confirmed stock:`
-      : `I found matching items, but the live Sia Huat check shows they are currently out of stock. I couldn't confirm an in-stock alternative yet. Would you like me to search again?`,
+      ? `${codes} ${unavailable.length === 1 ? "is" : "are"} out of stock right now. ${available.length === 1 ? "This option is" : "These options are"} available instead:`
+      : `The matching items are out of stock right now. I couldn't confirm another available option yet. Want me to search again?`,
     stage: "clarify",
     products: available.length > 0 ? available.slice(0, 3) : reply.products,
     suggestions: available.length > 0 ? [] : ["Search again", "Choose another item"],
@@ -492,16 +505,86 @@ function enforceLiveCheckoutGate(reply: ChatReply): ChatReply {
   return {
     ...reply,
     message: reply.products.length > 0 || reply.selectedProduct
-      ? "Please choose the exact item first. I will then confirm it, run a fresh live stock check, and only ask for a quantity after that."
-      : "I can't prepare an order until an exact catalogue item is selected and its live stock has been checked. Please search for the item again.",
+      ? "Pick the exact item first. I’ll check its live stock next."
+      : "Pick an exact catalogue item first, then I can check its live stock.",
     stage: "clarify",
-    suggestions: reply.products.length > 0 || reply.selectedProduct ? [] : ["Search again", "Search by SKU"],
+    suggestions: reply.products.length > 0 || reply.selectedProduct ? [] : ["Search again", "Browse products"],
   };
+}
+
+function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): ChatReply {
+  if (groundedReply) {
+    return {
+      ...groundedReply,
+      message: groundedReply.products.length === 1
+        ? "This is the closest match. Pick it and I’ll check the live stock."
+        : "Here are the closest matches. Pick one and I’ll check the live stock.",
+      stage: "clarify",
+    };
+  }
+
+  if (input.image) {
+    return {
+      message: "I couldn’t match that photo quickly enough. Add the item type, brand or code and I’ll narrow it down.",
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: ["Add item type", "Add a brand", "Add item code"],
+    };
+  }
+
+  return {
+    message: isCatalogueRequest(input.message)
+      ? "That search took too long. Send the item name or brand again and I’ll retry."
+      : "Sorry, that took too long. What product are you looking for?",
+    stage: "clarify",
+    products: [],
+    selectedProduct: null,
+    suggestions: ["Find a product", "Browse products"],
+  };
+}
+
+async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
+  let n8nError: unknown = null;
+  const n8nReplyPromise = sendChatToN8n(input).catch((error) => {
+    n8nError = error;
+    console.error("[api/chat] n8n reply failed", error);
+    return null;
+  });
+  const groundedReply = input.image
+    ? null
+    : await groundedCatalogueReply(input.message).catch((error) => {
+        console.error("[api/chat] grounded catalogue search failed", { message: input.message, error });
+        return null;
+      });
+
+  if (groundedReply) rememberGrounded(groundedReply);
+  const n8nReply = groundedReply ? null : await n8nReplyPromise;
+  if (!groundedReply && !n8nReply) {
+    if (n8nError instanceof Error && n8nError.message === "N8N_NOT_CONFIGURED") throw n8nError;
+    return quickFallback(input, null);
+  }
+
+  const brainReply = groundedReply ?? n8nReply;
+  if (!brainReply) return quickFallback(input, groundedReply);
+  const exactReply = keepExactCodeMatches(brainReply, input.message);
+  const groundedOrN8n = groundedReply ?? {
+    ...exactReply,
+    stage: exactReply.products.length === 0 && isCatalogueRequest(input.message)
+      ? "clarify" as const
+      : exactReply.stage,
+  };
+  const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, input.message);
+  const diverseReply = await addDiverseProductOptions(prioritizedReply, input.message);
+  const liveReply = await addLiveCatalogueState(diverseReply);
+  return deduplicateReplyProducts(
+    enforceLiveCheckoutGate(explainUnavailableProducts(await addAvailableAlternatives(liveReply))),
+  );
 }
 
 async function processChat(input: ChatRequest) {
   const startedAt = performance.now();
-  const fastReply = input.image ? null : getFastChatReply(input);
+  const fastReply = input.image || input.brain === "n8n" ? null : getFastChatReply(input);
   if (fastReply) {
     console.log("[api/chat] fast deterministic reply", {
       durationMs: Math.round(performance.now() - startedAt),
@@ -510,31 +593,21 @@ async function processChat(input: ChatRequest) {
     return NextResponse.json(customerReply(fastReply));
   }
 
-  const groundedReplyPromise = input.image
-    ? Promise.resolve<ChatReply | null>(null)
-    : groundedCatalogueReply(input.message).catch((error) => {
-        console.error("[api/chat] grounded catalogue search failed", { message: input.message, error });
-        return null;
-      });
-
+  let safeGroundedReply: ChatReply | null = null;
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const [n8nReply, groundedReply] = await Promise.all([
-      sendChatToN8n(input),
-      groundedReplyPromise,
+    const reply = await Promise.race([
+      buildBrainReply(input, (grounded) => { safeGroundedReply = grounded; }),
+      new Promise<ChatReply>((resolve) => {
+        deadlineTimer = setTimeout(() => {
+          console.warn("[api/chat] customer reply deadline reached", {
+            durationMs: Math.round(performance.now() - startedAt),
+            hasGroundedFallback: Boolean(safeGroundedReply),
+          });
+          resolve(quickFallback(input, safeGroundedReply));
+        }, CUSTOMER_REPLY_DEADLINE_MS);
+      }),
     ]);
-    const exactReply = keepExactCodeMatches(n8nReply, input.message);
-    const groundedOrN8n = groundedReply ?? {
-      ...exactReply,
-      stage: exactReply.products.length === 0 && isCatalogueRequest(input.message)
-        ? "clarify" as const
-        : exactReply.stage,
-    };
-    const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, input.message);
-    const diverseReply = await addDiverseProductOptions(prioritizedReply, input.message);
-    const liveReply = await addLiveCatalogueState(diverseReply);
-    const reply = deduplicateReplyProducts(
-      enforceLiveCheckoutGate(explainUnavailableProducts(await addAvailableAlternatives(liveReply))),
-    );
     console.log("[api/chat] n8n brain reply", {
       durationMs: Math.round(performance.now() - startedAt),
       productCount: reply.products.length,
@@ -553,6 +626,8 @@ async function processChat(input: ChatRequest) {
       { error: "The assistant could not answer right now. Please try again." },
       { status: 502 },
     );
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
   }
 }
 

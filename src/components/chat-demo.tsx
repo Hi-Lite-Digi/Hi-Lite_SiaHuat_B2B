@@ -80,8 +80,8 @@ function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: str
   </p>;
 }
 
-const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hey! I’m Claire from Sia Huat 👋\n\nLooking for something? Just tell me the item, brand or SKU. I’ll show you the closest matches and prices, then help prepare the enquiry once we’ve got the right one." };
-const initialSuggestions = ["Chef knives", "Glassware", "Coffee beans", "Search by SKU"];
+const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send me the item name, brand or a photo." };
+const initialSuggestions = ["Chef knives", "Glassware", "Coffee beans"];
 
 export function ChatDemo() {
   const [messages, setMessages] = useState<ChatMessage[]>([welcome]);
@@ -108,7 +108,6 @@ export function ChatDemo() {
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageTimes = useRef(new Map<number, string>());
-  const brainTurnQueue = useRef<Promise<void>>(Promise.resolve());
 
   function contentForBrain(message: ChatMessage) {
     const productOptions = message.products?.map(
@@ -133,12 +132,12 @@ export function ChatDemo() {
   function syncHandledTurnWithN8n(message: string) {
     const requestSession = sessionId.current;
     const history = brainHistory();
-    brainTurnQueue.current = brainTurnQueue.current.then(async () => {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId: requestSession, message, history, brain: "n8n" }),
-      });
+    void fetch("/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: `${requestSession}-sync-${Date.now()}`, message, history, brain: "n8n" }),
+      signal: AbortSignal.timeout(8_000),
+    }).then((response) => {
       if (!response.ok) {
         console.error("[chat] n8n handled-turn sync failed", { status: response.status, message });
       }
@@ -327,11 +326,11 @@ export function ChatDemo() {
           id: nextId.current++, role: "assistant",
           text: alternatives.length > 0
             ? "Of course. Here are the other catalogue options. Which one would you like?"
-            : "Of course. Tell me another style, size, brand or item code and I’ll find a different option for you.",
+            : "Of course. Tell me another style, size or brand and I’ll find a different option for you.",
           products: alternatives,
         },
       ]);
-      setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Search by SKU"]); return;
+      setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Browse products"]); return;
     }
 
     if (confirmedProduct?.stock_status === "out_of_stock" && /^(no|no thanks|no thank you|not now)$/i.test(clean)) {
@@ -415,7 +414,6 @@ export function ChatDemo() {
       return;
     }
 
-    await brainTurnQueue.current;
     const history = brainHistory();
     const attachedImage = attachment;
 
@@ -432,6 +430,7 @@ export function ChatDemo() {
           history,
           ...(attachedImage ? { image: attachedImage } : {}),
         }),
+        signal: AbortSignal.timeout(28_000),
       });
       const reply = await response.json() as ChatReply & { error?: string };
       if (sessionId.current !== requestSession) return;
@@ -457,7 +456,8 @@ export function ChatDemo() {
       setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: reply.message, products }]);
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
-      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: reason instanceof Error ? reason.message : "The assistant could not answer right now." }]);
+      const timedOut = reason instanceof DOMException && reason.name === "TimeoutError";
+      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: timedOut ? "Sorry, that took too long. Send the item name or code and I’ll try again." : reason instanceof Error ? reason.message : "Sorry, I couldn’t answer that just now. Please try again." }]);
     } finally {
       if (sessionId.current !== requestSession) return;
       loadingRef.current = false;
@@ -509,6 +509,7 @@ export function ChatDemo() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ stockId: product.stock_id }),
+        signal: AbortSignal.timeout(25_000),
       });
       const check = await response.json() as LiveStockCheck & { error?: string };
       if (!response.ok) throw new Error(check.error ?? "Live stock check failed.");
@@ -570,7 +571,7 @@ export function ChatDemo() {
       { id: nextId.current++, role: "user", text: userText },
       { id: nextId.current++, role: "assistant", text: alternatives.length > 0 ? "No problem. Here are the other catalogue options and prices. Which one is closer?" : "No problem. Tell me another name, brand or detail and I’ll search again.", products: alternatives },
     ]);
-    setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Search by SKU"]);
+    setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Browse products"]);
   }
 
   function resetConversation(firstMessage: ChatMessage) {
@@ -579,7 +580,6 @@ export function ChatDemo() {
     sessionId.current = crypto.randomUUID();
     loadingRef.current = false;
     queuedMessages.current = [];
-    brainTurnQueue.current = Promise.resolve();
     setMessages([firstMessage]);
     setStage("discover");
     setSuggestions(initialSuggestions);

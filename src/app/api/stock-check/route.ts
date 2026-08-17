@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     const catalogueProduct = await findProductForStockCheck(input.data.stockId);
     if (!catalogueProduct) return Response.json({ error: "Product not found." }, { status: 404 });
 
-    const live = await fetchSiaHuatProduct(catalogueProduct.source_url);
+    const live = await fetchSiaHuatProduct(catalogueProduct.source_url, 20_000);
     if (live.stock_id.toLowerCase() !== catalogueProduct.stock_id.toLowerCase()) {
       throw new Error("LIVE_ITEM_CODE_MISMATCH");
     }

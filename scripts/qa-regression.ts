@@ -14,12 +14,12 @@ async function check(
   prompt: string,
   validate: (reply: Reply) => string | null,
   history: HistoryItem[] = [],
-  maxDurationMs?: number,
+  maxDurationMs = 30_000,
 ) {
   const { status, body, durationMs } = await postChat({ message: prompt, history });
   const responseFailure = status === 200 ? validate(body) : `HTTP ${status}: ${body.error ?? "unknown error"}`;
   const failure = responseFailure
-    ?? (maxDurationMs !== undefined && durationMs >= maxDurationMs
+    ?? (durationMs >= maxDurationMs
       ? `Reply took ${durationMs}ms; expected under ${maxDurationMs}ms`
       : null);
   results.push({
@@ -31,9 +31,15 @@ async function check(
 
 const noProducts = (reply: Reply) => (reply.products?.length ?? 0) === 0 ? null : `Expected no products, received ${reply.products?.length}`;
 const includes = (...terms: string[]) => (reply: Reply) => terms.every((term) => reply.message.toLowerCase().includes(term.toLowerCase())) ? null : `Expected response to include: ${terms.join(", ")}`;
+const avoidsSkuPromotion = (reply: Reply) => {
+  if (/\bsku\b/i.test(reply.message)) return "Reply promoted SKU lookup without the customer asking for it";
+  if (reply.suggestions?.some((suggestion) => /\bsku\b/i.test(suggestion))) return "Reply showed an unsolicited SKU shortcut";
+  return null;
+};
 const avoidsRoboticVoice = (reply: Reply) => {
   if (/\u2014|\s\u2013\s/.test(reply.message)) return "Reply used robotic dash punctuation";
   if (/sales assistant|supabase|database|stock_id|list_price/i.test(reply.message)) return "Reply used a different persona or implementation jargon";
+  if (/based on (?:your|the) request|please be advised|it is important to note|live-confirmed stock|I checked live stock before showing/i.test(reply.message)) return "Reply used formal AI-style filler";
   return null;
 };
 
@@ -57,7 +63,7 @@ await check("CONV-006", "Conversation", "Can u send me a pic for item 1?", (repl
   return /can(?:not|’t|'t) send product photos/i.test(reply.message) ? null : "Must explain the current product-photo limitation honestly";
 });
 const consistentClaireTone = (reply: Reply) => {
-  return noProducts(reply) ?? avoidsRoboticVoice(reply);
+  return noProducts(reply) ?? avoidsRoboticVoice(reply) ?? avoidsSkuPromotion(reply);
 };
 await check("PERF-001", "Voice & latency", "Hi", consistentClaireTone, [], 5_000);
 await check("PERF-002", "Voice & latency", "How are you?", consistentClaireTone, [], 5_000);
@@ -96,6 +102,14 @@ await check("MATCH-003", "Product relevance", "I need something to cut chicken",
 await check("MATCH-004", "Product relevance", "I need a blue 24cm frying pan", (reply) => (reply.products?.length ?? 0) > 0 && (reply.products ?? []).every((product) => /blue/i.test(product.name) && /(?:ø\s*)?24(?:\s*cm|(?=x))/i.test(product.name)) ? null : "Every result must match blue and 24cm");
 await check("MATCH-005", "Product relevance", "63628", (reply) => (reply.products?.length === 1 && reply.products[0].stock_id === "63628") ? null : "Exact current SKU must return exactly one exact row");
 await check("MATCH-006", "Product relevance", "cheff knfie", (reply) => (reply.products?.length ?? 0) > 0 && (reply.products ?? []).every((product) => /chef.*knife|knife.*chef/i.test(product.name)) ? null : "Typo should return chef knives only");
+await check("MATCH-009", "Product relevance", "Do you have shows?", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "The common 'shows' typo should return shoes";
+  if (!products.every((product) => /\bshoes?\b/i.test(product.name))) return "Shoe request returned an unrelated product";
+  return products.some((product, index) => products.some((other, otherIndex) => otherIndex !== index && other.name.replace(/\b(?:euro|us)\s+size\s+\d+\b/gi, "").replace(/\bsize\s+\d+\b/gi, "") !== product.name.replace(/\b(?:euro|us)\s+size\s+\d+\b/gi, "").replace(/\bsize\s+\d+\b/gi, "")))
+    ? null
+    : products.length === 1 ? null : "Shoe results repeated only the same product line in different sizes";
+});
 await check("MATCH-008", "Human tone", "Got chef knife anot?", (reply) => {
   if (/supabase|database|stock_id|list_price/i.test(reply.message)) return "Customer-facing reply exposed implementation jargon";
   return (reply.products?.length ?? 0) <= 3 ? null : "Customer-facing reply showed more than 3 options";
@@ -129,7 +143,7 @@ const coffeeHistory: HistoryItem[] = [
 await check("COFFEE-002", "Clarification", "yes pls", (reply) => noProducts(reply) ?? (/coffee|kopi/i.test(reply.message) && /instant|ground|bottled|ready/i.test(reply.message) ? null : "Yes does not answer the format; repeat coffee choices"), coffeeHistory);
 await check("COFFEE-003", "Clarification", "bottled, make it fast", (reply) => (reply.products ?? []).every((product) => /coffee|kopi|drink|beverage/i.test(product.name)) && !((reply.products ?? []).some((product) => /egg|empty bottle/i.test(product.name))) ? null : "Bottled coffee must not return generic bottles or egg makers", coffeeHistory);
 
-await check("LANG-001", "Language", "👋", (reply) => /product|catalogue|sku/i.test(reply.message) ? null : "Emoji-only input should explain purpose");
+await check("LANG-001", "Language", "👋", (reply) => avoidsSkuPromotion(reply) ?? (/product|catalogue/i.test(reply.message) ? null : "Emoji-only input should explain purpose"));
 await check("LANG-002", "Language", "我要一把切鸡骨头的刀", (reply) => noProducts(reply) ?? /刀|chicken|bone|cleaver|鸡/i.test(reply.message) ? null : "Chinese request must be understood or safely clarified");
 await check("LANG-003", "Language", "Got chef knife anot?", (reply) => (reply.products?.length ?? 0) > 0 ? null : "Natural Singlish product request should work");
 await check("LANG-004", "Language", "I need 切鸡的刀, for bones", (reply) => noProducts(reply) ?? (/cleaver|砍骨刀/i.test(reply.message) ? null : "Mixed Chinese-English intent must route to cleaver without unrelated products"));

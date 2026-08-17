@@ -141,7 +141,7 @@ export function parseSiaHuatProductPage(html: string, productUrl: string): Scrap
   };
 }
 
-export async function fetchSiaHuatProduct(productUrl: string) {
+export async function fetchSiaHuatProduct(productUrl: string, timeoutMs = 20_000) {
   const url = new URL(productUrl);
   if (url.protocol !== "https:" || url.hostname !== "store.siahuat.com" || !/^\/product\/\d+$/.test(url.pathname)) {
     throw new Error("INVALID_SIA_HUAT_PRODUCT_URL");
@@ -153,7 +153,7 @@ export async function fetchSiaHuatProduct(productUrl: string) {
       "user-agent": "Hi-Lite-SiaHuat-B2B-Catalogue/1.0",
     },
     cache: "no-store",
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`SIA_HUAT_HTTP_${response.status}`);
   return parseSiaHuatProductPage(await response.text(), url.toString());
