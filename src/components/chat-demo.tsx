@@ -23,6 +23,36 @@ type QuoteSummary = {
   sourceUrl?: string | null;
 };
 
+function whatsAppQuoteMessage(quote: QuoteSummary, confirmed = false) {
+  const lines = [
+    confirmed
+      ? "Thank you for confirming. I’ve recorded this as an enquiry for Sia Huat staff review."
+      : "Please review this enquiry.",
+    "",
+    "*ORDER SUMMARY*",
+    `*Item:* ${quote.item}`,
+    `*Code:* ${quote.code}`,
+    `*Price per item:* $${quote.pricePerItem.toFixed(2)} / ${quote.uom} (ex GST)`,
+    `*Quantity:* ${quote.quantity} ${quote.uom}`,
+    `*Total:* $${quote.total.toFixed(2)} (ex GST)`,
+  ];
+
+  if (quote.sourceUrl) lines.push("", "*Item link:*", quote.sourceUrl);
+  lines.push("", confirmed
+    ? "No purchase has been placed yet. The sales team will confirm the final order with you."
+    : "No purchase has been placed yet. Choose Confirm order request if everything is correct.");
+  return lines.join("\n");
+}
+
+function WhatsAppText({ text }: { text: string }) {
+  const parts = text.split(/(\*[^*\n]+\*|https?:\/\/\S+)/g);
+  return <p className="whitespace-pre-wrap leading-6 text-[#334b44]">{parts.map((part, index) => {
+    if (/^\*[^*\n]+\*$/.test(part)) return <strong key={`${index}-${part}`} className="font-semibold text-[#15362f]">{part.slice(1, -1)}</strong>;
+    if (/^https?:\/\//.test(part)) return <a key={`${index}-${part}`} href={part} target="_blank" rel="noreferrer" className="break-all font-semibold text-[#176853] underline decoration-[#176853]/35 underline-offset-2">{part}</a>;
+    return part;
+  })}</p>;
+}
+
 type VoiceNote = { audioUrl: string; durationSeconds: number; transcript: string };
 
 type ChatMessage = { id: number; role: "user" | "assistant"; text: string; imageUrl?: string; voiceNote?: VoiceNote; products?: Product[]; selectedProduct?: Product; needsConfirmation?: boolean; quoteSummary?: QuoteSummary };
@@ -495,7 +525,7 @@ export function ChatDemo() {
       ...(userText ? [{ id: nextId.current++, role: "user" as const, text: userText }] : []),
       {
         id: nextId.current++, role: "assistant" as const,
-        text: "Please review this enquiry. If everything is correct, choose Confirm order request. No purchase has been placed yet.",
+        text: whatsAppQuoteMessage(quote),
         quoteSummary: quote,
       },
     ]);
@@ -547,7 +577,7 @@ export function ChatDemo() {
         { id: nextId.current++, role: "user", text: clean },
         {
           id: nextId.current++, role: "assistant",
-          text: "Thank you for confirming. I’ve recorded this as an enquiry for Sia Huat staff review. No purchase has been placed yet; the sales team will confirm the final order with you.",
+          text: whatsAppQuoteMessage(confirmedQuote, true),
           quoteSummary: confirmedQuote,
         },
       ]);
@@ -1059,17 +1089,7 @@ export function ChatDemo() {
       <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
         {messages.map((message) => <div key={`${sessionId.current}-${message.id}`} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
-          {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <p className="whitespace-pre-line leading-6 text-[#334b44]">{message.text}</p>}
-          {message.quoteSummary && <div className="mt-3 overflow-hidden rounded-xl border border-[#176853]/15 bg-[#f8f5ee]">
-            <div className="bg-[#176853] px-3 py-2 text-xs font-semibold uppercase tracking-[.12em] text-white">Order summary</div>
-            <dl className="divide-y divide-[#15362f]/10 px-3 text-xs text-[#526861]">
-              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-2.5 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt>Item</dt><dd className="min-w-0 break-words font-semibold leading-5 text-[#15362f]">{message.quoteSummary.item}<span className="mt-0.5 block break-all text-[11px] font-normal text-[#667a74]">code: {message.quoteSummary.code}</span></dd></div>
-              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-2.5 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt>Price per item</dt><dd className="min-w-0 break-words font-semibold text-[#15362f]">${message.quoteSummary.pricePerItem.toFixed(2)} / {message.quoteSummary.uom}<span className="ml-1 text-[10px] font-normal text-[#667a74]">ex GST</span></dd></div>
-              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-2.5 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt>Quantity</dt><dd className="font-semibold text-[#15362f]">{message.quoteSummary.quantity} {message.quoteSummary.uom}</dd></div>
-              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-2 py-3 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3"><dt className="font-semibold text-[#15362f]">Total</dt><dd className="min-w-0 break-words text-base font-bold text-[#176853]">${message.quoteSummary.total.toFixed(2)}<span className="ml-1 text-[10px] font-normal text-[#667a74]">ex GST</span></dd></div>
-            </dl>
-            {message.quoteSummary.sourceUrl && <a href={message.quoteSummary.sourceUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 border-t border-[#15362f]/10 px-3 py-2.5 text-[11px] font-semibold text-[#176853]">View Sia Huat listing <ExternalLink className="size-3" /></a>}
-          </div>}
+          {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <WhatsAppText text={message.text} />}
           {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" onClick={() => chooseProduct(product)} className="block w-full text-left"><p className="break-words font-semibold leading-5">{product.name}</p><p className="mt-2 text-xs text-[#667a74]">code: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">Price: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}</div>}
           {message.selectedProduct && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">code: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">Price: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
            {message.needsConfirmation && pendingProduct?.stock_id === message.selectedProduct?.stock_id && <div className="mt-3 grid grid-cols-2 gap-2"><Button type="button" disabled={checkingStock} onClick={() => void confirmProduct()} className="rounded-full bg-[#176853] hover:bg-[#125441]">{checkingStock ? <LoaderCircle className="size-4 animate-spin" /> : "Yes, this is it"}</Button><Button type="button" disabled={checkingStock} onClick={() => rejectProduct()} variant="outline" className="rounded-full border-[#176853]/25 text-[#176853]">No, show others</Button></div>}
