@@ -1,0 +1,74 @@
+{
+  "name": "Hi-Lite Sia Huat — Voice Transcription",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sia-huat-voice-transcription",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9b3908fe-18d3-48b1-b4c8-13ed10259845",
+      "name": "Voice Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-520, 0],
+      "webhookId": "b29aa31f-8acd-484f-b4b0-f5787ce62470"
+    },
+    {
+      "parameters": {
+        "jsCode": "function fingerprint(value) {\n  let first = 2166136261;\n  let second = 3335557771;\n  for (let index = 0; index < value.length; index += 1) {\n    const code = value.charCodeAt(index);\n    first = Math.imul(first ^ code, 16777619);\n    second = Math.imul(second ^ code, 2246822519);\n    second ^= second >>> 13;\n  }\n  return (first >>> 0).toString(16).padStart(8, '0') + (second >>> 0).toString(16).padStart(8, '0');\n}\n\nconst actual = String($json.headers?.['x-workflow-key'] ?? '');\nif (fingerprint(actual) !== '70424eb0feb6df8c') {\n  throw new Error('Unauthorized voice transcription request');\n}\nreturn items;"
+      },
+      "id": "7260448f-e5b6-48de-83fb-b20077a5669c",
+      "name": "Validate Server Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-280, 0]
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "inputDataFieldName": "data",
+        "options": {
+          "language": "en"
+        }
+      },
+      "id": "e5618cf6-7b0c-4923-b798-5a878d97f16c",
+      "name": "Transcribe Voice Note",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [-40, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { transcript: String($json.text ?? $json.transcript ?? '').trim() } }}",
+        "options": {}
+      },
+      "id": "b27b4c55-d951-4394-a331-02e926fbc1df",
+      "name": "Return Transcript",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [200, 0]
+    }
+  ],
+  "connections": {
+    "Voice Webhook": {
+      "main": [[{ "node": "Validate Server Request", "type": "main", "index": 0 }]]
+    },
+    "Validate Server Request": {
+      "main": [[{ "node": "Transcribe Voice Note", "type": "main", "index": 0 }]]
+    },
+    "Transcribe Voice Note": {
+      "main": [[{ "node": "Return Transcript", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

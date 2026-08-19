@@ -19,9 +19,30 @@ export function requestedProductIndex(message: string, productCount: number) {
   return index >= 0 && index < productCount ? index : null;
 }
 
+export function referencesSingleDisplayedProduct(message: string, productCount: number) {
+  if (productCount !== 1) return false;
+
+  const referencesProduct = /\b(?:this|that)(?:\s+(?:one|item|product))?\b|\b(?:it|the one)\b/i.test(message);
+  const hasSelectionIntent = /\b(?:want|need|take|choose|select|buy|order|get|give|have|confirm)\b/i.test(message);
+  return referencesProduct && (hasSelectionIntent || requestedQuantity(message) !== null);
+}
+
+export function confirmsDisplayedProduct(message: string) {
+  const positive = /^(?:yes|yup|yeah|correct|confirm|this is it)\b/i.test(message.trim());
+  const negative = /\b(?:no|not|wrong|another|other|different|instead)\b/i.test(message);
+  return positive && !negative;
+}
+
+export function requestsAnotherOption(message: string) {
+  const normalized = message.trim();
+  return /\b(?:another|different|other)\s+(?:item|option|product|one)\b/i.test(normalized)
+    || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized);
+}
+
 export function requestedQuantity(message: string) {
   const quantityText = message.match(/\b(\d+)\s*(?:pieces?|pcs?|units?|sets?)\w*\b/i)?.[1]
-    ?? message.match(/\b(?:get|want|need|order|buy|take|qty|quantity(?:\s+of)?)(?:\s+(?:no\.?|number))?\s*(\d+)\b/i)?.[1];
+    ?? message.match(/\b(\d+)\s+(?:of\s+)?(?:this|that|it|these|those|them)\b/i)?.[1]
+    ?? message.match(/\b(?:get|want|need|order|buy|take|have|give(?:\s+me)?|qty|quantity(?:\s+of)?)(?:\s+(?:no\.?|number))?\s*(\d+)\b/i)?.[1];
   if (!quantityText) return null;
   const quantity = Number.parseInt(quantityText, 10);
   return Number.isInteger(quantity) && quantity >= 1 && quantity <= 100_000 ? quantity : null;

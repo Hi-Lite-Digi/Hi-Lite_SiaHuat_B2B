@@ -153,6 +153,17 @@ await check("CTX-001", "Context & memory", "What did I originally come here for?
 await check("CTX-002", "Context & memory", "what is the weather today?", (reply) => /knife/i.test(reply.message) && /chicken/i.test(reply.message) ? null : "Off-topic response must preserve active task", knifeHistory);
 await check("CTX-003", "Context & memory", "yes continue helping me", (reply) => /bones|trimming/i.test(reply.message) ? null : "Natural continuation must resume the correct clarification", knifeHistory);
 await check("CTX-004", "Context & memory", "Cutting through bones", (reply) => noProducts(reply) ?? (/cleaver/i.test(reply.message) ? null : "Must route bones to cleaver"), knifeHistory);
+const blackPlateHistory: HistoryItem[] = [
+  { role: "user", content: "I need a black plate" },
+  { role: "assistant", content: "Do you need dinner plates or side plates?" },
+];
+await check("CTX-005", "Context & product relevance", "black", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected black plate options";
+  return products.every((product) => /\b(?:plate|platter)\b/i.test(product.name) && /\bblack\b/i.test(product.name))
+    ? null
+    : `Expected only black plates, got ${products.map((product) => product.name).join("; ")}`;
+}, blackPlateHistory, 15_000);
 
 const switchHistory: HistoryItem[] = [...knifeHistory,
   { role: "user", content: "Actually switch to a pan" },

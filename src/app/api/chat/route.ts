@@ -553,7 +553,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
   const catalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   let n8nError: unknown = null;
-  const n8nReplyPromise = sendChatToN8n(input).catch((error) => {
+  const n8nReplyPromise = sendChatToN8n(
+    catalogueMessage === input.message ? input : { ...input, message: catalogueMessage },
+  ).catch((error) => {
     n8nError = error;
     console.error("[api/chat] n8n reply failed", error);
     return null;

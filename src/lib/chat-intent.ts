@@ -76,11 +76,24 @@ export function extractShoeStyle(messages: string[]) {
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
   const customerMessages = [...userHistory, message];
-  if (!customerMessages.some((content) => productCategory(content) === "shoe")) return message;
+  if (customerMessages.some((content) => productCategory(content) === "shoe")) {
+    const size = extractExplicitShoeSize(customerMessages);
+    const style = extractShoeStyle(customerMessages);
+    return ["shoe", style ?? "work", size].filter(Boolean).join(" ");
+  }
 
-  const size = extractExplicitShoeSize(customerMessages);
-  const style = extractShoeStyle(customerMessages);
-  return ["shoe", style ?? "work", size].filter(Boolean).join(" ");
+  if (productCategory(message)) return message;
+
+  const isProductRefinement = /\b(?:red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|small|medium|large|cheap|cheapest|budget)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|pieces?|pcs?)?\b/i.test(message);
+  if (!isProductRefinement) return message;
+
+  const rememberedCategory = rememberedActiveCategories(userHistory).at(-1);
+  const catalogueTerm = rememberedCategory === "tableware"
+    ? "plate"
+    : rememberedCategory === "coffee product"
+      ? "coffee"
+      : rememberedCategory;
+  return catalogueTerm ? `${catalogueTerm} ${message}` : message;
 }
 
 export function rememberedPurpose(messages: string[]) {

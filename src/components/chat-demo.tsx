@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { ExternalLink, FileDown, ImagePlus, LoaderCircle, RotateCcw, Send, X } from "lucide-react";
+import { ExternalLink, FileDown, ImagePlus, LoaderCircle, Mic, Pause, Play, RotateCcw, Send, Square, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,7 @@ import type {
   ImageAttachment,
   Product,
 } from "@/lib/chat-contract";
-import { requestedProductIndex, requestedQuantity } from "@/lib/chat-turn";
+import { confirmsDisplayedProduct, referencesSingleDisplayedProduct, requestedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 
 type QuoteSummary = {
   item: string;
@@ -23,7 +23,28 @@ type QuoteSummary = {
   sourceUrl?: string | null;
 };
 
-type ChatMessage = { id: number; role: "user" | "assistant"; text: string; imageUrl?: string; products?: Product[]; selectedProduct?: Product; needsConfirmation?: boolean; quoteSummary?: QuoteSummary };
+type VoiceNote = { audioUrl: string; durationSeconds: number; transcript: string };
+
+type ChatMessage = { id: number; role: "user" | "assistant"; text: string; imageUrl?: string; voiceNote?: VoiceNote; products?: Product[]; selectedProduct?: Product; needsConfirmation?: boolean; quoteSummary?: QuoteSummary };
+
+type SpeechRecognitionResultEvent = {
+  resultIndex: number;
+  results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+};
+
+type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
 
 type LiveStockCheck = {
   inStock: boolean;
@@ -61,6 +82,45 @@ function singaporeTime() {
   }).format(new Date());
 }
 
+function voiceTime(seconds: number) {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`;
+}
+
+function VoiceNotePlayer({ note }: { note: VoiceNote }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) void audio.play();
+    else audio.pause();
+  }
+
+  function seek(value: number) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = value;
+    setCurrentTime(value);
+  }
+
+  return <div className="min-w-[210px] max-w-[290px]">
+    <div className="flex items-center gap-3 rounded-2xl bg-[#cfeadf] px-3 py-2.5 text-[#176853]">
+      <button type="button" aria-label={playing ? "Pause voice note" : "Play voice note"} onClick={togglePlayback} className="grid size-9 shrink-0 place-items-center rounded-full bg-[#176853] text-white">
+        {playing ? <Pause className="size-4 fill-current" /> : <Play className="ml-0.5 size-4 fill-current" />}
+      </button>
+      <div className="min-w-0 flex-1">
+        <input aria-label="Voice note progress" type="range" min={0} max={Math.max(note.durationSeconds, 1)} step={0.1} value={Math.min(currentTime, note.durationSeconds)} onChange={(event) => seek(Number(event.target.value))} className="h-1 w-full cursor-pointer accent-[#176853]" />
+        <div className="mt-1 flex items-center justify-between text-[10px] text-[#526861]"><span>{voiceTime(currentTime)}</span><span>{voiceTime(note.durationSeconds)}</span></div>
+      </div>
+      <Mic className="size-4 shrink-0" />
+      <audio ref={audioRef} src={note.audioUrl} preload="metadata" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)} onEnded={() => { setPlaying(false); setCurrentTime(0); }} />
+    </div>
+  </div>;
+}
+
 function pdfSafeText(value: string) {
   return value
     .replace(/[‘’]/g, "'")
@@ -75,7 +135,7 @@ function pdfSafeText(value: string) {
 function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: string }) {
   const status = role === "user" ? "Sent" : "Received";
 
-  return <p aria-label={`${status} at ${time}`} className={`mt-2 min-h-4 text-[10px] leading-4 text-[#667a74]/80 ${role === "user" ? "text-right" : "text-left"}`}>
+  return <p suppressHydrationWarning aria-label={`${status} at ${time}`} className={`mt-2 min-h-4 text-[10px] leading-4 text-[#667a74]/80 ${role === "user" ? "text-right" : "text-left"}`}>
     <span suppressHydrationWarning>{status} · {time}</span>
   </p>;
 }
@@ -100,6 +160,12 @@ export function ChatDemo() {
   const [checkingStock, setCheckingStock] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportError, setExportError] = useState("");
+  const [recordingVoice, setRecordingVoice] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voiceDraft, setVoiceDraft] = useState<VoiceNote | null>(null);
+  const [voiceError, setVoiceError] = useState("");
+  const [transcribingVoice, setTranscribingVoice] = useState(false);
   const nextId = useRef(2);
   const sessionId = useRef(crypto.randomUUID());
   const conversationEnd = useRef<HTMLDivElement>(null);
@@ -108,6 +174,17 @@ export function ChatDemo() {
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageTimes = useRef(new Map<number, string>());
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const finalTranscriptRef = useRef("");
+  const latestTranscriptRef = useRef("");
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingStartedAtRef = useRef(0);
+  const recordingActiveRef = useRef(false);
+  const discardRecordingRef = useRef(false);
+  const voiceDraftRef = useRef<VoiceNote | null>(null);
 
   function contentForBrain(message: ChatMessage) {
     const productOptions = message.products?.map(
@@ -202,10 +279,202 @@ export function ChatDemo() {
     selectImage(file);
   }
 
+  function clearRecordingResources() {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    try { recognitionRef.current?.stop(); } catch { /* Recognition may already be stopped by the browser. */ }
+    recognitionRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    recordingActiveRef.current = false;
+    setRecordingVoice(false);
+  }
+
+  function discardVoiceDraft() {
+    if (voiceDraftRef.current) URL.revokeObjectURL(voiceDraftRef.current.audioUrl);
+    voiceDraftRef.current = null;
+    setVoiceDraft(null);
+    setVoiceTranscript("");
+    latestTranscriptRef.current = "";
+    setVoiceError("");
+    setTranscribingVoice(false);
+  }
+
+  function stopVoiceRecording(discard = false) {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state !== "recording") {
+      clearRecordingResources();
+      return;
+    }
+    discardRecordingRef.current = discard;
+    recorder.stop();
+  }
+
+  async function startVoiceRecording() {
+    if (loading || recordingActiveRef.current || attachment) return;
+    setVoiceError("");
+    discardVoiceDraft();
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceError("Voice recording is not supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const supportedType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = supportedType ? new MediaRecorder(stream, { mimeType: supportedType }) : new MediaRecorder(stream);
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      finalTranscriptRef.current = "";
+      latestTranscriptRef.current = "";
+      discardRecordingRef.current = false;
+      recordingStartedAtRef.current = Date.now();
+      recordingActiveRef.current = true;
+      setRecordingSeconds(0);
+      setVoiceTranscript("");
+      setRecordingVoice(true);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        setVoiceError("The recording stopped unexpectedly. Please try again.");
+        clearRecordingResources();
+      };
+      recorder.onstop = () => {
+        const durationSeconds = Math.max(1, Math.round((Date.now() - recordingStartedAtRef.current) / 1_000));
+        const chunks = [...audioChunksRef.current];
+        const mimeType = recorder.mimeType || supportedType || "audio/webm";
+        const discard = discardRecordingRef.current;
+        setTranscribingVoice(!discard);
+        clearRecordingResources();
+        audioChunksRef.current = [];
+
+        window.setTimeout(() => {
+          if (discard || chunks.length === 0) {
+            setVoiceTranscript("");
+            setVoiceError("");
+            setTranscribingVoice(false);
+            return;
+          }
+          const audioUrl = URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+          const transcript = finalTranscriptRef.current.trim() || latestTranscriptRef.current.trim();
+          const note = { audioUrl, durationSeconds, transcript };
+          voiceDraftRef.current = note;
+          setVoiceDraft(note);
+          setVoiceTranscript(transcript);
+          setTranscribingVoice(false);
+        }, 900);
+      };
+
+      const speechWindow = window as typeof window & {
+        SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+        webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+      };
+      const SpeechRecognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = navigator.language || "en-SG";
+        recognition.onresult = (event) => {
+          let interim = "";
+          for (let index = event.resultIndex; index < event.results.length; index += 1) {
+            const result = event.results[index];
+            const transcript = result[0]?.transcript ?? "";
+            if (result.isFinal) finalTranscriptRef.current = `${finalTranscriptRef.current} ${transcript}`.trim();
+            else interim += transcript;
+          }
+          const latestTranscript = `${finalTranscriptRef.current} ${interim}`.trim();
+          latestTranscriptRef.current = latestTranscript;
+          setVoiceTranscript(latestTranscript);
+        };
+        recognition.onerror = (event) => {
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") recognitionRef.current = null;
+        };
+        recognitionRef.current = recognition;
+        try { recognition.start(); } catch { recognitionRef.current = null; }
+      }
+
+      recorder.start(250);
+      recordingTimerRef.current = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - recordingStartedAtRef.current) / 1_000);
+        setRecordingSeconds(elapsed);
+        if (elapsed >= 60) stopVoiceRecording();
+      }, 250);
+    } catch (error) {
+      clearRecordingResources();
+      const blocked = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError");
+      setVoiceError(blocked ? "Please allow microphone access to record a voice note." : "I couldn’t start the microphone. Please try again.");
+    }
+  }
+
+  async function sendVoiceDraft() {
+    const draft = voiceDraftRef.current;
+    if (!draft || transcribingVoice || loading) return;
+    setVoiceError("");
+    setTranscribingVoice(true);
+    let transcript = draft.transcript.trim() || finalTranscriptRef.current.trim() || latestTranscriptRef.current.trim() || voiceTranscript.trim();
+
+    if (!transcript) {
+      try {
+        const audioResponse = await fetch(draft.audioUrl);
+        const audio = await audioResponse.blob();
+        const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
+        const formData = new FormData();
+        formData.append("audio", audio, `voice-note.${extension}`);
+        formData.append("sessionId", sessionId.current);
+
+        const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+        const body = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
+        transcript = body?.transcript?.trim() ?? "";
+
+        if (!response.ok || !transcript) throw new Error(body?.error ?? "VOICE_TRANSCRIPTION_FAILED");
+      } catch (error) {
+        console.error("[voice] transcription failed", error);
+        setVoiceError("I can hear the recording, but voice transcription is temporarily unavailable. Please try again shortly.");
+        setTranscribingVoice(false);
+        return;
+      }
+    }
+
+    const understoodVoiceNote = { ...draft, transcript };
+    voiceDraftRef.current = null;
+    setVoiceDraft(null);
+    setVoiceTranscript("");
+    latestTranscriptRef.current = "";
+    setQuery("");
+    await submit(transcript, understoodVoiceNote);
+    setTranscribingVoice(false);
+  }
+
   useEffect(() => {
     messagesRef.current = messages;
     conversationEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading, suggestions]);
+
+  useEffect(() => {
+    voiceDraftRef.current = voiceDraft;
+  }, [voiceDraft]);
+
+  useEffect(() => () => {
+    recognitionRef.current?.abort();
+    if (mediaRecorderRef.current?.state === "recording") {
+      discardRecordingRef.current = true;
+      mediaRecorderRef.current.stop();
+    }
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    if (voiceDraftRef.current) URL.revokeObjectURL(voiceDraftRef.current.audioUrl);
+    messagesRef.current.forEach((message) => {
+      if (message.voiceNote) URL.revokeObjectURL(message.voiceNote.audioUrl);
+    });
+  }, []);
 
   function quoteFor(quantity: number, product: Product): QuoteSummary {
     const estimate = product.list_price * quantity;
@@ -258,7 +527,7 @@ export function ChatDemo() {
     setSuggestions(limit > 0 ? [String(limit), "Choose another item"] : ["Choose another item", "No, thank you"]);
   }
 
-  async function submit(value: string) {
+  async function submit(value: string, voiceNote?: VoiceNote) {
     const clean = value.trim() || (attachment ? "What product is this?" : "");
     if (!clean) return;
     if (/^\/\/reset sia huat$/i.test(clean)) {
@@ -289,15 +558,27 @@ export function ChatDemo() {
       return;
     }
 
-    if (pendingProduct && /^(yes|yes please|yup|yeah|correct|this is it|confirm|(?:yes[,\s-]*)?(?:that's|thats) the one)([.!\s]*)$/i.test(clean)) {
-      syncHandledTurnWithN8n(clean); setQuery(""); confirmProduct(clean); return;
+    const confirmedQuantity = requestedQuantity(clean);
+    if (pendingProduct && confirmsDisplayedProduct(clean)) {
+      syncHandledTurnWithN8n(clean);
+      setQuery("");
+      await confirmProduct(clean, pendingProduct, confirmedQuantity ?? undefined);
+      return;
     }
 
     if (pendingProduct && /^(no|nope|wrong item|not this|(?:no[,\s-]*)?(?:that's|thats) not it|no[,\s-]*(?:show|give)( me)? (the )?(other|others|alternatives|options))([.!\s]*)$/i.test(clean)) {
       syncHandledTurnWithN8n(clean); setQuery(""); rejectProduct(clean); return;
     }
 
-    const requestedIndex = requestedProductIndex(clean, lastProducts.length);
+    if (!pendingProduct && lastProducts.length === 1 && confirmsDisplayedProduct(clean) && confirmedQuantity !== null) {
+      syncHandledTurnWithN8n(clean);
+      setQuery("");
+      await confirmProduct(clean, lastProducts[0], confirmedQuantity);
+      return;
+    }
+
+    const requestedIndex = requestedProductIndex(clean, lastProducts.length)
+      ?? (referencesSingleDisplayedProduct(clean, lastProducts.length) ? 0 : null);
     if (!pendingProduct && requestedIndex !== null) {
       const product = lastProducts[requestedIndex];
       if (product) {
@@ -315,21 +596,50 @@ export function ChatDemo() {
       setStage("quantity"); setSuggestions(["1", "6", "12", "24"]); return;
     }
 
-    if (clean === "Choose another item") {
+    if (clean === "Choose another item" || requestsAnotherOption(clean)) {
       syncHandledTurnWithN8n(clean);
-      const excludedStockId = confirmedProduct?.stock_id ?? pendingProduct?.stock_id;
-      const alternatives = lastProducts.filter((product) => product.stock_id !== excludedStockId);
+      const currentProduct = confirmedProduct ?? pendingProduct;
+      const excludedStockId = currentProduct?.stock_id;
+      let alternatives = lastProducts.filter(
+        (product) => product.stock_id !== excludedStockId && product.stock_status === "in_stock",
+      );
       setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify");
-      setMessages((current) => [...current,
-        { id: nextId.current++, role: "user", text: clean },
-        {
-          id: nextId.current++, role: "assistant",
-          text: alternatives.length > 0
-            ? "Of course. Here are the other catalogue options. Which one would you like?"
-            : "Of course. Tell me another style, size or brand and I’ll find a different option for you.",
-          products: alternatives,
-        },
-      ]);
+      setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }]);
+      setQuery("");
+
+      if (currentProduct && alternatives.length < 3) {
+        setLoading(true);
+        loadingRef.current = true;
+        try {
+          const response = await fetch("/api/alternatives", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ stockId: currentProduct.stock_id }),
+            signal: AbortSignal.timeout(12_000),
+          });
+          const result = await response.json() as { products?: Product[]; error?: string };
+          if (!response.ok) throw new Error(result.error ?? "Alternative lookup failed.");
+          alternatives = [...new Map(
+            [...alternatives, ...(result.products ?? [])]
+              .filter((product) => product.stock_id !== excludedStockId)
+              .map((product) => [product.stock_id, product]),
+          ).values()].slice(0, 3);
+        } catch (error) {
+          console.error("[chat] alternative lookup failed", error);
+        } finally {
+          loadingRef.current = false;
+          setLoading(false);
+        }
+      }
+
+      if (alternatives.length > 0) setLastProducts(alternatives);
+      setMessages((current) => [...current, {
+        id: nextId.current++, role: "assistant",
+        text: alternatives.length > 0
+          ? `Sure—here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} available alternative${alternatives.length === 1 ? "" : "s"}. Which one would you like?`
+          : "Sorry, I couldn’t confirm another available option right now. Tell me what size, style or brand you prefer and I’ll widen the search.",
+        products: alternatives,
+      }]);
       setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Browse products"]); return;
     }
 
@@ -418,7 +728,7 @@ export function ChatDemo() {
     const attachedImage = attachment;
 
     const requestSession = sessionId.current;
-    setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean, imageUrl: attachedImage?.dataUrl }]);
+    setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean, imageUrl: attachedImage?.dataUrl, voiceNote }]);
     setQuery(""); setAttachment(null); setAttachmentError(""); setSuggestions([]); loadingRef.current = true; setLoading(true);
     try {
       const response = await fetch("/api/chat", {
@@ -489,7 +799,7 @@ export function ChatDemo() {
       {
         id: nextId.current++, role: "assistant",
         text: quantity
-          ? `Please confirm this is the correct item.\n\nQuantity requested: ${quantity} ${product.uom_id}.`
+          ? `Just to confirm—do you want ${quantity} ${product.uom_id} of ${product.name}?`
           : "Just to confirm, is this the exact item you want?",
         selectedProduct: product,
         needsConfirmation: true,
@@ -497,11 +807,11 @@ export function ChatDemo() {
     ]);
   }
 
-  async function confirmProduct(userText = "Yes, this is the item.") {
-    if (!pendingProduct || checkingStock) return;
-    const product = pendingProduct;
+  async function confirmProduct(userText = "Yes, this is the item.", productOverride?: Product, quantityOverride?: number | null) {
+    const product = productOverride ?? pendingProduct;
+    if (!product || checkingStock) return;
     setPendingProduct(null); setPendingQuote(null); setConfirmedProduct(product); setStage("clarify"); setSuggestions([]); setCheckingStock(true);
-    const quantity = pendingQuantity;
+    const quantity = quantityOverride === undefined ? pendingQuantity : quantityOverride;
     setMessages((current) => [...current, { id: nextId.current++, role: "user", text: userText }]);
 
     try {
@@ -575,6 +885,11 @@ export function ChatDemo() {
   }
 
   function resetConversation(firstMessage: ChatMessage) {
+    if (recordingActiveRef.current) stopVoiceRecording(true);
+    messagesRef.current.forEach((message) => {
+      if (message.voiceNote) URL.revokeObjectURL(message.voiceNote.audioUrl);
+    });
+    discardVoiceDraft();
     nextId.current = 2;
     messageTimes.current.clear();
     sessionId.current = crypto.randomUUID();
@@ -594,6 +909,9 @@ export function ChatDemo() {
     setLastProducts([]);
     setCheckingStock(false);
     setExportError("");
+    setRecordingSeconds(0);
+    setVoiceTranscript("");
+    setVoiceError("");
   }
 
   function reset() {
@@ -667,7 +985,7 @@ export function ChatDemo() {
         ].filter(Boolean).join("\n")).join("\n\n");
         const body = pdfSafeText([
           message.imageUrl ? "[Product photo attached]" : "",
-          message.text,
+          message.voiceNote ? `[Voice note - ${voiceTime(message.voiceNote.durationSeconds)}]\nTranscript: ${message.text}` : message.text,
           productText,
           message.quoteSummary ? [
             `Item: ${message.quoteSummary.item}`,
@@ -741,7 +1059,7 @@ export function ChatDemo() {
       <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
         {messages.map((message) => <div key={`${sessionId.current}-${message.id}`} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
-          <p className="whitespace-pre-line leading-6 text-[#334b44]">{message.text}</p>
+          {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <p className="whitespace-pre-line leading-6 text-[#334b44]">{message.text}</p>}
           {message.quoteSummary && <div className="mt-3 overflow-hidden rounded-xl border border-[#176853]/15 bg-[#f8f5ee]">
             <div className="bg-[#176853] px-3 py-2 text-xs font-semibold uppercase tracking-[.12em] text-white">Order summary</div>
             <dl className="divide-y divide-[#15362f]/10 px-3 text-xs text-[#526861]">
@@ -764,15 +1082,26 @@ export function ChatDemo() {
       <div className="chat-composer border-t border-[#15362f]/10 bg-white p-3">
         {exportError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{exportError}</p>}
         <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleImageInput} className="sr-only" aria-label="Choose product image" />
-        {attachment ? <div className="mb-2 flex items-center gap-3 rounded-2xl border border-[#176853]/20 bg-[#f3f7f4] p-2">
+        {!recordingVoice && !voiceDraft && (attachment ? <div className="mb-2 flex items-center gap-3 rounded-2xl border border-[#176853]/20 bg-[#f3f7f4] p-2">
           <Image src={attachment.dataUrl} alt="Selected product preview" width={56} height={56} unoptimized className="size-14 rounded-xl object-cover" />
           <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-[#334b44]">{attachment.name}</p><p className="text-[11px] text-[#667a74]">Ready to send</p></div>
           <Button type="button" size="icon" variant="ghost" aria-label="Remove product image" onClick={() => setAttachment(null)} className="size-8 rounded-full"><X className="size-4" /></Button>
         </div> : <button type="button" aria-label="Paste, drop, or choose a product image" onClick={() => fileInputRef.current?.click()} onDragEnter={(event) => { event.preventDefault(); setDraggingImage(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDraggingImage(false)} onDrop={handleImageDrop} className={`mb-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed px-3 py-2 text-xs transition ${draggingImage ? "border-[#176853] bg-[#e8f4ee] text-[#176853]" : "border-[#176853]/25 bg-[#fafaf8] text-[#667a74] hover:bg-[#f3f7f4]"}`}>
           <ImagePlus className="size-4" /> Paste, drop, or click to add a product photo
-        </button>}
+        </button>)}
         {attachmentError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{attachmentError}</p>}
-        <form onSubmit={handleSubmit} className="flex min-w-0 gap-2"><Input aria-label="Product question" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(query); } }} placeholder={stage === "quantity" ? `Enter quantity in ${confirmedProduct?.uom_id ?? "units"}…` : attachment ? "Add a note, or send the photo…" : "Ask about a product…"} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4 sm:px-5" /><Button type="submit" aria-label="Send question" disabled={(!query.trim() && !attachment) || loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button></form>
+        {voiceError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{voiceError}</p>}
+        {recordingVoice && <div className="flex min-w-0 items-center gap-2 rounded-full bg-[#f3f3f0] p-1.5 pl-2">
+          <Button type="button" aria-label="Cancel voice recording" title="Cancel" onClick={() => stopVoiceRecording(true)} size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-[#a94732]"><Trash2 className="size-4" /></Button>
+          <div className="flex min-w-0 flex-1 items-center gap-2"><span className="size-2 shrink-0 animate-pulse rounded-full bg-red-500" /><div className="min-w-0"><p className="truncate text-xs font-semibold text-[#334b44]">Recording {voiceTime(recordingSeconds)}</p><p className="truncate text-[10px] text-[#667a74]">{voiceTranscript || "Speak now…"}</p></div></div>
+          <Button type="button" aria-label="Stop voice recording" title="Stop recording" onClick={() => stopVoiceRecording()} size="icon" className="size-10 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]"><Square className="size-3.5 fill-current" /></Button>
+        </div>}
+        {transcribingVoice && !voiceDraft && !loading && <div role="status" className="flex items-center justify-center gap-2 rounded-2xl border border-[#176853]/15 bg-[#f3f7f4] px-4 py-3 text-sm font-medium text-[#176853]"><LoaderCircle className="size-4 animate-spin" />Finishing voice message…</div>}
+        {voiceDraft && <div className="rounded-2xl border border-[#176853]/15 bg-[#f3f7f4] p-2.5">
+          <div className="flex min-w-0 items-center gap-2"><div className="min-w-0 flex-1"><VoiceNotePlayer note={voiceDraft} /></div><Button type="button" aria-label="Delete voice note" title="Delete voice note" disabled={transcribingVoice} onClick={discardVoiceDraft} size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-[#a94732]"><Trash2 className="size-4" /></Button><Button type="button" aria-label="Send voice note" title="Send voice note" disabled={loading || transcribingVoice} onClick={() => void sendVoiceDraft()} size="icon" className="size-10 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]">{transcribingVoice ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}</Button></div>
+          {transcribingVoice && <p role="status" className="mt-2 px-2 text-xs font-medium text-[#176853]">Understanding voice message…</p>}
+        </div>}
+        {!recordingVoice && !voiceDraft && !transcribingVoice && <form onSubmit={handleSubmit} className="flex min-w-0 gap-2"><Input aria-label="Product question" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(query); } }} placeholder={stage === "quantity" ? `Enter quantity in ${confirmedProduct?.uom_id ?? "units"}…` : attachment ? "Add a note, or send the photo…" : "Ask about a product…"} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4 sm:px-5" />{query.trim() || attachment ? <Button type="submit" aria-label="Send question" disabled={loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button> : <Button type="button" aria-label="Record voice note" title="Record voice note" disabled={loading} onClick={() => void startVoiceRecording()} size="icon" className="size-12 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]"><Mic className="size-5" /></Button>}</form>}
       </div>
     </div>
   </div>;

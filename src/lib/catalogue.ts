@@ -132,6 +132,9 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/, candidate: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/ },
     { requested: /\bknife\b/, candidate: /\bknife|cleaver\b/ },
     { requested: /\bpan\b/, candidate: /\bpan\b/ },
+    { requested: /\b(?:plate|plates)\b/, candidate: /\b(?:plate|plates|platter|platters)\b/ },
+    { requested: /\b(?:bowl|bowls)\b/, candidate: /\b(?:bowl|bowls)\b/ },
+    { requested: /\b(?:cup|cups|mug|mugs)\b/, candidate: /\b(?:cup|cups|mug|mugs)\b/ },
     { requested: /\bwine\b.*\bglass/, candidate: /\bwine glass\b/ },
     { requested: /\bcoffee\b.*\bbeans?\b/, candidate: /\bcoffee beans\b/ },
     { requested: /\bhelmets?\b/, candidate: /\bhelmets?\b/ },
@@ -233,6 +236,88 @@ export async function findProductForStockCheck(stockId: string) {
   });
   if (!response.ok) throw new Error(`SUPABASE_PRODUCT_${response.status}`);
   return catalogueProductSchema.array().parse(await response.json())[0] ?? null;
+}
+
+function productVariantFamily(name: string) {
+  return name
+    .replace(/,?\s*(?:euro|us|uk)\s+size\s+\d+(?:\.5)?/gi, "")
+    .replace(/,?\s*size\s+\d+(?:\.5)?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function broadProductTypePattern(product: Product) {
+  const text = searchableProductText(product);
+  const patterns = [
+    /\b(?:shoe|shoes|footwear|boot|boots)\b/i,
+    /\b(?:fry|frying|omelette|crepe|grill|sauce)?\s*pan\b/i,
+    /\b(?:knife|knives|cleaver)\b/i,
+    /\b(?:plate|plates|platter|platters)\b/i,
+    /\b(?:bowl|bowls)\b/i,
+    /\b(?:glass|glasses|glassware)\b/i,
+    /\b(?:cup|cups|mug|mugs)\b/i,
+    /\b(?:tray|trays)\b/i,
+    /\b(?:pot|pots)\b/i,
+  ];
+  return patterns.find((pattern) => pattern.test(text)) ?? null;
+}
+
+export async function findAvailableCatalogueAlternatives(stockId: string, limit = 3) {
+  const source = await findProductForStockCheck(stockId);
+  if (!source) return [];
+
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  const typePattern = broadProductTypePattern(source);
+  const scopes = [
+    ["third_category", source.third_category],
+    ["subcategory", source.subcategory],
+  ] as const;
+  const candidates = new Map<string, Product>();
+
+  for (const [field, value] of scopes) {
+    if (!value?.trim()) continue;
+    const query = new URLSearchParams({
+      select: productSelect,
+      [field]: `eq.${value}`,
+      status: "in.(Active,New)",
+      stock_status: "eq.in_stock",
+      limit: "80",
+    });
+    const response = await fetch(`${url}/rest/v1/products?${query}`, {
+      headers: { apikey: key, authorization: `Bearer ${key}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!response.ok) throw new Error(`SUPABASE_ALTERNATIVES_${response.status}`);
+    for (const product of catalogueProductSchema.array().parse(await response.json())) {
+      if (product.stock_id === source.stock_id || product.available_quantity === 0) continue;
+      if (typePattern && !typePattern.test(searchableProductText(product))) continue;
+      candidates.set(product.stock_id, product);
+    }
+  }
+
+  const requestedEuroSize = source.name.match(/\beuro\s+size\s+(\d+(?:\.5)?)\b/i)?.[1];
+  const sourceFamily = productVariantFamily(source.name);
+  const ranked = [...candidates.values()].sort((left, right) => {
+    const exactSizeScore = (product: Product) => requestedEuroSize && new RegExp(`\\beuro\\s+size\\s+${requestedEuroSize}\\b`, "i").test(product.name) ? 1 : 0;
+    return exactSizeScore(right) - exactSizeScore(left)
+      || Number(right.available_quantity ?? 0) - Number(left.available_quantity ?? 0);
+  });
+
+  const selected: Product[] = [];
+  const seenFamilies = new Set([sourceFamily]);
+  for (const product of ranked) {
+    const family = productVariantFamily(product.name);
+    if (seenFamilies.has(family)) continue;
+    selected.push(product);
+    seenFamilies.add(family);
+    if (selected.length >= limit) break;
+  }
+  return selected;
 }
 
 export async function findCatalogueProductByCode(stockId: string) {
