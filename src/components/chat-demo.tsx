@@ -449,25 +449,30 @@ export function ChatDemo() {
     if (!draft || transcribingVoice || loading) return;
     setVoiceError("");
     setTranscribingVoice(true);
-    let transcript = draft.transcript.trim() || finalTranscriptRef.current.trim() || latestTranscriptRef.current.trim() || voiceTranscript.trim();
+    const browserTranscript = draft.transcript.trim()
+      || finalTranscriptRef.current.trim()
+      || latestTranscriptRef.current.trim()
+      || voiceTranscript.trim();
+    let transcript = "";
 
-    if (!transcript) {
-      try {
-        const audioResponse = await fetch(draft.audioUrl);
-        const audio = await audioResponse.blob();
-        const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
-        const formData = new FormData();
-        formData.append("audio", audio, `voice-note.${extension}`);
-        formData.append("sessionId", sessionId.current);
+    try {
+      const audioResponse = await fetch(draft.audioUrl);
+      const audio = await audioResponse.blob();
+      const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
+      const formData = new FormData();
+      formData.append("audio", audio, `voice-note.${extension}`);
+      formData.append("sessionId", sessionId.current);
 
-        const response = await fetch("/api/transcribe", { method: "POST", body: formData });
-        const body = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
-        transcript = body?.transcript?.trim() ?? "";
+      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+      const body = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
+      transcript = body?.transcript?.trim() ?? "";
 
-        if (!response.ok || !transcript) throw new Error(body?.error ?? "VOICE_TRANSCRIPTION_FAILED");
-      } catch (error) {
-        console.error("[voice] transcription failed", error);
-        setVoiceError("I can hear the recording, but voice transcription is temporarily unavailable. Please try again shortly.");
+      if (!response.ok || !transcript) throw new Error(body?.error ?? "VOICE_TRANSCRIPTION_FAILED");
+    } catch (error) {
+      console.error("[voice] multilingual transcription failed", error);
+      transcript = browserTranscript;
+      if (!transcript) {
+        setVoiceError("I couldn’t understand that voice message. Please try recording it again.");
         setTranscribingVoice(false);
         return;
       }
@@ -589,6 +594,14 @@ export function ChatDemo() {
     }
 
     const confirmedQuantity = requestedQuantity(clean);
+    if (pendingQuote && confirmedProduct && confirmedQuantity !== null) {
+      syncHandledTurnWithN8n(clean);
+      setPendingQuote(null);
+      setQuery("");
+      await confirmProduct(clean, confirmedProduct, confirmedQuantity);
+      return;
+    }
+
     if (pendingProduct && confirmsDisplayedProduct(clean)) {
       syncHandledTurnWithN8n(clean);
       setQuery("");

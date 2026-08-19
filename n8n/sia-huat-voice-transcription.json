@@ -30,9 +30,7 @@
         "resource": "audio",
         "operation": "transcribe",
         "inputDataFieldName": "data",
-        "options": {
-          "language": "en"
-        }
+        "options": {}
       },
       "id": "e5618cf6-7b0c-4923-b798-5a878d97f16c",
       "name": "Transcribe Voice Note",
