@@ -22,12 +22,47 @@ const sessionQueues = new Map<string, Promise<void>>();
 const CUSTOMER_REPLY_DEADLINE_MS = 27_000;
 const EARLY_LIVE_CHECK_TIMEOUT_MS = 5_000;
 
-function customerReply<T extends { message: string; suggestions?: string[] }>(reply: T): T {
+function prefersChinese(input: Pick<ChatRequest, "message" | "history">) {
+  if (/\p{Script=Han}/u.test(input.message)) return true;
+  const recentUserMessages = input.history.filter((item) => item.role === "user").slice(-3);
+  return recentUserMessages.length > 0 && /\p{Script=Han}/u.test(recentUserMessages.at(-1)?.content ?? "");
+}
+
+function chineseCustomerMessage<T extends { message: string; products?: Product[]; selectedProduct?: Product | null }>(reply: T) {
+  if (/\p{Script=Han}/u.test(reply.message)) return reply.message;
+  const products = reply.products ?? [];
+  if (/couldn't find an exact .*water dispenser/i.test(reply.message)) {
+    return products.length > 0
+      ? "抱歉，目录里没有完全符合要求的饮水机。以下是目前最接近的供水或热水设备："
+      : "抱歉，目录里没有完全符合要求的饮水机，目前也找不到接近的替代商品。";
+  }
+  if (reply.selectedProduct) return "我找到了这件商品。请确认是否是您要的商品。";
+  if (products.length === 1) return "这是最接近您需求的商品：";
+  if (products.length > 1) return `我找到了 ${products.length} 个相关选项：`;
+  return "我可以帮您。请再告诉我商品类型、尺寸、品牌或用途，我会继续查询。";
+}
+
+function chineseSuggestion(suggestion: string) {
+  const translations: Record<string, string> = {
+    "Find a product": "查找商品",
+    "Browse products": "浏览商品",
+    "Search again": "重新查询",
+    "Choose another item": "选择其他商品",
+    "No, thank you": "不用了，谢谢",
+    "Continue for staff review": "交由人员确认",
+  };
+  return translations[suggestion] ?? suggestion;
+}
+
+function customerReply<T extends { message: string; suggestions?: string[]; products?: Product[]; selectedProduct?: Product | null }>(reply: T, input: Pick<ChatRequest, "message" | "history">): T {
+  const useChinese = prefersChinese(input);
   return {
     ...reply,
-    message: normalizeClaireMessage(reply.message),
+    message: useChinese ? chineseCustomerMessage(reply) : normalizeClaireMessage(reply.message),
     ...(reply.suggestions
-      ? { suggestions: reply.suggestions.filter((suggestion) => !/\bsku\b/i.test(suggestion)) }
+      ? { suggestions: reply.suggestions
+          .filter((suggestion) => !/\bsku\b/i.test(suggestion))
+          .map((suggestion) => useChinese ? chineseSuggestion(suggestion) : suggestion) }
       : {}),
   };
 }
@@ -209,6 +244,7 @@ function productFamily(product: Product) {
     { name: "bowl", pattern: /\b(?:bowl|bowls)\b/ },
     { name: "cup", pattern: /\b(?:cup|cups|mug|mugs)\b/ },
     { name: "shoe", pattern: /\b(?:shoe|shoes|footwear)\b/ },
+    { name: "water-dispenser", pattern: /\bwater\s+(?:dispenser|urn|boiler)\b|\b(?:electric|thermal)\s+airpot\b|\bdrinking\s+fountain\b/ },
     { name: "machine", pattern: /\b(?:machine|machines|appliance|appliances)\b/ },
   ];
   return families.find((family) => family.pattern.test(text))?.name ?? null;
@@ -229,10 +265,103 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:spoon|spoons|serving\s+spoon|ladle|ladles|fork|forks|cutlery)\b/i.test(message)
     || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
     || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
+    || /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i.test(message)
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
     || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i.test(message)
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
     || exactCodeCandidates(message).length > 0;
+}
+
+function isWaterDispenserRequest(message: string) {
+  return /\bwater\s+(?:dispenser|urn|boiler)\b|\b(?:electric|thermal)\s+airpot\b/i.test(message);
+}
+
+function waterProductText(product: Product) {
+  return [product.name, product.description, product.category, product.subcategory, product.third_category]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function isWaterDispensingProduct(product: Product) {
+  return /\bwater\s+(?:dispenser|urn|boiler)\b|\b(?:electric|thermal)\s+airpot\b|\bdrinking\s+fountain\b/i
+    .test(waterProductText(product));
+}
+
+function litresFromText(value: string) {
+  const match = value.match(/\b(\d+(?:\.\d+)?)\s*(?:l|litres?|liters?)\b/i);
+  return match ? Number.parseFloat(match[1]) : null;
+}
+
+function matchesWaterDispenserRequirements(product: Product, message: string) {
+  if (!isWaterDispensingProduct(product)) return false;
+  const candidate = waterProductText(product);
+  const requestedCapacity = litresFromText(message);
+  const productCapacity = litresFromText(candidate);
+  if (requestedCapacity !== null && productCapacity !== requestedCapacity) return false;
+  if (/\bfree[ -]?standing\b/i.test(message) && !/\bfree[ -]?standing|floor[ -]?standing\b/i.test(candidate)) return false;
+  if (/\bhot\b[\s\S]*\bcold\b|\bcold\b[\s\S]*\bhot\b/i.test(message)
+    && !(/\bhot\b/i.test(candidate) && /\bcold\b/i.test(candidate))) return false;
+  return true;
+}
+
+function waterDispenserRequestLabel(message: string) {
+  const capacity = message.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?)\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
+  const placement = /\bfree[ -]?standing\b/i.test(message) ? "freestanding" : /\bcounter[ -]?top\b/i.test(message) ? "countertop" : null;
+  const temperature = /\bhot\b[\s\S]*\bcold\b|\bcold\b[\s\S]*\bhot\b/i.test(message) ? "hot-and-cold" : null;
+  return [capacity, placement, temperature, "water dispenser"].filter(Boolean).join(" ");
+}
+
+async function groundedWaterDispenserReply(message: string): Promise<ChatReply> {
+  const exactProducts = await searchCatalogue(message, { resultLimit: 30, outputLimit: 20 });
+  const exactMatches = exactProducts.filter((product) => matchesWaterDispenserRequirements(product, message));
+  if (exactMatches.length > 0) {
+    return {
+      message: exactMatches.length === 1 ? "This is the closest match:" : "Here are the matching water dispensers:",
+      stage: "clarify",
+      products: exactMatches.slice(0, 3),
+      selectedProduct: null,
+      suggestions: [],
+    };
+  }
+
+  const searchTerms = ["water dispenser", "water urn", "electric airpot", "drinking fountain"];
+  const resultSets = await Promise.all(searchTerms.map(async (term) => {
+    try {
+      return await searchCatalogue(term, { resultLimit: 30, outputLimit: 30 });
+    } catch (error) {
+      console.error("[api/chat] nearby water-dispenser search failed", { term, error });
+      return [];
+    }
+  }));
+  const requestedCapacity = litresFromText(message);
+  const alternatives = [...new Map(
+    resultSets.flat().filter(isWaterDispensingProduct).map((product) => [product.stock_id, product]),
+  ).values()].sort((left, right) => {
+    const score = (product: Product) => {
+      const text = waterProductText(product);
+      const capacity = litresFromText(text);
+      const capacityScore = requestedCapacity !== null && capacity !== null
+        ? Math.max(0, 50 - Math.abs(requestedCapacity - capacity) * 15)
+        : 0;
+      return capacityScore
+        + (/\bwater\s+dispenser\b/i.test(text) ? 60 : 0)
+        + (/\bwater\s+urn\b/i.test(text) ? 35 : 0)
+        + (/\bairpot\b/i.test(text) ? 25 : 0)
+        + (product.stock_status === "in_stock" ? 20 : 0);
+    };
+    return score(right) - score(left);
+  }).slice(0, 3);
+
+  return {
+    message: alternatives.length > 0
+      ? `I couldn't find an exact ${waterDispenserRequestLabel(message)}. These are the closest water-dispensing options we have instead:`
+      : `I couldn't find an exact ${waterDispenserRequestLabel(message)}, and there isn't a close water-dispensing alternative in the catalogue right now.`,
+    stage: "clarify",
+    products: alternatives,
+    selectedProduct: null,
+    suggestions: alternatives.length > 0 ? [] : ["Browse products"],
+  };
 }
 
 async function groundedCatalogueReply(message: string): Promise<ChatReply | null> {
@@ -248,6 +377,8 @@ async function groundedCatalogueReply(message: string): Promise<ChatReply | null
       };
     }
   }
+
+  if (isWaterDispenserRequest(message)) return groundedWaterDispenserReply(message);
 
   if (!isConcreteCatalogueRequest(message)) return null;
   const products = await searchCatalogue(message, { resultLimit: 30, outputLimit: 20 });
@@ -368,6 +499,8 @@ async function addDiverseProductOptions(reply: ChatReply, message: string): Prom
     return reply;
   }
 
+  if (isWaterDispenserRequest(message)) return { ...reply, products: reply.products.slice(0, 3) };
+
   if (/\b(?:shoe|shoes|footwear)\b/i.test(message) && /\b(?:euro|uk|us)\s*(?:size\s*)?\d/i.test(message)) {
     return { ...reply, products: diversifyProducts(reply.products) };
   }
@@ -477,6 +610,18 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
     };
   }
 
+  if (/couldn't find an exact .*water dispenser/i.test(reply.message)) {
+    const available = reply.products.filter((product) => product.stock_status !== "out_of_stock").slice(0, 3);
+    return {
+      ...reply,
+      message: available.length > 0
+        ? reply.message
+        : `${reply.message} The closest matches are currently out of stock.`,
+      products: available.length > 0 ? available : reply.products.slice(0, 3),
+      suggestions: available.length > 0 ? [] : ["Browse products"],
+    };
+  }
+
   const unavailable = reply.products.filter((product) => product.stock_status === "out_of_stock");
   if (unavailable.length === 0) return reply;
 
@@ -554,8 +699,11 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
   const catalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   let n8nError: unknown = null;
+  const workflowMessage = prefersChinese(input)
+    ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
+    : catalogueMessage;
   const n8nReplyPromise = sendChatToN8n(
-    catalogueMessage === input.message ? input : { ...input, message: catalogueMessage },
+    workflowMessage === input.message ? input : { ...input, message: workflowMessage },
   ).catch((error) => {
     n8nError = error;
     console.error("[api/chat] n8n reply failed", error);
@@ -600,7 +748,7 @@ async function processChat(input: ChatRequest) {
       durationMs: Math.round(performance.now() - startedAt),
       stage: fastReply.stage,
     });
-    return NextResponse.json(customerReply(fastReply));
+    return NextResponse.json(customerReply(fastReply, input));
   }
 
   let safeGroundedReply: ChatReply | null = null;
@@ -623,7 +771,7 @@ async function processChat(input: ChatRequest) {
       productCount: reply.products.length,
       stage: reply.stage,
     });
-    return NextResponse.json(customerReply(reply));
+    return NextResponse.json(customerReply(reply, input));
   } catch (error) {
     console.error("Chat failed", error);
     if (error instanceof Error && error.message === "N8N_NOT_CONFIGURED") {

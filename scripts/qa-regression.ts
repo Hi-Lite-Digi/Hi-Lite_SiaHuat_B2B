@@ -74,6 +74,21 @@ await check("CAT-008", "Catalogue scope", "I would like a caffeine free tea plea
   { role: "user", content: "I would like an instruction on how to make the tea." },
   { role: "assistant", content: "I can only help with Sia Huat product and order enquiries." },
 ], 5_000);
+const unsupportedCategoryCheck = (category: string) => (reply: Reply) => {
+  return noProducts(reply)
+    ?? (reply.message.toLowerCase().includes(category.toLowerCase())
+      ? null
+      : `Must explicitly decline unsupported category: ${category}`)
+    ?? (/commercial kitchen/i.test(reply.message) && /F&B/i.test(reply.message)
+      ? null
+      : "Must explain what Sia Huat sells instead")
+    ?? ((reply.suggestions?.length ?? 0) >= 3
+      ? null
+      : "Must offer useful supported-category shortcuts");
+};
+await check("CAT-009", "Catalogue scope", "Hi do you guys sell condoms?", unsupportedCategoryCheck("condoms"), [], 5_000);
+await check("CAT-010", "Catalogue scope", "Do you carry prescription medication?", unsupportedCategoryCheck("medication"), [], 5_000);
+await check("CAT-011", "Catalogue scope", "Can I buy pet food here?", unsupportedCategoryCheck("pet supplies"), [], 5_000);
 await check("CONV-001", "Conversation", "what is your issue?", (reply) => noProducts(reply) ?? (/no issue|claire/i.test(reply.message) && !/issue with a product|your order|website/i.test(reply.message) ? null : "Must answer as Claire without assuming the customer has a problem"));
 await check("CONV-002", "Conversation", "what are yoaaua here for?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /catalogue|product/i.test(reply.message) ? null : "Typo-tolerant purpose question must explain Claire's role"));
 await check("CONV-003", "Conversation", "why are you here?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /product|catalogue/i.test(reply.message) ? null : "Purpose question must receive a conversational reply"));
@@ -181,6 +196,21 @@ await check("CTX-001", "Context & memory", "What did I originally come here for?
 await check("CTX-002", "Context & memory", "what is the weather today?", (reply) => /knife/i.test(reply.message) && /chicken/i.test(reply.message) ? null : "Off-topic response must preserve active task", knifeHistory);
 await check("CTX-003", "Context & memory", "yes continue helping me", (reply) => /bones|trimming/i.test(reply.message) ? null : "Natural continuation must resume the correct clarification", knifeHistory);
 await check("CTX-004", "Context & memory", "Cutting through bones", (reply) => noProducts(reply) ?? (/cleaver/i.test(reply.message) ? null : "Must route bones to cleaver"), knifeHistory);
+const waterDispenserHistory: HistoryItem[] = [
+  { role: "user", content: "I want to buy a water dispenser that can hold 6L" },
+  { role: "assistant", content: "Do you prefer a countertop or freestanding dispenser, and do you need hot/cold functions?" },
+];
+await check("CTX-006", "Context & alternatives", "freestanding dispenser and I need hot/cold function", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "No nearby water-dispensing alternatives were returned";
+  if (products.length > 3) return "More than 3 nearby alternatives were returned";
+  if (!products.every((product) => /water\s+(?:dispenser|urn|boiler)|airpot|drinking\s+fountain/i.test(product.name))) {
+    return "An unrelated product was returned as a water-dispenser alternative";
+  }
+  if (!/couldn.?t find an exact|没有完全符合/i.test(reply.message)) return "Reply did not clearly say the exact requested item was unavailable";
+  if (/what item or brand/i.test(reply.message)) return "Reply forgot the water-dispenser context and asked for the item again";
+  return null;
+}, waterDispenserHistory);
 const blackPlateHistory: HistoryItem[] = [
   { role: "user", content: "I need a black plate" },
   { role: "assistant", content: "Do you need dinner plates or side plates?" },
@@ -213,6 +243,10 @@ await check("LANG-001", "Language", "👋", (reply) => avoidsSkuPromotion(reply)
 await check("LANG-002", "Language", "我要一把切鸡骨头的刀", (reply) => noProducts(reply) ?? /刀|chicken|bone|cleaver|鸡/i.test(reply.message) ? null : "Chinese request must be understood or safely clarified");
 await check("LANG-003", "Language", "Got chef knife anot?", (reply) => (reply.products?.length ?? 0) > 0 ? null : "Natural Singlish product request should work");
 await check("LANG-004", "Language", "I need 切鸡的刀, for bones", (reply) => noProducts(reply) ?? (/cleaver|砍骨刀/i.test(reply.message) ? null : "Mixed Chinese-English intent must route to cleaver without unrelated products"));
+await check("LANG-005", "Language", "我要 chef knife，5个", (reply) => {
+  if (!/\p{Script=Han}/u.test(reply.message)) return "Chinese voice-style request must receive a Chinese reply";
+  return (reply.products?.length ?? 0) > 0 ? null : "Mixed Chinese-English product request should return catalogue products";
+});
 
 const standardHandoff = /alerted a human colleague.*5.{0,3}10 minutes/i;
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));

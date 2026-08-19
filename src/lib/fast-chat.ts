@@ -182,13 +182,21 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const unsupportedProductFamilies = [
     { pattern: /\b(ppe|personal protective equipment|safety helmets?|hard hats?|safety vests?|safety boots?)\b/, label: "PPE" },
     { pattern: /\b(electrical cable|electric cable|power cable|electrical wire|electric wire|circuit breaker|switchgear)\b/, label: "electrical supplies" },
+    { pattern: /\b(condoms?|contraceptives?|sexual wellness|intimate wellness)\b/, label: "condoms or sexual-wellness products" },
+    { pattern: /\b(prescription drugs?|pharmaceuticals?|medications?)\b/, label: "medication or pharmaceutical products" },
+    { pattern: /\b(smartphones?|mobile phones?|tablets?|laptops?|televisions?|tvs?|game consoles?)\b/, label: "consumer electronics" },
+    { pattern: /\b(cosmetics?|make-?up|skincare|perfumes?|fragrances?)\b/, label: "cosmetics or fragrances" },
+    { pattern: /\b(pet food|dog food|cat food|pet toys?|pet supplies?)\b/, label: "pet supplies" },
+    { pattern: /\b(car parts?|motorcycle parts?|automotive parts?|tyres?|motor oil)\b/, label: "automotive products" },
+    { pattern: /\b(jewellery|jewelry|necklaces?|earrings?|bracelets?)\b/, label: "jewellery" },
+    { pattern: /\b(cigarettes?|tobacco|vapes?|e-?cigarettes?)\b/, label: "tobacco or vaping products" },
   ].filter((family) => family.pattern.test(simple));
 
   if (unsupportedProductFamilies.length > 0) {
     const requested = [...new Set(unsupportedProductFamilies.map((family) => family.label))].join(" or ");
     return reply(
-      `We don’t appear to carry ${requested} in the Sia Huat catalogue. We focus on commercial kitchen and F&B supplies—things like cookware, knives, tableware, glassware, barware, buffet equipment and beverage products. What do you need for your kitchen or F&B operation?`,
-      ["Kitchen equipment", "Cookware", "Tableware", "Glassware"],
+      `Sorry, we don’t carry ${requested}. Sia Huat supplies commercial kitchen and F&B products such as cookware, knives, tableware, glassware, barware, buffet and catering equipment, beverage supplies, food-prep machines and chef workwear. What do you need for your kitchen or F&B operation?`,
+      ["Cookware", "Knives", "Tableware", "Food-prep equipment"],
     );
   }
 

@@ -29,19 +29,23 @@ export function referencesSingleDisplayedProduct(message: string, productCount: 
 }
 
 export function confirmsDisplayedProduct(message: string) {
-  const positive = /^(?:yes|yup|yeah|correct|confirm|this is it)\b/i.test(message.trim());
-  const negative = /\b(?:no|not|wrong|another|other|different|instead)\b/i.test(message);
+  const positive = /^(?:yes|yup|yeah|correct|confirm|this is it)\b/i.test(message.trim())
+    || /^(?:是|对|正确|确认|就是这个|就是这件)(?:的|商品)?[。.!\s]*$/u.test(message.trim());
+  const negative = /\b(?:no|not|wrong|another|other|different|instead)\b/i.test(message)
+    || /(?:不是|不对|其他|另外)/u.test(message);
   return positive && !negative;
 }
 
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
   return /\b(?:another|different|other)\s+(?:item|option|product|one)\b/i.test(normalized)
-    || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized);
+    || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized)
+    || /(?:选择|查看|显示|找)(?:另一个|其他|别的)(?:商品|产品|选项)?/u.test(normalized);
 }
 
 export function requestedQuantity(message: string) {
   const quantityText = message.match(/\b(\d+)\s*(?:pieces?|pcs?|units?|sets?)\w*\b/i)?.[1]
+    ?? message.match(/(\d+)\s*(?:个|件|只|套|把|双|份)/u)?.[1]
     ?? message.match(/\b(\d+)\s+(?:of\s+)?(?:this|that|it|these|those|them)\b/i)?.[1]
     ?? message.match(/\b(?:get|want|need|order|buy|take|have|give(?:\s+me)?|qty|quantity(?:\s+of)?)(?:\s+(?:no\.?|number))?\s*(\d+)\b/i)?.[1];
   if (!quantityText) return null;

@@ -15,7 +15,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|tea|shoe|shoes|shows|footwear|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|tea|shoe|shoes|shows|footwear|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -25,6 +25,7 @@ export const productCategories = [
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
   { pattern: /\b(coffee|coffee beans)\b/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
+  { pattern: /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i, label: "water dispenser" },
 ] as const;
 
 export function simplifyMessage(message: string) {
@@ -80,6 +81,25 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     const size = extractExplicitShoeSize(customerMessages);
     const style = extractShoeStyle(customerMessages);
     return ["shoe", style ?? "work", size].filter(Boolean).join(" ");
+  }
+
+  if (customerMessages.some((content) => productCategory(content) === "water dispenser")) {
+    let capacity: string | null = null;
+    let placement: string | null = null;
+    let temperature: string | null = null;
+
+    for (const content of customerMessages) {
+      capacity = content.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?)\b/i)?.[0] ?? capacity;
+      if (/\b(?:free[ -]?standing|floor[ -]?standing)\b/i.test(content)) placement = "freestanding";
+      if (/\bcounter[ -]?top\b/i.test(content)) placement = "countertop";
+      if (/\bhot\b[\s\S]*\bcold\b|\bcold\b[\s\S]*\bhot\b|\bhot\s*[/&+]\s*cold\b/i.test(content)) {
+        temperature = "hot cold";
+      } else if (/\broom[ -]?temperature\b/i.test(content)) {
+        temperature = "room temperature";
+      }
+    }
+
+    return ["water dispenser", capacity, placement, temperature].filter(Boolean).join(" ");
   }
 
   if (productCategory(message)) return message;
