@@ -40,6 +40,12 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const cookedPrataContext = [...userHistory, message].some((content) => /\b(cooked prata|cut cooked|serving prata|prata.*serving)\b/i.test(content));
   const rawPrataContext = [...userHistory, message].some((content) => /\b(raw prata|prata dough|raw dough|divide.*dough)\b/i.test(content));
   const humanHandoffContext = input.history.some((item) => /human|person|team member|sales team|colleague/i.test(item.content) && /contact|speak|handoff|follow.?up|notified|flag|alerted/i.test(item.content));
+  const teaPreparationContext = [...userHistory, message].some((content) => {
+    const normalized = simplifyMessage(content);
+    return /\btea\b/.test(normalized)
+      && (/\bcup of tea\b/.test(normalized)
+        || /\b(?:make|prepare|brew|steep|recipe|instructions?|how to)\b/.test(normalized));
+  });
 
   const asksAboutIdentity = /\b(are you|r u|am i (talking|speaking) (to|with))\b.*\b(ai|bot|robot|human|real person)\b/i.test(message);
   const requestsHuman =
@@ -107,6 +113,13 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\s!?.,]+$/u.test(message)) {
     return reply("Hi 👋 What are you looking for? Send me the product name, brand or a photo.", ["Chef knives", "Cookware", "Glassware"]);
+  }
+
+  if (teaPreparationContext && /\btea\b/.test(simple)) {
+    return reply(
+      "Sorry, I can only help with Sia Huat product and order enquiries. What item are you looking for?",
+      ["Find a product", "Browse products"],
+    );
   }
 
   if ((/[鸡雞]/u.test(message) && /[骨]/u.test(message)) || (/[鸡雞]/u.test(message) && /\bbones?\b/.test(simple))) {

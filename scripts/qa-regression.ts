@@ -52,6 +52,28 @@ await check("CAT-002", "Catalogue scope", "Do you sell PPE and electrical cable?
 await check("CAT-003", "Catalogue scope", "I need a safety helmet", (reply) => noProducts(reply) ?? (reply.message.toLowerCase().includes("ppe") ? null : "Must decline unsupported PPE"));
 await check("CAT-004", "Catalogue scope", "what is the weatherl like today?", (reply) => noProducts(reply) ?? (reply.message.toLowerCase().includes("sia huat") ? null : "Must redirect to Sia Huat scope"));
 await check("CAT-005", "Catalogue scope", "Write me a Python merge sort", (reply) => noProducts(reply) ?? (reply.message.toLowerCase().includes("sia huat") ? null : "Must redirect programming request"));
+const teaScopeCheck = (reply: Reply) => {
+  const words = reply.message.trim().split(/\s+/).length;
+  return noProducts(reply)
+    ?? (/\b(?:recipe|boil|brew|steep|ingredients?|method)\b/i.test(reply.message)
+      ? "Must not provide tea preparation instructions"
+      : null)
+    ?? (words <= 25 ? null : `Tea scope redirect is too long (${words} words)`)
+    ?? (/Sia Huat product and order enquiries/i.test(reply.message)
+      ? null
+      : "Must redirect to Sia Huat product and order enquiries");
+};
+await check("CAT-006", "Catalogue scope", "Hi, can I have a cup of tea?", teaScopeCheck, [], 5_000);
+await check("CAT-007", "Catalogue scope", "I would like an instruction on how to make the tea.", teaScopeCheck, [
+  { role: "user", content: "Hi, can I have a cup of tea?" },
+  { role: "assistant", content: "I can only help with Sia Huat product and order enquiries." },
+], 5_000);
+await check("CAT-008", "Catalogue scope", "I would like a caffeine free tea please. Thank you.", teaScopeCheck, [
+  { role: "user", content: "Hi, can I have a cup of tea?" },
+  { role: "assistant", content: "I can only help with Sia Huat product and order enquiries." },
+  { role: "user", content: "I would like an instruction on how to make the tea." },
+  { role: "assistant", content: "I can only help with Sia Huat product and order enquiries." },
+], 5_000);
 await check("CONV-001", "Conversation", "what is your issue?", (reply) => noProducts(reply) ?? (/no issue|claire/i.test(reply.message) && !/issue with a product|your order|website/i.test(reply.message) ? null : "Must answer as Claire without assuming the customer has a problem"));
 await check("CONV-002", "Conversation", "what are yoaaua here for?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /catalogue|product/i.test(reply.message) ? null : "Typo-tolerant purpose question must explain Claire's role"));
 await check("CONV-003", "Conversation", "why are you here?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /product|catalogue/i.test(reply.message) ? null : "Purpose question must receive a conversational reply"));
@@ -136,6 +158,12 @@ await check("MATCH-009", "Product relevance", "Do you have shows?", (reply) => {
     ?? (/size/i.test(reply.message) && /slip.?on|lace.?up/i.test(reply.message)
       ? null
       : "The common 'shows' typo should start the shoe sales flow without unrelated products");
+});
+await check("MATCH-010", "Product relevance", "I want a stainless steel serving spoon 5 pieces", (reply) => {
+  if ((reply.products?.length ?? 0) === 0) return "Serving-spoon request returned no catalogue products";
+  return reply.products?.every((product) => /spoon/i.test(product.name))
+    ? null
+    : "Serving-spoon request returned an unrelated product";
 });
 await check("MATCH-008", "Human tone", "Got chef knife anot?", (reply) => {
   if (/supabase|database|stock_id|list_price/i.test(reply.message)) return "Customer-facing reply exposed implementation jargon";

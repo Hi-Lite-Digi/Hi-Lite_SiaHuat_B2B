@@ -1,5 +1,6 @@
 export function requestedProductIndex(message: string, productCount: number) {
-  const numbered = message.match(/\b(?:option|choice|item|number|no\.?)\s*#?\s*(\d+)\b/i)?.[1]
+  const numbered = message.trim().match(/^(\d+)$/)?.[1]
+    ?? message.match(/\b(?:option|choice|item|number|no\.?)\s*#?\s*(\d+)\b/i)?.[1]
     ?? message.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:option|choice|item)\b/i)?.[1];
   if (numbered) {
     const index = Number.parseInt(numbered, 10) - 1;

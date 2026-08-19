@@ -226,6 +226,7 @@ function exactCodeCandidates(message: string) {
 
 function isConcreteCatalogueRequest(message: string) {
   return /\b(?:chef|cleaver|boning|paring|bread|yanagi|sashimi|frying|fryng|saucepan|omele+t+e?|grill)\b/i.test(message)
+    || /\b(?:spoon|spoons|serving\s+spoon|ladle|ladles|fork|forks|cutlery)\b/i.test(message)
     || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
     || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)

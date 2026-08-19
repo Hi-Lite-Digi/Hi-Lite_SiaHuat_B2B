@@ -103,6 +103,16 @@ function quantitySuggestions(limit: number | null) {
   return suggestions.length > 0 ? suggestions.map(String) : ["Choose another item"];
 }
 
+function productOptionSuggestions(products: Product[]) {
+  return products.map((_, index) => String(index + 1));
+}
+
+function productOptionPrompt(productCount: number) {
+  const options = Array.from({ length: productCount }, (_, index) => String(index + 1));
+  if (options.length < 2) return "Reply with 1 to choose this item.";
+  return `Reply with ${options.slice(0, -1).join(", ")} or ${options.at(-1)}.`;
+}
+
 function singaporeTime() {
   return new Intl.DateTimeFormat("en-SG", {
     hour: "numeric",
@@ -153,6 +163,7 @@ function VoiceNotePlayer({ note }: { note: VoiceNote }) {
 
 function pdfSafeText(value: string) {
   return value
+    .replace(/\*([^*\n]+)\*/g, "$1")
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"')
     .replace(/[–—]/g, "-")
@@ -620,8 +631,11 @@ export function ChatDemo() {
       return;
     }
 
-    const requestedIndex = requestedProductIndex(clean, lastProducts.length)
-      ?? (referencesSingleDisplayedProduct(clean, lastProducts.length) ? 0 : null);
+    const canSelectDisplayedProduct = stage !== "quantity" && !pendingQuote && !confirmedProduct;
+    const requestedIndex = canSelectDisplayedProduct
+      ? requestedProductIndex(clean, lastProducts.length)
+        ?? (referencesSingleDisplayedProduct(clean, lastProducts.length) ? 0 : null)
+      : null;
     if (!pendingProduct && requestedIndex !== null) {
       const product = lastProducts[requestedIndex];
       if (product) {
@@ -683,7 +697,7 @@ export function ChatDemo() {
           : "Sorry, I couldn’t confirm another available option right now. Tell me what size, style or brand you prefer and I’ll widen the search.",
         products: alternatives,
       }]);
-      setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Browse products"]); return;
+      setSuggestions(alternatives.length > 0 ? productOptionSuggestions(alternatives) : ["Search again", "Browse products"]); return;
     }
 
     if (confirmedProduct?.stock_status === "out_of_stock" && /^(no|no thanks|no thank you|not now)$/i.test(clean)) {
@@ -741,7 +755,8 @@ export function ChatDemo() {
     if (stage === "quantity" && confirmedProduct) {
       syncHandledTurnWithN8n(clean);
       const quantityText = clean.match(/^\d+$/)?.[0] ?? naturalQuantity;
-      const quantity = quantityText ? Number.parseInt(quantityText, 10) : Number.NaN;
+      const quantity = confirmedQuantity
+        ?? (quantityText ? Number.parseInt(quantityText, 10) : Number.NaN);
 
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100_000) {
         setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }, { id: nextId.current++, role: "assistant", text: `Please enter a whole-number quantity in ${confirmedProduct.uom_id}, for example 6 or 12.`, selectedProduct: confirmedProduct }]);
@@ -790,6 +805,7 @@ export function ChatDemo() {
       if (!response.ok) throw new Error(reply.error ?? "The assistant could not answer right now.");
       const products = reply.products ?? [];
       setLastProducts(products);
+      setPendingQuantity(requestedQuantity(clean));
 
       if (reply.selectedProduct) {
         const product = reply.selectedProduct;
@@ -805,7 +821,8 @@ export function ChatDemo() {
         return;
       }
 
-      setStage(reply.stage); setSuggestions(reply.suggestions ?? []);
+      setStage(reply.stage);
+      setSuggestions(products.length > 0 ? productOptionSuggestions(products) : reply.suggestions ?? []);
       setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: reply.message, products }]);
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
@@ -835,7 +852,7 @@ export function ChatDemo() {
       ]);
       setSuggestions(["Choose another item", "No, thank you"]); return;
     }
-    const quantity = requestedQuantity(userText);
+    const quantity = requestedQuantity(userText) ?? pendingQuantity;
     setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
     setMessages((current) => [...current,
       { id: nextId.current++, role: "user", text: userText },
@@ -924,7 +941,7 @@ export function ChatDemo() {
       { id: nextId.current++, role: "user", text: userText },
       { id: nextId.current++, role: "assistant", text: alternatives.length > 0 ? "No problem. Here are the other catalogue options and prices. Which one is closer?" : "No problem. Tell me another name, brand or detail and I’ll search again.", products: alternatives },
     ]);
-    setSuggestions(alternatives.length > 0 ? [] : ["Search again", "Browse products"]);
+    setSuggestions(alternatives.length > 0 ? productOptionSuggestions(alternatives) : ["Search again", "Browse products"]);
   }
 
   function resetConversation(firstMessage: ChatMessage) {
@@ -1030,13 +1047,6 @@ export function ChatDemo() {
           message.imageUrl ? "[Product photo attached]" : "",
           message.voiceNote ? `[Voice note - ${voiceTime(message.voiceNote.durationSeconds)}]\nTranscript: ${message.text}` : message.text,
           productText,
-          message.quoteSummary ? [
-            `Item: ${message.quoteSummary.item}`,
-            `Code: ${message.quoteSummary.code}`,
-            `Price per item (ex GST): $${message.quoteSummary.pricePerItem.toFixed(2)} / ${message.quoteSummary.uom}`,
-            `Quantity: ${message.quoteSummary.quantity}`,
-            `Total (ex GST): $${message.quoteSummary.total.toFixed(2)}`,
-          ].join("\n") : "",
         ].filter(Boolean).join("\n\n"));
         const lines = pdf.splitTextToSize(body, textWidth) as string[];
         const label = `${message.role === "user" ? "You (customer)" : "Claire (assistant)"} - ${timeForMessage(message.id)}`;
@@ -1103,7 +1113,7 @@ export function ChatDemo() {
         {messages.map((message) => <div key={`${sessionId.current}-${message.id}`} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
           {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <WhatsAppText text={message.text} />}
-          {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" onClick={() => chooseProduct(product)} className="block w-full text-left"><p className="break-words font-semibold leading-5">{product.name}</p><p className="mt-2 text-xs text-[#667a74]">code: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">Price: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}</div>}
+          {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product, index) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" onClick={() => chooseProduct(product, String(index + 1))} className="block w-full text-left"><p className="break-words font-semibold leading-5"><span className="mr-1 text-[#176853]">{index + 1}.</span>{product.name}</p><p className="mt-2 text-xs text-[#667a74]">code: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">Price: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}<p className="pt-1 text-xs font-medium text-[#176853]">{productOptionPrompt(message.products.length)}</p></div>}
           {message.selectedProduct && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">code: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">Price: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
            {message.needsConfirmation && pendingProduct?.stock_id === message.selectedProduct?.stock_id && <div className="mt-3 grid grid-cols-2 gap-2"><Button type="button" disabled={checkingStock} onClick={() => void confirmProduct()} className="rounded-full bg-[#176853] hover:bg-[#125441]">{checkingStock ? <LoaderCircle className="size-4 animate-spin" /> : "Yes, this is it"}</Button><Button type="button" disabled={checkingStock} onClick={() => rejectProduct()} variant="outline" className="rounded-full border-[#176853]/25 text-[#176853]">No, show others</Button></div>}
           <MessageTimestamp role={message.role} time={timeForMessage(message.id)} />
