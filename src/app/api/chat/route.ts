@@ -3,6 +3,7 @@ import { chatRequestSchema, type ChatReply, type ChatRequest, type Product } fro
 import { sendChatToN8n } from "@/lib/n8n-client";
 import {
   detectProductUseCase,
+  findChefPantsCatalogue,
   findCatalogueProductByCode,
   findProductForStockCheck,
   matchesRequestedBrand,
@@ -14,6 +15,7 @@ import {
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
 import { catalogueMessageWithContext } from "@/lib/chat-intent";
+import { requestedQuantity } from "@/lib/chat-turn";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
@@ -233,12 +235,15 @@ function productFamily(product: Product) {
     product.description,
   ].filter(Boolean).join(" ").toLowerCase();
   const families = [
+    { name: "chef-pants", pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/ },
+    { name: "coffee-grinder", pattern: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/ },
     { name: "knife", pattern: /\b(?:knife|knives|cleaver|yanagi|yanagiba|slicer)\b/ },
     { name: "utility-box", pattern: /\b(?:utility|storage|dish|bus|cutlery)\s+(?:box|boxes|bin|bins)\b|\bcambox\b/ },
     { name: "plate", pattern: /\b(?:plate|plates|platter|platters)\b/ },
     { name: "food-pan", pattern: /\b(?:melamine\s+)?gn\s+pan\b|\bgastronorm\s+pan\b|\bfood\s+pan\b/ },
     { name: "cookware-set", pattern: /\bcookware\s+set\b|\bset\b.*\b(?:pan|pot|skillet)s?\b/ },
     { name: "pan", pattern: /\b(?:pan|pans|skillet|skillets)\b/ },
+    { name: "stockpot", pattern: /\b(?:stockpot|stockpots|stock\s+pots?)\b/ },
     { name: "pot", pattern: /\b(?:pot|pots|stockpot|saucepot)\b/ },
     { name: "glass", pattern: /\b(?:glass|glasses|glassware|goblet|tumbler)\b/ },
     { name: "bowl", pattern: /\b(?:bowl|bowls)\b/ },
@@ -264,12 +269,224 @@ function isConcreteCatalogueRequest(message: string) {
   return /\b(?:chef|cleaver|boning|paring|bread|yanagi|sashimi|frying|fryng|saucepan|omele+t+e?|grill)\b/i.test(message)
     || /\b(?:spoon|spoons|serving\s+spoon|ladle|ladles|fork|forks|cutlery)\b/i.test(message)
     || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
+    || /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(message)
+    || /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message)
     || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
+    || /\b(?:chef\s+)?(?:pants|trousers)\b/i.test(message)
     || /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i.test(message)
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
     || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i.test(message)
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
     || exactCodeCandidates(message).length > 0;
+}
+
+function isDirectCatalogueAvailabilityRequest(message: string) {
+  return /\b(?:do|does)\s+(?:you|u|sia\s+huat|you\s+guys)\s+(?:sell|have|carry|stock)\b/i.test(message)
+    || /\b(?:can|could)\s+i\s+(?:get|buy|order)\b/i.test(message)
+    || /\b(?:have|got)\s+any\b/i.test(message);
+}
+
+function normalizedApparelSize(value: string | null | undefined) {
+  if (!value) return null;
+  const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (normalized === "XXL") return "2XL";
+  if (normalized === "XXXL") return "3XL";
+  return /^(?:XS|S|M|L|XL|2XL|3XL)$/.test(normalized) ? normalized : null;
+}
+
+function apparelSize(product: Product) {
+  const namedSize = product.name.match(/(?:,|\()\s*(XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\)?\s*$/i)?.[1];
+  return normalizedApparelSize(namedSize ?? product.size);
+}
+
+function requestedApparelSize(message: string) {
+  const labelled = message.match(/\bsize(?:\s*[:#-]\s*|\s+)(XS|S|M|L|XL|XXL|XXXL|2XL|3XL|\d{2,3})\b/i)?.[1]
+    ?? message.match(/\bsize(\d{2,3})\b/i)?.[1];
+  const standalone = message.match(/\b(XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b/i)?.[1];
+  const raw = labelled ?? standalone;
+  if (!raw) return null;
+  return /^\d+$/.test(raw) ? raw : normalizedApparelSize(raw);
+}
+
+function pantsContext(input: ChatRequest) {
+  const contextText = [
+    input.message,
+    ...input.history.map((item) => item.content),
+    input.context?.activeProduct?.name,
+    input.context?.activeProduct?.third_category,
+  ].filter(Boolean).join("\n");
+  return /\b(?:chef\s+)?(?:pants|trousers)\b/i.test(contextText);
+}
+
+function isPantsSizingTurn(input: ChatRequest) {
+  if (!pantsContext(input)) return false;
+  return /\b(?:size|sizes|sizing|other\s+options?|another\s+option|what\s+do\s+you\s+carry|available)\b/i.test(input.message)
+    || Boolean(requestedApparelSize(input.message));
+}
+
+function pantsDisplayOptions(products: Product[]) {
+  const available = products.filter((product) => product.stock_status !== "out_of_stock" && product.available_quantity !== 0);
+  const selected: Product[] = [];
+  const seenSizes = new Set<string>();
+  for (const product of available) {
+    const size = apparelSize(product);
+    if (!size || seenSizes.has(size)) continue;
+    selected.push(product);
+    seenSizes.add(size);
+    if (selected.length >= 3) break;
+  }
+  return selected;
+}
+
+async function groundedPantsSizingReply(input: ChatRequest): Promise<ChatReply | null> {
+  if (!isPantsSizingTurn(input)) return null;
+  const products = await findChefPantsCatalogue();
+  const requestedSize = requestedApparelSize(input.message);
+  const exactMatches = requestedSize && !/^\d+$/.test(requestedSize)
+    ? products.filter((product) => apparelSize(product) === requestedSize)
+    : [];
+  const sizeOrder = ["XS", "S", "M", "L", "XL", "2XL", "3XL"];
+  const availableSizes = [...new Set(
+    products
+      .filter((product) => product.stock_status !== "out_of_stock" && product.available_quantity !== 0)
+      .map(apparelSize)
+      .filter((size): size is string => Boolean(size)),
+  )].sort((left, right) => sizeOrder.indexOf(left) - sizeOrder.indexOf(right));
+
+  if (exactMatches.length > 0) {
+    return {
+      message: `Yes, size ${requestedSize} is listed. Here are the matching chef pants:`,
+      stage: "clarify",
+      products: exactMatches.slice(0, 3),
+      selectedProduct: null,
+      suggestions: [],
+    };
+  }
+
+  const displayProducts = pantsDisplayOptions(products);
+  return {
+    message: requestedSize
+      ? `I couldn't find chef pants listed as size ${requestedSize}. The available catalogue sizes are ${availableSizes.join(", ")}. Which size would you like?`
+      : `For chef pants, the available catalogue sizes are ${availableSizes.join(", ")}. Which size would you like?`,
+    stage: "clarify",
+    products: displayProducts,
+    selectedProduct: null,
+    suggestions: availableSizes.slice(0, 5).map((size) => `Size ${size}`),
+  };
+}
+
+function requestedCatalogueItem(message: string) {
+  const cleaned = message
+    .replace(/\b(?:hi|hello|hey)\b[,.!\s]*/gi, " ")
+    .replace(/\b(?:do|does)\s+(?:you|u|sia\s+huat|you\s+guys)\s+(?:sell|have|carry|stock)\b/gi, " ")
+    .replace(/\b(?:can|could)\s+i\s+(?:get|buy|order)\b/gi, " ")
+    .replace(/\b(?:have|got)\s+any\b/gi, " ")
+    .replace(/\b(?:please|pls|for me|here|in stock|available)\b/gi, " ")
+    .replace(/\b(?:bananna|bannana)\b/gi, "banana")
+    .replace(/[?.!,]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || "that item";
+}
+
+const catalogueTokenStopWords = new Set([
+  "a", "an", "and", "any", "buy", "can", "carry", "could", "do", "does", "for", "get",
+  "guys", "have", "hello", "hey", "hi", "i", "in", "is", "like", "looking", "me", "need",
+  "of", "order", "please", "sell", "selling", "some", "stock", "the", "to", "u", "want", "you",
+]);
+
+function catalogueToken(value: string) {
+  if (value === "knives") return "knife";
+  if (value === "leaves") return "leaf";
+  if (value.endsWith("ies") && value.length > 4) return `${value.slice(0, -3)}y`;
+  if (value.endsWith("s") && value.length > 4 && !value.endsWith("ss")) return value.slice(0, -1);
+  return value;
+}
+
+function catalogueTokens(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/\b(?:bananna|bannana)\b/g, "banana")
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map(catalogueToken)
+    .filter((token) => token.length >= 2 && !catalogueTokenStopWords.has(token) && !/^\d+$/.test(token));
+}
+
+function matchesDirectCatalogueRequest(message: string, product: Product) {
+  if (/\bbanana\s+(?:leaf|leaves|peels?)\b/i.test(message)
+    && !/\bplates?\b/i.test(message)
+    && /\bplates?\b/i.test(product.name)) {
+    return false;
+  }
+  const requestedTokens = [...new Set(catalogueTokens(requestedCatalogueItem(message)))];
+  if (requestedTokens.length === 0) return false;
+  const productTokens = new Set(catalogueTokens([
+    product.name,
+    product.brand,
+    product.brand_id,
+    product.description,
+    product.category,
+    product.subcategory,
+    product.third_category,
+  ].filter(Boolean).join(" ")));
+  return requestedTokens.every((token) => productTokens.has(token));
+}
+
+function relatedUseCase(message: string) {
+  if (/\b(?:compost|composting|food\s+waste|discard(?:ing)?\s+food|dispose\s+of\s+food)\b/i.test(message)) {
+    return {
+      label: "handling food waste",
+      searches: ["food waste caddy", "food waste bin"],
+      productPattern: /\b(?:food\s+waste|waste\s+caddy|waste\s+bin)\b/i,
+    };
+  }
+  return null;
+}
+
+async function unavailableCatalogueReply(message: string): Promise<ChatReply> {
+  const requestedItem = requestedCatalogueItem(message);
+  const useCase = relatedUseCase(message);
+  if (!useCase) {
+    return {
+      message: `Sorry, we don't carry ${requestedItem}. We specialise in commercial kitchen and F&B supplies.`,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: [],
+    };
+  }
+
+  const resultSets = await Promise.all(useCase.searches.map(async (search) => {
+    try {
+      return await searchCatalogue(search, { resultLimit: 20, outputLimit: 10 });
+    } catch (error) {
+      console.error("[api/chat] related use-case search failed", { search, error });
+      return [];
+    }
+  }));
+  const alternatives = [...new Map(
+    resultSets
+      .flat()
+      .filter((product) => useCase.productPattern.test([
+        product.name,
+        product.description,
+        product.category,
+        product.subcategory,
+        product.third_category,
+      ].filter(Boolean).join(" ")))
+      .map((product) => [product.stock_id, product]),
+  ).values()].slice(0, 3);
+
+  return {
+    message: alternatives.length > 0
+      ? `Sorry, we don't carry ${requestedItem}. If you're looking for ${useCase.label}, these are the closest relevant products we do carry:`
+      : `Sorry, we don't carry ${requestedItem}, and I couldn't find a relevant alternative for ${useCase.label}.`,
+    stage: "clarify",
+    products: alternatives,
+    selectedProduct: null,
+    suggestions: [],
+  };
 }
 
 function isWaterDispenserRequest(message: string) {
@@ -291,6 +508,56 @@ function isWaterDispensingProduct(product: Product) {
 function litresFromText(value: string) {
   const match = value.match(/\b(\d+(?:\.\d+)?)\s*(?:l|litres?|liters?)\b/i);
   return match ? Number.parseFloat(match[1]) : null;
+}
+
+function isStockpotRequest(message: string) {
+  return /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message);
+}
+
+function isStockpotProduct(product: Product) {
+  return /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test([
+    product.name,
+    product.description,
+    product.category,
+    product.subcategory,
+    product.third_category,
+  ].filter(Boolean).join(" "));
+}
+
+async function groundedStockpotReply(message: string): Promise<ChatReply> {
+  const stockpots = (await searchCatalogue("stockpot", { resultLimit: 40, outputLimit: 40 }))
+    .filter(isStockpotProduct);
+  const requestedCapacity = litresFromText(message);
+  const exactProducts = requestedCapacity === null
+    ? stockpots
+    : stockpots.filter((product) => litresFromText([
+        product.name,
+        product.description,
+        product.size,
+        product.dimensions,
+      ].filter(Boolean).join(" ")) === requestedCapacity);
+  if (exactProducts.length > 0) {
+    return {
+      message: exactProducts.length === 1 ? "This is the closest match:" : "Here are the matching stockpots:",
+      stage: "clarify",
+      products: exactProducts.slice(0, 3),
+      selectedProduct: null,
+      suggestions: [],
+    };
+  }
+
+  const nearbyProducts = stockpots.slice(0, 3);
+  const capacityLabel = message.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?)\b/i)?.[0]?.replace(/\s+/g, "");
+  const requestedLabel = capacityLabel ? `${capacityLabel} stockpot` : "stockpot";
+  return {
+    message: nearbyProducts.length > 0
+      ? `I couldn't find an exact ${requestedLabel}. These are other stockpot sizes we carry:`
+      : `I couldn't find an exact ${requestedLabel}, and there isn't another stockpot in the catalogue right now.`,
+    stage: "clarify",
+    products: nearbyProducts,
+    selectedProduct: null,
+    suggestions: nearbyProducts.length > 0 ? [] : ["Browse products"],
+  };
 }
 
 function matchesWaterDispenserRequirements(product: Product, message: string) {
@@ -364,7 +631,10 @@ async function groundedWaterDispenserReply(message: string): Promise<ChatReply> 
   };
 }
 
-async function groundedCatalogueReply(message: string): Promise<ChatReply | null> {
+async function groundedCatalogueReply(
+  message: string,
+  options: { authoritative?: boolean } = {},
+): Promise<ChatReply | null> {
   for (const code of exactCodeCandidates(message)) {
     const exactProduct = await findCatalogueProductByCode(code);
     if (exactProduct) {
@@ -379,18 +649,43 @@ async function groundedCatalogueReply(message: string): Promise<ChatReply | null
   }
 
   if (isWaterDispenserRequest(message)) return groundedWaterDispenserReply(message);
+  if (isStockpotRequest(message)) return groundedStockpotReply(message);
 
-  if (!isConcreteCatalogueRequest(message)) return null;
+  if (!isConcreteCatalogueRequest(message) && !options.authoritative) return null;
   const products = await searchCatalogue(message, { resultLimit: 30, outputLimit: 20 });
-  const diverseProducts = diversifyProducts(products);
-  if (diverseProducts.length === 0) return null;
+  const relevantProducts = options.authoritative
+    ? products.filter((product) => matchesDirectCatalogueRequest(message, product))
+    : products;
+  const minimumQuantity = requestedQuantity(message);
+  const quantityEligibleProducts = minimumQuantity === null
+    ? relevantProducts
+    : relevantProducts.filter((product) =>
+        product.stock_status === "in_stock"
+        && typeof product.available_quantity === "number"
+        && product.available_quantity >= minimumQuantity,
+      );
+  const displayProducts = options.authoritative
+    ? quantityEligibleProducts.slice(0, 3)
+    : diversifyProducts(quantityEligibleProducts);
+  if (displayProducts.length === 0) {
+    if (minimumQuantity !== null && relevantProducts.length > 0) {
+      return {
+        message: `I found matching items, but I couldn't confirm one with at least ${minimumQuantity} units available. Would you like a smaller quantity or another option?`,
+        stage: "clarify",
+        products: [],
+        selectedProduct: null,
+        suggestions: ["Try a smaller quantity", "Choose another item"],
+      };
+    }
+    return options.authoritative ? unavailableCatalogueReply(message) : null;
+  }
   const resultType = /\b(?:shoe|shoes|shows|footwear)\b/i.test(message) ? "shoe " : "";
   return {
-    message: diverseProducts.length === 1
+    message: displayProducts.length === 1
       ? "This looks like the closest match:"
-      : `Here are ${diverseProducts.length} different ${resultType}options:`,
+      : `Here are ${displayProducts.length} ${resultType}options:`,
     stage: "clarify",
-    products: diverseProducts,
+    products: displayProducts,
     selectedProduct: null,
     suggestions: [],
   };
@@ -473,6 +768,34 @@ function deduplicateReplyProducts(reply: ChatReply): ChatReply {
   return products.length === reply.products.length ? reply : { ...reply, products };
 }
 
+function meetsRequestedQuantity(product: Product, quantity: number | null) {
+  if (quantity === null) return product.stock_status === "in_stock";
+  return product.stock_status === "in_stock"
+    && typeof product.available_quantity === "number"
+    && product.available_quantity >= quantity;
+}
+
+function enforceRequestedQuantityOptions(reply: ChatReply, message: string): ChatReply {
+  const quantity = requestedQuantity(message);
+  if (quantity === null || isExactCodeRequest(message, reply.products)) return reply;
+
+  const products = reply.products.filter((product) => meetsRequestedQuantity(product, quantity)).slice(0, 3);
+  const selectedProduct = reply.selectedProduct && meetsRequestedQuantity(reply.selectedProduct, quantity)
+    ? reply.selectedProduct
+    : null;
+  const uom = products[0]?.uom_id ?? selectedProduct?.uom_id ?? "units";
+  return {
+    ...reply,
+    message: products.length > 0 || selectedProduct
+      ? `These matching options have at least ${quantity} ${uom} available:`
+      : `I couldn't confirm a matching item with at least ${quantity} ${uom} available. Would you like a smaller quantity?`,
+    stage: "clarify",
+    products,
+    selectedProduct,
+    suggestions: products.length > 0 || selectedProduct ? [] : ["Try a smaller quantity", "Choose another item"],
+  };
+}
+
 function isExactCodeRequest(message: string, products: Product[]) {
   const request = message.toUpperCase();
   return products.some((product) => request.includes(product.stock_id.toUpperCase()));
@@ -545,15 +868,16 @@ async function addDiverseProductOptions(reply: ChatReply, message: string): Prom
   };
 }
 
-async function addAvailableAlternatives(reply: ChatReply): Promise<ChatReply> {
+async function addAvailableAlternatives(reply: ChatReply, message: string): Promise<ChatReply> {
+  const minimumQuantity = requestedQuantity(message);
   const unavailable = reply.selectedProduct?.stock_status === "out_of_stock"
     ? reply.selectedProduct
     : reply.products.find((product) => product.stock_status === "out_of_stock");
   if (!unavailable) return reply;
 
   const existingAvailable = reply.products.filter(
-    (product) => product.stock_id !== unavailable.stock_id
-      && product.stock_status === "in_stock"
+      (product) => product.stock_id !== unavailable.stock_id
+      && meetsRequestedQuantity(product, minimumQuantity)
       && isSameProductType(unavailable, product),
   );
   if (existingAvailable.length >= 3) return reply;
@@ -564,6 +888,7 @@ async function addAvailableAlternatives(reply: ChatReply): Promise<ChatReply> {
       const results = await searchCatalogue(term);
       for (const product of results) {
         if (product.stock_id !== unavailable.stock_id && isSameProductType(unavailable, product)) {
+          if (!meetsRequestedQuantity(product, minimumQuantity)) continue;
           candidates.set(product.stock_id, product);
         }
       }
@@ -582,7 +907,7 @@ async function addAvailableAlternatives(reply: ChatReply): Promise<ChatReply> {
   const availableAlternatives = diversifyProducts(
     enriched.products.filter(
       (product) => product.stock_id !== unavailable.stock_id
-        && product.stock_status === "in_stock"
+        && meetsRequestedQuantity(product, minimumQuantity)
         && isSameProductType(unavailable, product),
     ),
   );
@@ -702,6 +1027,48 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const workflowMessage = prefersChinese(input)
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
     : catalogueMessage;
+  const pantsSizingReply = !input.image
+    ? await groundedPantsSizingReply(input).catch((error) => {
+        console.error("[api/chat] pants sizing lookup failed", { message: input.message, error });
+        return null;
+      })
+    : null;
+  if (pantsSizingReply) {
+    rememberGrounded(pantsSizingReply);
+    const liveReply = await addLiveCatalogueState(pantsSizingReply);
+    return deduplicateReplyProducts(explainUnavailableProducts(liveReply));
+  }
+  const authoritativeGroundedReply = !input.image && isDirectCatalogueAvailabilityRequest(catalogueMessage)
+    ? await groundedCatalogueReply(catalogueMessage, { authoritative: true }).catch((error) => {
+        console.error("[api/chat] authoritative catalogue check failed", { message: catalogueMessage, error });
+        return null;
+      })
+    : null;
+
+  if (authoritativeGroundedReply) {
+    rememberGrounded(authoritativeGroundedReply);
+    if (/^Sorry, we don't carry\b/i.test(authoritativeGroundedReply.message)) {
+      const liveReply = await addLiveCatalogueState(authoritativeGroundedReply);
+      const availableProducts = liveReply.products
+        .filter((product) => product.stock_status !== "out_of_stock")
+        .slice(0, 3);
+      return deduplicateReplyProducts({
+        ...liveReply,
+        message: liveReply.products.length > 0 && availableProducts.length === 0
+          ? `${liveReply.message} The related options I found are currently out of stock.`
+          : liveReply.message,
+        products: availableProducts.length > 0 ? availableProducts : liveReply.products.slice(0, 3),
+      });
+    }
+    const prioritizedReply = await prioritizeRequestedUseCase(authoritativeGroundedReply, catalogueMessage);
+    const liveReply = await addLiveCatalogueState(prioritizedReply);
+    return deduplicateReplyProducts(
+      enforceLiveCheckoutGate(explainUnavailableProducts(
+        enforceRequestedQuantityOptions(liveReply, catalogueMessage),
+      )),
+    );
+  }
+
   const n8nReplyPromise = sendChatToN8n(
     workflowMessage === input.message ? input : { ...input, message: workflowMessage },
   ).catch((error) => {
@@ -735,8 +1102,10 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, catalogueMessage);
   const diverseReply = await addDiverseProductOptions(prioritizedReply, catalogueMessage);
   const liveReply = await addLiveCatalogueState(diverseReply);
+  const alternativesReply = await addAvailableAlternatives(liveReply, catalogueMessage);
+  const quantityReadyReply = enforceRequestedQuantityOptions(alternativesReply, catalogueMessage);
   return deduplicateReplyProducts(
-    enforceLiveCheckoutGate(explainUnavailableProducts(await addAvailableAlternatives(liveReply))),
+    enforceLiveCheckoutGate(explainUnavailableProducts(quantityReadyReply)),
   );
 }
 

@@ -1,8 +1,18 @@
 import "dotenv/config";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
+import type { ConversationContext } from "../src/lib/chat-contract";
 
 type HistoryItem = { role: "user" | "assistant"; content: string };
-type Reply = { message: string; stage: string; products?: Array<{ stock_id: string; name: string; list_price: number; uom_id: string }>; suggestions?: string[] };
+type ReplyProduct = {
+  stock_id: string;
+  name: string;
+  list_price: number;
+  uom_id: string;
+  size?: string | null;
+  stock_status?: "in_stock" | "out_of_stock" | "unknown" | null;
+  available_quantity?: number | null;
+};
+type Reply = { message: string; stage: string; products?: ReplyProduct[]; suggestions?: string[] };
 type Result = { id: string; area: string; prompt: string; pass: boolean; reason: string; durationMs: number; response: string; products: string[] };
 
 const results: Result[] = [];
@@ -15,8 +25,9 @@ async function check(
   validate: (reply: Reply) => string | null,
   history: HistoryItem[] = [],
   maxDurationMs = 30_000,
+  context?: ConversationContext,
 ) {
-  const { status, body, durationMs } = await postChat({ message: prompt, history });
+  const { status, body, durationMs } = await postChat({ message: prompt, history, context });
   const responseFailure = status === 200 ? validate(body) : `HTTP ${status}: ${body.error ?? "unknown error"}`;
   const failure = responseFailure
     ?? (durationMs >= maxDurationMs
@@ -27,6 +38,34 @@ async function check(
     response: body.message ?? "", products: (body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
   return body;
+}
+
+async function checkAlternatives(
+  id: string,
+  stockId: string,
+  quantity: number,
+  validate: (products: ReplyProduct[]) => string | null,
+) {
+  const started = performance.now();
+  const response = await fetch(`${qaBaseUrl}/api/alternatives`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stockId, quantity }),
+  });
+  const body = await response.json() as { products?: ReplyProduct[]; error?: string };
+  const durationMs = Math.round(performance.now() - started);
+  const products = body.products ?? [];
+  const failure = response.ok ? validate(products) : `HTTP ${response.status}: ${body.error ?? "unknown error"}`;
+  results.push({
+    id,
+    area: "Stock-qualified alternatives",
+    prompt: `${stockId}, minimum quantity ${quantity}`,
+    pass: !failure,
+    reason: failure ?? "Matched expected behaviour",
+    durationMs,
+    response: response.ok ? `Returned ${products.length} stock-qualified alternatives` : body.error ?? "",
+    products: products.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
 }
 
 const noProducts = (reply: Reply) => (reply.products?.length ?? 0) === 0 ? null : `Expected no products, received ${reply.products?.length}`;
@@ -89,6 +128,43 @@ const unsupportedCategoryCheck = (category: string) => (reply: Reply) => {
 await check("CAT-009", "Catalogue scope", "Hi do you guys sell condoms?", unsupportedCategoryCheck("condoms"), [], 5_000);
 await check("CAT-010", "Catalogue scope", "Do you carry prescription medication?", unsupportedCategoryCheck("medication"), [], 5_000);
 await check("CAT-011", "Catalogue scope", "Can I buy pet food here?", unsupportedCategoryCheck("pet supplies"), [], 5_000);
+await check("CAT-012", "Catalogue authority", "Do you guys sell bananna peels?", (reply) => {
+  return noProducts(reply)
+    ?? (/don't carry banana peels/i.test(reply.message)
+      ? null
+      : "Must reject banana peels using the Supabase catalogue as authority")
+    ?? ((reply.suggestions?.length ?? 0) === 0
+      ? null
+      : "Nonsense catalogue requests must stop without invented follow-up suggestions")
+    ?? (/compost|animal feed|fresh peels|dried/i.test(reply.message)
+      ? "Must not invent banana-peel variants or use cases"
+      : null);
+}, [], 5_000);
+await check("CAT-013", "Catalogue authority", "Do you sell banana peels for composting?", (reply) => {
+  if (!/don't carry banana peels/i.test(reply.message)) return "Must clearly reject banana peels";
+  if (!/food waste/i.test(reply.message)) return "Must explain the related food-waste use case";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected relevant food-waste equipment alternatives";
+  return products.every((product) => /food waste|waste caddy|waste bin/i.test(product.name))
+    ? null
+    : `Returned an unrelated alternative: ${products.map((product) => product.name).join("; ")}`;
+}, [], 15_000);
+await check("CAT-014", "Catalogue authority", "Do you guys sell moon rocks?", (reply) => {
+  return noProducts(reply)
+    ?? (/don't carry moon rocks/i.test(reply.message)
+      ? null
+      : "Must reject an unrelated category after the Supabase pre-check")
+    ?? ((reply.suggestions?.length ?? 0) === 0
+      ? null
+      : "Unrelated nonsense must stop without suggestions");
+}, [], 5_000);
+await check("CAT-015", "Catalogue authority", "Do you guys sell banana leaf plates?", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected real banana-leaf plates from Supabase";
+  return products.every((product) => /banana leaf/i.test(product.name) && /plate/i.test(product.name))
+    ? null
+    : `Must not widen banana-leaf plates into generic platters: ${products.map((product) => product.name).join("; ")}`;
+}, [], 15_000);
 await check("CONV-001", "Conversation", "what is your issue?", (reply) => noProducts(reply) ?? (/no issue|claire/i.test(reply.message) && !/issue with a product|your order|website/i.test(reply.message) ? null : "Must answer as Claire without assuming the customer has a problem"));
 await check("CONV-002", "Conversation", "what are yoaaua here for?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /catalogue|product/i.test(reply.message) ? null : "Typo-tolerant purpose question must explain Claire's role"));
 await check("CONV-003", "Conversation", "why are you here?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /product|catalogue/i.test(reply.message) ? null : "Purpose question must receive a conversational reply"));
@@ -211,6 +287,75 @@ await check("CTX-006", "Context & alternatives", "freestanding dispenser and I n
   if (/what item or brand/i.test(reply.message)) return "Reply forgot the water-dispenser context and asked for the item again";
   return null;
 }, waterDispenserHistory);
+const pantsHistory: HistoryItem[] = [
+  { role: "user", content: "Hi do you guys sell pants?" },
+  { role: "assistant", content: "Here are 3 options:\nOption 1: Le Chef Chef Pants, Black, L (code: DF110-L)\nOption 2: Le Chef Chef Pants, Black, M (code: DF110-M)\nOption 3: Le Chef Chef Pants, Black, S (code: DF110-S)" },
+];
+await check("CTX-007", "Context & apparel sizing", "Do you have any other options? I am looking for a size 32", (reply) => {
+  if (/don't carry|what product are you asking/i.test(reply.message)) return "Must remember the chef-pants category";
+  if (!/size 32/i.test(reply.message) || !/S, M, L, XL, 2XL, 3XL/i.test(reply.message)) return "Must explain that size 32 is not listed and name the available Supabase sizes";
+  return (reply.products ?? []).every((product) => /pants/i.test(product.name)) ? null : "Sizing reply returned a non-pants product";
+}, pantsHistory, 15_000);
+const pantsSizeHistory: HistoryItem[] = [
+  ...pantsHistory,
+  { role: "user", content: "Do you have any other options? I am looking for a size 32" },
+  { role: "assistant", content: "Size 32 is not listed. The catalogue uses S, M, L, XL, 2XL and 3XL." },
+];
+await check("CTX-008", "Context & apparel sizing", "What sizes do you guys carry?", (reply) => {
+  if (/which product|bowls|knives|trays|pans/i.test(reply.message)) return "Must not ask for the product category again";
+  return /available catalogue sizes/i.test(reply.message) && /S, M, L, XL, 2XL, 3XL/i.test(reply.message)
+    ? null
+    : "Must retain pants context and list available sizes";
+}, pantsSizeHistory, 15_000);
+await check("CTX-009", "Post-confirmation memory", "Do you have the same pants in XL?", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected XL variants from Supabase";
+  return products.every((product) => /pants/i.test(product.name) && /(?:,|\()\s*(?:xL|XL)\)?\s*$/i.test(product.name))
+    ? null
+    : `Expected only XL pants variants, got ${products.map((product) => product.name).join("; ")}`;
+}, [
+  ...pantsHistory,
+  { role: "user", content: "Option 2, 5 pieces" },
+  { role: "assistant", content: "Order summary: 5 PC of Le Chef Chef Pants, Black, M (code: DF110-M)" },
+  { role: "user", content: "Confirm order request" },
+  { role: "assistant", content: "Thank you. Your enquiry for 5 PC of Le Chef Chef Pants, Black, M has been submitted." },
+], 15_000);
+await check("CTX-010", "Structured session memory", "What sizes does this come in?", (reply) => {
+  if (/which product/i.test(reply.message)) return "Must use the confirmed active product from structured session context";
+  return /available catalogue sizes/i.test(reply.message) && /S, M, L, XL, 2XL, 3XL/i.test(reply.message)
+    ? null
+    : "Must list the pants sizes from Supabase after order confirmation";
+}, [], 15_000, {
+  stage: "submitted",
+  quantity: 5,
+  activeProduct: {
+    stock_id: "DF110-M",
+    name: "Le Chef Chef Pants, Black, M",
+    status: "Active",
+    list_price: 46.92,
+    uom_id: "PC",
+    source_url: "https://store.siahuat.com/product/8143429042",
+    size: "M",
+    stock_status: "in_stock",
+    available_quantity: 1,
+    third_category: "Chef pants",
+  },
+});
+await check("CTX-011", "Context & product refinement", "no preference", (reply) => {
+  const products = reply.products ?? [];
+  if (/missed that|what are you looking for/i.test(reply.message)) return "Must retain the 20L stockpot context";
+  if (products.length === 0) return "Expected relevant stockpot options after no-preference refinement";
+  return products.every((product) => /stock\s*pot|stockpot/i.test(product.name))
+    ? null
+    : `Returned a non-stockpot product: ${products.map((product) => product.name).join("; ")}`;
+}, [
+  { role: "user", content: "Hi do you guys sell pots?" },
+  { role: "assistant", content: "Which type of pot are you after?" },
+  { role: "user", content: "stockpots" },
+  { role: "assistant", content: "What capacity do you need?" },
+  { role: "user", content: "I want 20L" },
+  { role: "assistant", content: "Do you prefer stainless steel, aluminium, or no preference?" },
+], 15_000);
 const blackPlateHistory: HistoryItem[] = [
   { role: "user", content: "I need a black plate" },
   { role: "assistant", content: "Do you need dinner plates or side plates?" },
@@ -238,6 +383,25 @@ const coffeeHistory: HistoryItem[] = [
 ];
 await check("COFFEE-002", "Clarification", "yes pls", (reply) => noProducts(reply) ?? (/coffee|kopi/i.test(reply.message) && /instant|ground|bottled|ready/i.test(reply.message) ? null : "Yes does not answer the format; repeat coffee choices"), coffeeHistory);
 await check("COFFEE-003", "Clarification", "bottled, make it fast", (reply) => (reply.products ?? []).every((product) => /coffee|kopi|drink|beverage/i.test(product.name)) && !((reply.products ?? []).some((product) => /egg|empty bottle/i.test(product.name))) ? null : "Bottled coffee must not return generic bottles or egg makers", coffeeHistory);
+await check("STOCK-001", "Stock-qualified catalogue options", "I need 10 coffee grinders", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected at least one coffee grinder that can supply 10 units";
+  if (!products.every((product) => /grinder/i.test(product.name))) {
+    return `Returned an unrelated product: ${products.map((product) => product.name).join("; ")}`;
+  }
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 10)
+    ? null
+    : "Every displayed grinder must have live-confirmed stock of at least 10";
+}, [], 20_000);
+await checkAlternatives("STOCK-002", "960.99", 10, (products) => {
+  if (products.length === 0) return "Expected relevant alternatives for the low-stock coffee grinder";
+  if (!products.every((product) => /grinder/i.test(product.name))) {
+    return `Alternative lookup returned an unrelated product: ${products.map((product) => product.name).join("; ")}`;
+  }
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 10)
+    ? null
+    : "Alternative lookup returned a grinder below the requested stock quantity";
+});
 
 await check("LANG-001", "Language", "👋", (reply) => avoidsSkuPromotion(reply) ?? (/product|catalogue/i.test(reply.message) ? null : "Emoji-only input should explain purpose"));
 await check("LANG-002", "Language", "我要一把切鸡骨头的刀", (reply) => noProducts(reply) ?? /刀|chicken|bone|cleaver|鸡/i.test(reply.message) ? null : "Chinese request must be understood or safely clarified");

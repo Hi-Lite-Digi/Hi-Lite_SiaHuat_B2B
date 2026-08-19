@@ -5,6 +5,7 @@ import type {
   ChatRequest,
   HistoryItem,
   ImageAttachment,
+  ConversationContext,
 } from "../src/lib/chat-contract";
 
 export const qaBaseUrl = process.env.QA_BASE_URL ?? "http://localhost:3001";
@@ -14,6 +15,7 @@ type ChatOptions = {
   history?: HistoryItem[];
   image?: ImageAttachment;
   sessionId?: string;
+  context?: ConversationContext;
 };
 
 export async function postChat({
@@ -21,8 +23,9 @@ export async function postChat({
   history = [],
   image,
   sessionId = `qa-${crypto.randomUUID()}`,
+  context,
 }: ChatOptions) {
-  const request: ChatRequest = { sessionId, message, history, image };
+  const request: ChatRequest = { sessionId, message, history, image, context };
   const started = performance.now();
   const response = await fetch(`${qaBaseUrl}/api/chat`, {
     method: "POST",

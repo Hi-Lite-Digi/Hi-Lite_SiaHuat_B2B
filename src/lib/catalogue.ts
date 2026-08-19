@@ -100,15 +100,19 @@ export function normalizeCatalogueQuery(message: string) {
     .replace(/\b(?:knfie|kinife|knive)\b/gi, "knife")
     .replace(/\b(?:fryng|fryin)\b/gi, "frying")
     .replace(/\bshows\b/gi, "shoes")
+    .replace(/\b(?:bananna|bannana)\b/gi, "banana")
     .replace(/\buk\s*(?:size\s*)?(\d{1,2}(?:\.5)?)\b/gi, (match, size: string) => ukToEuro[size] ? `Euro Size ${ukToEuro[size]}` : match)
     .replace(/\banot\b/gi, " ");
   const cleaned = corrected
-    .replace(/\b(hey|hi|hello|sure|wait|tell me|i am|i'm|im|i|we are|we're|can you|could you|please|do you|do u|would you|you|your)\b/gi, " ")
+    .replace(/\b(hey|hi|hello|sure|wait|tell me|i am|i'm|im|i|we are|we're|can you|could you|please|do you|do u|does sia huat|would you|you guys|sia huat|guys|you|your|u)\b/gi, " ")
     .replace(/\b(need|want|looking for|look for|search for|search|find me|find|show me|show|have|sell|selling|carry|stock|price|pricing|cost|how much|add|also|while|there|too|a|an|some|the|and|or|if)\b/gi, " ")
     .replace(/[^a-z0-9'\-/\s]/gi, " ")
+    .replace(/\b(?:no\s+preference|any\s+material)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/\bknives\b/gi, "knife");
+    .replace(/\bknives\b/gi, "knife")
+    .replace(/\bgrinders\b/gi, "grinder")
+    .replace(/^\d+\s+(?=[a-z])/i, "");
 
   if (/\bpan\b/i.test(cleaned)) {
     const kind = detectProductUseCase(cleaned)?.search ?? cleaned.match(/\b(non[ -]?stick|frying|sauce|grill)\b/i)?.[0] ?? "";
@@ -137,11 +141,14 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\b(?:cup|cups|mug|mugs)\b/, candidate: /\b(?:cup|cups|mug|mugs)\b/ },
     { requested: /\bwine\b.*\bglass/, candidate: /\bwine glass\b/ },
     { requested: /\bcoffee\b.*\bbeans?\b/, candidate: /\bcoffee beans\b/ },
+    { requested: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/, candidate: /\bgrinders?\b/ },
+    { requested: /\b(?:stockpot|stockpots|stock\s+pots?)\b/, candidate: /\b(?:stockpot|stockpots|stock\s+pots?)\b/ },
     { requested: /\bhelmets?\b/, candidate: /\bhelmets?\b/ },
     { requested: /\b(?:electrical|electric|power)\s+(?:cable|wire)s?\b/, candidate: /\b(?:cable|wire)s?\b/ },
     { requested: /\bsafety\s+vests?\b/, candidate: /\bvests?\b/ },
     { requested: /\bsafety\s+boots?\b/, candidate: /\bboots?\b/ },
     { requested: /\b(?:shoe|shoes|footwear)\b/, candidate: /\b(?:shoe|shoes|footwear)\b/ },
+    { requested: /\b(?:pants|trousers)\b/, candidate: /\b(?:pants|trousers)\b/ },
   ];
 
   if (requiredCategories.some((rule) => rule.requested.test(requested) && !rule.candidate.test(candidate))) return false;
@@ -159,6 +166,13 @@ function matchesExplicitConstraints(query: string, product: Product) {
       ? new RegExp(`(?:ø|diameter\\s*)?${size}(?:\\s*cm|(?=\\s*[x×]))`, "i")
       : new RegExp(`(?:ø|diameter\\s*)?${size}(?:\\s*mm|(?=\\s*[x×]))`, "i");
     if (!metricPattern.test(candidate)) return false;
+  }
+
+  const requestedCapacity = requested.match(/\b(\d+(?:\.\d+)?)\s*(?:l|litres?|liters?)\b/);
+  if (requestedCapacity) {
+    const capacity = requestedCapacity[1];
+    const capacityPattern = new RegExp(`\\b${capacity}(?:\\.0+)?\\s*(?:l|litres?|liters?)\\b`, "i");
+    if (!capacityPattern.test(candidate)) return false;
   }
 
   const requestedInchSize = requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
@@ -238,6 +252,27 @@ export async function findProductForStockCheck(stockId: string) {
   return catalogueProductSchema.array().parse(await response.json())[0] ?? null;
 }
 
+export async function findChefPantsCatalogue() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
+
+  const query = new URLSearchParams({
+    select: productSelect,
+    or: "(name.ilike.*pants*,third_category.ilike.*pants*)",
+    status: "in.(Active,New)",
+    order: "name.asc",
+    limit: "100",
+  });
+  const response = await fetch(`${url}/rest/v1/products?${query}`, {
+    headers: { apikey: key, authorization: `Bearer ${key}` },
+    cache: "no-store",
+    signal: AbortSignal.timeout(4_000),
+  });
+  if (!response.ok) throw new Error(`SUPABASE_CHEF_PANTS_${response.status}`);
+  return catalogueProductSchema.array().parse(await response.json());
+}
+
 function productVariantFamily(name: string) {
   return name
     .replace(/,?\s*(?:euro|us|uk)\s+size\s+\d+(?:\.5)?/gi, "")
@@ -250,7 +285,9 @@ function productVariantFamily(name: string) {
 function broadProductTypePattern(product: Product) {
   const text = searchableProductText(product);
   const patterns = [
+    /\b(?:chef\s+)?(?:pants|trousers)\b/i,
     /\b(?:shoe|shoes|footwear|boot|boots)\b/i,
+    /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i,
     /\b(?:fry|frying|omelette|crepe|grill|sauce)?\s*pan\b/i,
     /\b(?:knife|knives|cleaver)\b/i,
     /\b(?:plate|plates|platter|platters)\b/i,
@@ -263,7 +300,22 @@ function broadProductTypePattern(product: Product) {
   return patterns.find((pattern) => pattern.test(text)) ?? null;
 }
 
-export async function findAvailableCatalogueAlternatives(stockId: string, limit = 3) {
+function broadProductTypeSearch(product: Product) {
+  const text = searchableProductText(product);
+  if (/\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(text)) return "coffee grinder";
+  if (/\b(?:chef\s+)?(?:pants|trousers)\b/i.test(text)) return "chef pants";
+  if (/\b(?:shoe|shoes|footwear|boot|boots)\b/i.test(text)) return "work shoes";
+  if (/\b(?:fry|frying|omelette|crepe|grill|sauce)?\s*pan\b/i.test(text)) return "pan";
+  if (/\b(?:knife|knives|cleaver)\b/i.test(text)) return "knife";
+  if (/\b(?:pot|pots|stockpot|stockpots)\b/i.test(text)) return "pot";
+  return null;
+}
+
+export async function findAvailableCatalogueAlternatives(
+  stockId: string,
+  limit = 3,
+  minimumQuantity = 1,
+) {
   const source = await findProductForStockCheck(stockId);
   if (!source) return [];
 
@@ -285,6 +337,7 @@ export async function findAvailableCatalogueAlternatives(stockId: string, limit 
       [field]: `eq.${value}`,
       status: "in.(Active,New)",
       stock_status: "eq.in_stock",
+      available_quantity: `gte.${minimumQuantity}`,
       limit: "80",
     });
     const response = await fetch(`${url}/rest/v1/products?${query}`, {
@@ -294,7 +347,24 @@ export async function findAvailableCatalogueAlternatives(stockId: string, limit 
     });
     if (!response.ok) throw new Error(`SUPABASE_ALTERNATIVES_${response.status}`);
     for (const product of catalogueProductSchema.array().parse(await response.json())) {
-      if (product.stock_id === source.stock_id || product.available_quantity === 0) continue;
+      if (product.stock_id === source.stock_id
+        || product.available_quantity === null
+        || product.available_quantity === undefined
+        || product.available_quantity < minimumQuantity) continue;
+      if (typePattern && !typePattern.test(searchableProductText(product))) continue;
+      candidates.set(product.stock_id, product);
+    }
+  }
+
+  const broadSearch = broadProductTypeSearch(source);
+  if (broadSearch && candidates.size < limit) {
+    const broadMatches = await searchCatalogue(broadSearch, { resultLimit: 80, outputLimit: 80 });
+    for (const product of broadMatches) {
+      if (product.stock_id === source.stock_id
+        || product.stock_status !== "in_stock"
+        || product.available_quantity === null
+        || product.available_quantity === undefined
+        || product.available_quantity < minimumQuantity) continue;
       if (typePattern && !typePattern.test(searchableProductText(product))) continue;
       candidates.set(product.stock_id, product);
     }

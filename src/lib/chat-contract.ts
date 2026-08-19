@@ -45,10 +45,17 @@ export const imageAttachmentSchema = z.object({
   name: z.string().trim().min(1).max(160),
 });
 
+export const conversationContextSchema = z.object({
+  stage: chatStageSchema,
+  activeProduct: productSchema.nullable().default(null),
+  quantity: z.coerce.number().int().positive().max(100_000).nullable().default(null),
+}).optional();
+
 export const chatRequestSchema = z.object({
   sessionId: z.string().trim().min(8).max(120),
   message: z.string().trim().min(1).max(500),
   history: z.array(historyItemSchema).max(30).default([]),
+  context: conversationContextSchema,
   image: imageAttachmentSchema.optional(),
   brain: z.literal("n8n").optional(),
 });
@@ -65,5 +72,6 @@ export type ChatStage = z.infer<typeof chatStageSchema>;
 export type Product = z.infer<typeof productSchema>;
 export type HistoryItem = z.infer<typeof historyItemSchema>;
 export type ImageAttachment = z.infer<typeof imageAttachmentSchema>;
+export type ConversationContext = z.infer<typeof conversationContextSchema>;
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 export type ChatReply = z.infer<typeof chatReplySchema>;

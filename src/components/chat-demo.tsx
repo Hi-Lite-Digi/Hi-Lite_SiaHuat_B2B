@@ -284,7 +284,7 @@ export function ChatDemo() {
   }
 
   function brainHistory() {
-    return messagesRef.current.slice(1).map((message) => ({
+    return messagesRef.current.slice(1).slice(-30).map((message) => ({
       role: message.role,
       content: contentForBrain(message),
     }));
@@ -607,7 +607,7 @@ export function ChatDemo() {
           : `The live Sia Huat Add to cart check shows only ${limit} ${product.uom_id} available, so I can’t prepare ${quantity}.\n\nWould you like ${limit} ${product.uom_id}, or would you prefer another option instead?`,
       },
     ]);
-    setQuery(""); setStage(limit > 0 ? "quantity" : "clarify");
+    setPendingQuantity(quantity); setQuery(""); setStage(limit > 0 ? "quantity" : "clarify");
     setSuggestions(limit > 0
       ? [String(limit), conversationLanguage === "zh" ? "选择其他商品" : "Choose another item"]
       : conversationLanguage === "zh" ? ["选择其他商品", "不用了，谢谢"] : ["Choose another item", "No, thank you"]);
@@ -620,7 +620,7 @@ export function ChatDemo() {
         ? `${product.name} 目前只有 ${limit} ${product.uom_id}，但您需要 ${quantity} ${product.uom_id}。\n\n您要现有的 ${limit} ${product.uom_id}，还是查看其他选择？`
         : `Only ${limit} ${product.uom_id} of ${product.name} ${limit === 1 ? "is" : "are"} currently available, but you requested ${quantity} ${product.uom_id}.\n\nWould you like all ${limit} ${product.uom_id}, or would you prefer another option?`,
     }]);
-    setPendingQuantity(null); setStage(limit > 0 ? "quantity" : "clarify");
+    setPendingQuantity(quantity); setStage(limit > 0 ? "quantity" : "clarify");
     setSuggestions(limit > 0
       ? [String(limit), conversationLanguage === "zh" ? "选择其他商品" : "Choose another item"]
       : conversationLanguage === "zh" ? ["选择其他商品", "不用了，谢谢"] : ["Choose another item", "No, thank you"]);
@@ -688,7 +688,7 @@ export function ChatDemo() {
       return;
     }
 
-    const canSelectDisplayedProduct = stage !== "quantity" && !pendingQuote && !confirmedProduct;
+    const canSelectDisplayedProduct = stage !== "quantity" && !pendingQuote && !pendingProduct;
     const requestedIndex = canSelectDisplayedProduct
       ? requestedProductIndex(clean, lastProducts.length)
         ?? (referencesSingleDisplayedProduct(clean, lastProducts.length) ? 0 : null)
@@ -714,10 +714,16 @@ export function ChatDemo() {
       syncHandledTurnWithN8n(clean);
       const currentProduct = confirmedProduct ?? pendingProduct;
       const excludedStockId = currentProduct?.stock_id;
-      let alternatives = lastProducts.filter(
-        (product) => product.stock_id !== excludedStockId && product.stock_status === "in_stock",
-      );
-      setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify");
+      const minimumQuantity = pendingQuantity;
+      let alternatives = currentProduct
+        ? []
+        : lastProducts.filter(
+            (product) => product.stock_id !== excludedStockId
+              && product.stock_status === "in_stock"
+              && (minimumQuantity === null
+                || (typeof product.available_quantity === "number" && product.available_quantity >= minimumQuantity)),
+          );
+      setPendingProduct(null); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify");
       setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }]);
       setQuery("");
 
@@ -728,7 +734,10 @@ export function ChatDemo() {
           const response = await fetch("/api/alternatives", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ stockId: currentProduct.stock_id }),
+            body: JSON.stringify({
+              stockId: currentProduct.stock_id,
+              ...(minimumQuantity !== null ? { quantity: minimumQuantity } : {}),
+            }),
             signal: AbortSignal.timeout(12_000),
           });
           const result = await response.json() as { products?: Product[]; error?: string };
@@ -747,18 +756,31 @@ export function ChatDemo() {
       }
 
       if (alternatives.length > 0) setLastProducts(alternatives);
+      setPendingQuantity(minimumQuantity);
       setMessages((current) => [...current, {
         id: nextId.current++, role: "assistant",
         text: replyLanguage === "zh"
           ? alternatives.length > 0
-            ? `好的，这里有 ${alternatives.length} 个有货的替代选择。您想要哪一个？`
-            : "抱歉，目前无法确认其他有货的选择。请告诉我您偏好的尺寸、款式或品牌，我会扩大查询范围。"
+            ? minimumQuantity !== null
+              ? `好的，这里有 ${alternatives.length} 个相关选择，每个都有至少 ${minimumQuantity} ${alternatives[0]?.uom_id ?? "件"} 库存。您想要哪一个？`
+              : `好的，这里有 ${alternatives.length} 个有货的替代选择。您想要哪一个？`
+            : minimumQuantity !== null
+              ? `抱歉，我找不到同类商品能满足 ${minimumQuantity} 件的实时库存。您要减少数量吗？`
+              : "抱歉，目前无法确认其他有货的选择。请告诉我您偏好的尺寸、款式或品牌，我会扩大查询范围。"
           : alternatives.length > 0
-            ? `Sure—here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} available alternative${alternatives.length === 1 ? "" : "s"}. Which one would you like?`
-            : "Sorry, I couldn’t confirm another available option right now. Tell me what size, style or brand you prefer and I’ll widen the search.",
+            ? minimumQuantity !== null
+              ? `Here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} relevant option${alternatives.length === 1 ? "" : "s"} with at least ${minimumQuantity} ${alternatives[0]?.uom_id ?? "units"} available. Which one would you like?`
+              : `Sure—here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} available alternative${alternatives.length === 1 ? "" : "s"}. Which one would you like?`
+            : minimumQuantity !== null
+              ? `Sorry, I couldn’t confirm another matching item with at least ${minimumQuantity} units available. Would you like a smaller quantity?`
+              : "Sorry, I couldn’t confirm another available option right now. Tell me what size, style or brand you prefer and I’ll widen the search.",
         products: alternatives,
       }]);
-      setSuggestions(alternatives.length > 0 ? productOptionSuggestions(alternatives) : replyLanguage === "zh" ? ["重新查询", "浏览商品"] : ["Search again", "Browse products"]); return;
+      setSuggestions(alternatives.length > 0
+        ? productOptionSuggestions(alternatives)
+        : minimumQuantity !== null
+          ? replyLanguage === "zh" ? ["减少数量", "重新查询"] : ["Try a smaller quantity", "Search again"]
+          : replyLanguage === "zh" ? ["重新查询", "浏览商品"] : ["Search again", "Browse products"]); return;
     }
 
     if (confirmedProduct?.stock_status === "out_of_stock" && /^(no|no thanks|no thank you|not now)$/i.test(clean)) {
@@ -857,6 +879,11 @@ export function ChatDemo() {
           sessionId: requestSession,
           message: clean,
           history,
+          context: {
+            stage,
+            activeProduct: confirmedProduct ?? pendingProduct,
+            quantity: pendingQuantity,
+          },
           ...(attachedImage ? { image: attachedImage } : {}),
         }),
         signal: AbortSignal.timeout(28_000),

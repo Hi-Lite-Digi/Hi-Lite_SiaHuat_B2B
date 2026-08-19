@@ -15,16 +15,20 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|tea|shoe|shoes|shows|footwear|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b/i, label: "knife" },
   { pattern: /\b(pan|pans|skillet)\b/i, label: "pan" },
+  { pattern: /\b(stockpot|stockpots|stock\s+pot|stock\s+pots)\b/i, label: "stockpot" },
+  { pattern: /\b(pot|pots)\b/i, label: "pot" },
   { pattern: /\b(glass|glassware|tumbler)\b/i, label: "glassware" },
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
-  { pattern: /\b(coffee|coffee beans)\b/i, label: "coffee product" },
+  { pattern: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i, label: "coffee grinder" },
+  { pattern: /\bcoffee(?:\s+beans?)?\b(?!\s*grinders?)/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
+  { pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/i, label: "chef pants" },
   { pattern: /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i, label: "water dispenser" },
 ] as const;
 
@@ -77,6 +81,9 @@ export function extractShoeStyle(messages: string[]) {
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
   const customerMessages = [...userHistory, message];
+  if (customerMessages.some((content) => productCategory(content) === "chef pants")) {
+    return /\b(?:pants|trousers)\b/i.test(message) ? message : `chef pants ${message}`;
+  }
   if (customerMessages.some((content) => productCategory(content) === "shoe")) {
     const size = extractExplicitShoeSize(customerMessages);
     const style = extractShoeStyle(customerMessages);
@@ -102,9 +109,25 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return ["water dispenser", capacity, placement, temperature].filter(Boolean).join(" ");
   }
 
+  if (customerMessages.some((content) => productCategory(content) === "coffee grinder")) {
+    const quantity = customerMessages
+      .map((content) => content.match(/\b(\d+)\s*(?:pieces?|pcs?|units?)?\s*(?:coffee\s+)?grinders?\b/i)?.[1])
+      .filter(Boolean)
+      .at(-1);
+    return ["coffee grinder", quantity ? `${quantity} pieces` : null, message].filter(Boolean).join(" ");
+  }
+
+  if (customerMessages.some((content) => /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(content))) {
+    const capacity = customerMessages
+      .map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?)\b/i)?.[0])
+      .filter(Boolean)
+      .at(-1);
+    return ["stockpot", capacity, message].filter(Boolean).join(" ");
+  }
+
   if (productCategory(message)) return message;
 
-  const isProductRefinement = /\b(?:red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|small|medium|large|cheap|cheapest|budget)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|pieces?|pcs?)?\b/i.test(message);
+  const isProductRefinement = /\b(?:no\s+preference|any\s+material|red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|small|medium|large|cheap|cheapest|budget)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|pieces?|pcs?)?\b/i.test(message);
   if (!isProductRefinement) return message;
 
   const rememberedCategory = rememberedActiveCategories(userHistory).at(-1);
