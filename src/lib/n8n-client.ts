@@ -12,6 +12,7 @@ async function postWorkflow(
   workflowKey: string,
   workflowInput: ChatRequest,
   timeoutMs: number,
+  externalSignal?: AbortSignal,
 ) {
   return fetch(webhookUrl, {
     method: "POST",
@@ -21,11 +22,13 @@ async function postWorkflow(
     },
     body: JSON.stringify(workflowInput),
     cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: externalSignal
+      ? AbortSignal.any([AbortSignal.timeout(timeoutMs), externalSignal])
+      : AbortSignal.timeout(timeoutMs),
   });
 }
 
-export async function sendChatToN8n(input: ChatRequest) {
+export async function sendChatToN8n(input: ChatRequest, signal?: AbortSignal) {
   const webhookUrl = process.env.N8N_WEBHOOK_URL;
   const workflowKey = process.env.N8N_WORKFLOW_KEY;
 
@@ -58,7 +61,7 @@ export async function sendChatToN8n(input: ChatRequest) {
               message: `${workflowInput.message} Please search the catalogue now and return grounded possible matches. Do not ask another generic intended-use question.`,
             }
           : workflowInput;
-      const response = await postWorkflow(webhookUrl, workflowKey, attemptInput, timeoutMs);
+      const response = await postWorkflow(webhookUrl, workflowKey, attemptInput, timeoutMs, signal);
 
       if (!response.ok) {
         throw new Error(`N8N_HTTP_${response.status}: ${await response.text()}`);

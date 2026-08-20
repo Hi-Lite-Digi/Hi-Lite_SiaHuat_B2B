@@ -1311,9 +1311,12 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     );
   }
 
+  const n8nAbortController = new AbortController();
   const n8nReplyPromise = sendChatToN8n(
     workflowMessage === input.message ? input : { ...input, message: workflowMessage },
+    n8nAbortController.signal,
   ).catch((error) => {
+    if (n8nAbortController.signal.aborted) return null;
     n8nError = error;
     console.error("[api/chat] n8n reply failed", error);
     return null;
@@ -1325,7 +1328,13 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
         return null;
       });
 
-  if (groundedReply) rememberGrounded(groundedReply);
+  if (groundedReply) {
+    rememberGrounded(groundedReply);
+    // Catalogue-grounded turns do not need to keep an unused workflow fetch
+    // alive after the customer response is ready. Cancelling it prevents
+    // serverless capacity from being occupied until the n8n timeout expires.
+    n8nAbortController.abort("CATALOGUE_REPLY_READY");
+  }
   const n8nReply = groundedReply ? null : await n8nReplyPromise;
   if (!groundedReply && !n8nReply) {
     if (n8nError instanceof Error && n8nError.message === "N8N_NOT_CONFIGURED") throw n8nError;
