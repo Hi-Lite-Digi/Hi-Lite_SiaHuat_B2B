@@ -1,7 +1,16 @@
 import "dotenv/config";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 import type { ConversationContext } from "../src/lib/chat-contract";
-import { asksForRecommendation, confirmsDisplayedProduct, requestsAnotherOption } from "../src/lib/chat-turn";
+import {
+  asksForRecommendation,
+  confirmsDisplayedProduct,
+  confirmsOrderRequest,
+  referencesSingleDisplayedProduct,
+  requestedQuantity,
+  requestsAdditionalProduct,
+  requestsAnotherOption,
+  splitMultipleProductRequest,
+} from "../src/lib/chat-turn";
 
 type HistoryItem = { role: "user" | "assistant"; content: string };
 type ReplyProduct = {
@@ -164,6 +173,77 @@ for (const [id, prompt] of [
     prompt,
     pass,
     reason: pass ? "Matched expected behaviour" : "Natural request for different options was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt] of [
+  ["INTENT-ORDER-CONFIRM-001", "ok confirm"],
+  ["INTENT-ORDER-CONFIRM-002", "okay, confirm the order"],
+  ["INTENT-ORDER-CONFIRM-003", "确认订单询价"],
+] as const) {
+  const pass = confirmsOrderRequest(prompt);
+  results.push({
+    id,
+    area: "Natural order confirmation",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Natural confirmation wording was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt, expected] of [
+  ["INTENT-ADD-001", "I want a wok hei too", true],
+  ["INTENT-ADD-002", "Add the 10 black dinner plates too", true],
+  ["INTENT-ADD-003", "give me 5 of this", false],
+] as const) {
+  const pass = requestsAdditionalProduct(prompt) === expected;
+  results.push({
+    id,
+    area: "Multi-item order intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Expected additional-product intent to be ${expected}`,
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+{
+  const prompt = "I need 5 chef knives and 10 black dinner plates for my restaurant";
+  const clauses = splitMultipleProductRequest(prompt);
+  const pass = clauses.length === 2
+    && clauses[0].includes("5 chef knives")
+    && clauses[1].includes("10 black dinner plates");
+  results.push({
+    id: "INTENT-MULTI-SPLIT-001",
+    area: "Multi-item request memory",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Expected two retained product requests, received: ${clauses.join(" | ")}`,
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt] of [
+  ["INTENT-DISPLAYED-QTY-001", "okie give me 5 of this"],
+  ["INTENT-DISPLAYED-QTY-002", "ok i will take 5 of that"],
+] as const) {
+  const pass = referencesSingleDisplayedProduct(prompt, 1) && requestedQuantity(prompt) === 5;
+  results.push({
+    id,
+    area: "Selected-item quantity memory",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Quantity follow-up did not retain the displayed product and quantity",
     durationMs: 0,
     response: "",
     products: [],

@@ -298,6 +298,7 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
     || /\b(?:chef\s+)?(?:pants|trousers)\b/i.test(message)
     || /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i.test(message)
+    || /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/i.test(message)
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
     || /\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|in)\b/i.test(message)
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
@@ -326,8 +327,13 @@ function matchesExplicitProductCategory(message: string, product: Product) {
   if (/\b(?:strainer|skimmer|colander)s?\b/i.test(message)) return /\b(?:strainer|skimmer|colander)s?\b/i.test(productText);
   if (/\b(?:cutlery|flatware)\s+sets?\b/i.test(message)) return productFamily(product) === "cutlery-set";
   if (/\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)) {
-    return /\b(?:plate|plates|platter|platters)\b/i.test(productText)
+    const isPlate = /\b(?:plate|plates|platter|platters)\b/i.test(productText)
       && !/\b(?:induction\s+plate|heat\s+tamer|machine\s+plate|plate\s+(?:holder|stand|rack|cover)|(?:holder|stand|rack)\s+(?:for\s+)?(?:[\w/-]+\s+){0,4}plates?|plate\s+accessor(?:y|ies))\b/i.test(productText);
+    if (!isPlate) return false;
+    if (/\bdinner\s+plates?\b/i.test(message)
+      && /\b(?:cast\s+iron|octopus|ball\s+plate|waffle|grill|griddle|replacement|accessor(?:y|ies)|for\s+gr-\w+)\b/i.test(productText)) return false;
+    if (/\bblack\b/i.test(message) && !/\bblack\b/i.test(productText)) return false;
+    return true;
   }
   return true;
 }
@@ -1314,7 +1320,13 @@ async function groundImageNarrativeReply(reply: ChatReply): Promise<ChatReply | 
   // n8n can correctly identify a family but occasionally describe it in prose
   // without returning product codes. Collapse that prose to a stable catalogue
   // query so the customer still receives grounded product cards.
-  const grounded = await groundedCatalogueReply(conciseImageCatalogueQuery(reply.message), { authoritative: true });
+  const conciseQuery = conciseImageCatalogueQuery(reply.message);
+  // Image narratives contain descriptive prose (prices, colours and possible
+  // alternatives). Treat the collapsed product-family query as a normal
+  // catalogue search first; requiring every prose token to match can discard
+  // the exact product even when the vision result identified it correctly.
+  const grounded = await groundedCatalogueReply(conciseQuery)
+    ?? await groundedCatalogueReply(conciseQuery, { authoritative: true });
   if (!grounded || grounded.products.length === 0) return null;
   return {
     ...grounded,
@@ -1479,7 +1491,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const imageConsistentReply = input.image ? keepConsistentImageProductFamily(diverseReply) : diverseReply;
   const liveReply = await addLiveCatalogueState(imageConsistentReply);
   const alternativesReply = await addAvailableAlternatives(liveReply, catalogueMessage);
-  const quantityReadyReply = enforceRequestedQuantityOptions(alternativesReply, catalogueMessage);
+  const categorySafeAlternatives = enforceExplicitProductCategory(alternativesReply, catalogueMessage);
+  const quantityReadyReply = enforceRequestedQuantityOptions(categorySafeAlternatives, catalogueMessage);
   return deduplicateReplyProducts(
     enforceLiveCheckoutGate(explainUnavailableProducts(quantityReadyReply)),
   );

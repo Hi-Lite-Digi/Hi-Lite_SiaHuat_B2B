@@ -122,6 +122,48 @@ export function confirmsDisplayedProduct(message: string) {
   return positive && !negative;
 }
 
+export function confirmsOrderRequest(message: string) {
+  const normalized = message.trim();
+  return /^(?:(?:ok(?:ay|ie)?|yes|yup|yeah|sure)[,\s-]*)?(?:confirm(?:ed)?(?:\s+(?:the\s+)?(?:order|order request|enquiry))?|place the enquiry|submit for review)(?:[.!\s]*)$/i.test(normalized)
+    || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核)[。.！!\s]*$/u.test(normalized);
+}
+
+const PRODUCT_NOUN = /\b(?:apron|bowl|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|glass|glassware|grinder|knife|knives|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|spoon|stove|strainer|table|tableware|tray|trolley|uniform|wok)\b/i;
+const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-]+)+\b/i;
+
+/**
+ * Detects a new product request while an existing order line is being
+ * reviewed. References such as "give me 5 of this" deliberately do not match,
+ * because they update the selected product instead of starting a new search.
+ */
+export function requestsAdditionalProduct(message: string) {
+  const normalized = message.trim();
+  if (/^(?:add another item|new item|next item|添加其他商品|再加一件商品)$/iu.test(normalized)) return true;
+  if (!PRODUCT_NOUN.test(normalized) && !PRODUCT_CODE_REFERENCE.test(normalized)) return false;
+  if (/\b(?:this|that|it|same one)\b/i.test(normalized) && !/\b(?:also|too|another|add)\b/i.test(normalized)) return false;
+  return /\b(?:add|also|another|too|as well|i (?:also )?(?:want|need)|we (?:also )?(?:want|need)|get me|give me)\b/i.test(normalized)
+    || /(?:还要|也要|再加|另外要|加上)/u.test(normalized);
+}
+
+export function isGenericAddAnotherItem(message: string) {
+  return /^(?:add another item|new item|next item|添加其他商品|再加一件商品)$/iu.test(message.trim());
+}
+
+/**
+ * Retains later product clauses from a natural multi-item enquiry so the UI
+ * can continue with them after the first line has been live-stock checked.
+ */
+export function splitMultipleProductRequest(message: string) {
+  const clauses = message
+    .split(/\s+(?:and|plus|as well as)\s+|\s*[;,]\s*(?=(?:i\s+)?(?:need|want|add|\d+))/i)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  const productClauses = clauses.filter((clause) => PRODUCT_NOUN.test(clause) || PRODUCT_CODE_REFERENCE.test(clause));
+  return productClauses.length >= 2
+    ? productClauses.map((clause, index) => index > 0 && /^\d+\b/.test(clause) ? `I need ${clause}` : clause)
+    : [];
+}
+
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
   return /\b(?:another|different|other)\s+(?:item|option|product|one)\b/i.test(normalized)
