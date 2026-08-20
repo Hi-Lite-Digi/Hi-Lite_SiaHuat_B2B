@@ -1270,10 +1270,16 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
 async function groundImageNarrativeReply(reply: ChatReply): Promise<ChatReply | null> {
   if (reply.products.length > 0 || reply.selectedProduct) return reply;
 
+  // Vision replies often contain several candidate item codes. Resolve them
+  // concurrently so a slow lookup cannot consume the remaining customer reply
+  // budget after the image model has finished.
+  const candidates = exactCodeCandidates(reply.message).slice(0, 6);
+  const resolvedProducts = await Promise.all(
+    candidates.map((code) => findCatalogueProductByCode(code)),
+  );
   const exactProducts: Product[] = [];
   const seenCodes = new Set<string>();
-  for (const code of exactCodeCandidates(reply.message)) {
-    const product = await findCatalogueProductByCode(code);
+  for (const product of resolvedProducts) {
     if (!product || seenCodes.has(product.stock_id)) continue;
     exactProducts.push(product);
     seenCodes.add(product.stock_id);
@@ -1313,7 +1319,7 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
   const anchorText = productText(anchor);
   const familyPatterns = [
     /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/i,
-    /\b(?:(?:utility|storage|dish|bus|cutlery)\s+(?:box|bin)|cambox)\b/i,
+    /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|bin)|cambox)\b/i,
     /\b(?:coffee|spice)\s+grinder\b/i,
     /\b(?:shoe|shoes|footwear|boot|boots)\b/i,
     /\b(?:knife|knives|cleaver)\b/i,
@@ -1431,6 +1437,10 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
         return null;
       })
     : null;
+  // Preserve the first catalogue-grounded image result immediately. If live
+  // stock enrichment approaches the 27-second customer deadline, quickFallback
+  // can still return these relevant products instead of a generic clarification.
+  if (groundedImageReply) rememberGrounded(groundedImageReply);
   const brainReply = groundedReply ?? groundedImageReply ?? n8nReply;
   if (!brainReply) return quickFallback(input, groundedReply);
   const exactReply = keepExactCodeMatches(brainReply, input.message);
