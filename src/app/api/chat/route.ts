@@ -248,6 +248,7 @@ function productFamily(product: Product) {
     { name: "chef-pants", pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/ },
     { name: "coffee-grinder", pattern: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/ },
     { name: "knife", pattern: /\b(?:knife|knives|cleaver|yanagi|yanagiba|slicer)\b/ },
+    { name: "cutlery-set", pattern: /\b(?:cutlery|flatware)\s+sets?\b/ },
     { name: "utility-box", pattern: /\b(?:utility|storage|dish|bus|cutlery)\s+(?:box|boxes|bin|bins)\b|\bcambox\b/ },
     { name: "plate", pattern: /\b(?:plate|plates|platter|platters)\b/ },
     { name: "food-pan", pattern: /\b(?:melamine\s+)?gn\s+pan\b|\bgastronorm\s+pan\b|\bfood\s+pan\b/ },
@@ -1016,7 +1017,9 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
   if (reply.selectedProduct?.stock_status === "out_of_stock") {
     const product = reply.selectedProduct;
     const available = reply.products.filter(
-      (item) => item.stock_id !== product.stock_id && item.stock_status === "in_stock",
+      (item) => item.stock_id !== product.stock_id
+        && item.stock_status === "in_stock"
+        && isSameProductType(product, item),
     ).slice(0, 3);
     return {
       ...reply,
@@ -1045,7 +1048,10 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
   const unavailable = reply.products.filter((product) => product.stock_status === "out_of_stock");
   if (unavailable.length === 0) return reply;
 
-  const available = reply.products.filter((product) => product.stock_status === "in_stock");
+  const available = reply.products.filter((product) =>
+    product.stock_status === "in_stock"
+    && unavailable.some((unavailableProduct) => isSameProductType(unavailableProduct, product)),
+  );
   if (reply.products.length === 1) {
     const product = unavailable[0];
     return {
@@ -1056,14 +1062,16 @@ function explainUnavailableProducts(reply: ChatReply): ChatReply {
     };
   }
 
-  const codes = unavailable.map((product) => product.stock_id).join(", ");
+  const unavailableLabel = unavailable.length === 1
+    ? `${unavailable[0].name} (code: ${unavailable[0].stock_id})`
+    : unavailable.map((product) => `${product.name} (code: ${product.stock_id})`).join("; ");
   return {
     ...reply,
     message: available.length > 0
-      ? `${codes} ${unavailable.length === 1 ? "is" : "are"} out of stock right now. ${available.length === 1 ? "This option is" : "These options are"} available instead:`
-      : `The matching items are out of stock right now. I couldn't confirm another available option yet. Want me to search again?`,
+      ? `${unavailableLabel} ${unavailable.length === 1 ? "is" : "are"} out of stock right now. ${available.length === 1 ? "This matching option is" : "These matching options are"} available instead:`
+      : `${unavailableLabel} ${unavailable.length === 1 ? "is" : "are"} out of stock right now. I couldn't confirm another matching option yet. Want me to search again?`,
     stage: "clarify",
-    products: available.length > 0 ? available.slice(0, 3) : reply.products,
+    products: available.length > 0 ? available.slice(0, 3) : unavailable.slice(0, 3),
     suggestions: available.length > 0 ? [] : ["Search again", "Choose another item"],
   };
 }

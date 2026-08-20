@@ -416,6 +416,54 @@ await check("CTX-012", "Displayed-option memory", "give me the one with the Forg
     },
   ],
 });
+await check("OOS-001", "Out-of-stock alternatives", "like a cutlery set", (reply) => {
+  const products = reply.products ?? [];
+  if (!/cutlery set.*\(code:\s*R-52713B81\).*out of stock/i.test(reply.message)) {
+    return `The unavailable item must be named with its code, got: ${reply.message}`;
+  }
+  if (products.length === 0) return "Expected relevant in-stock cutlery-set alternatives";
+  return products.every((product) => /cutlery set/i.test(product.name) && !/placemat/i.test(product.name))
+    ? null
+    : `Returned an unrelated alternative: ${products.map((product) => product.name).join("; ")}`;
+}, [], 20_000);
+await check("OOS-002", "Displayed out-of-stock alternative memory", "give me the Gold,100", (reply) => {
+  if (reply.selectedProduct?.stock_id !== "R-52770G81") {
+    return `Expected the displayed Gold, 100 cutlery set (R-52770G81), got ${reply.selectedProduct?.stock_id ?? "no selected product"}`;
+  }
+  return /cutlery set/i.test(reply.selectedProduct.name)
+    ? null
+    : `Expected a cutlery set, got ${reply.selectedProduct.name}`;
+}, [], 5_000, {
+  stage: "clarify",
+  quantity: null,
+  activeProduct: null,
+  displayedProducts: [
+    {
+      stock_id: "R-52770G81",
+      name: "Sambonet Stainless Steel Cutlery Set, 24 Pieces, Mirror PVD Gold, 100",
+      status: "Active",
+      list_price: 665.14,
+      uom_id: "SET",
+      stock_status: "in_stock",
+    },
+    {
+      stock_id: "R-52553G81",
+      name: "Sambonet Stainless Steel Cutlery Set, 24 Pieces, Mirror PVD Gold, Taste",
+      status: "Active",
+      list_price: 598.17,
+      uom_id: "SET",
+      stock_status: "in_stock",
+    },
+    {
+      stock_id: "R-52722C81",
+      name: "Sambonet Stainless Steel Cutlery Set, 24 Pieces, Mirror PVD Copper, Cortina",
+      status: "Active",
+      list_price: 731.19,
+      uom_id: "SET",
+      stock_status: "in_stock",
+    },
+  ],
+});
 
 const blenderHistory: HistoryItem[] = [
   { role: "user", content: "hi got blender" },
