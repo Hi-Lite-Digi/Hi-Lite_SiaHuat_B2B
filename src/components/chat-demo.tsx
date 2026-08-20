@@ -166,6 +166,10 @@ function productOptionPrompt(productCount: number, language: ChatLanguage = "en"
   return `Reply with ${options.slice(0, -1).join(", ")} or ${options.at(-1)}.`;
 }
 
+function asksForRecommendation(message: string) {
+  return /^(?:(?:can|could|would) you\s+)?(?:recommend(?: one)?|which (?:one|option) (?:do you |would you )?recommend|pick (?:one|the best one)(?: for me)?)\??$/i.test(message.trim());
+}
+
 function singaporeTime() {
   return new Intl.DateTimeFormat("en-SG", {
     hour: "numeric",
@@ -279,7 +283,6 @@ export function ChatDemo() {
   const recordingActiveRef = useRef(false);
   const discardRecordingRef = useRef(false);
   const voiceDraftRef = useRef<VoiceNote | null>(null);
-  const n8nSyncSequenceRef = useRef(0);
 
   function setMessages(update: SetStateAction<ChatMessage[]>) {
     const time = singaporeTime();
@@ -310,22 +313,12 @@ export function ChatDemo() {
   }
 
   function syncHandledTurnWithN8n(message: string) {
-    const requestSession = sessionId.current;
-    n8nSyncSequenceRef.current += 1;
-    const syncSequence = n8nSyncSequenceRef.current;
-    const history = brainHistory();
-    void fetch("/api/chat", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: `${requestSession}-sync-${syncSequence}`, message, history, brain: "n8n" }),
-      signal: AbortSignal.timeout(8_000),
-    }).then((response) => {
-      if (!response.ok) {
-        console.error("[chat] n8n handled-turn sync failed", { status: response.status, message });
-      }
-    }).catch((error) => {
-      console.error("[chat] n8n handled-turn sync failed", { message, error });
-    });
+    void message;
+    // The next conversational request sends the complete browser transcript to
+    // the normal n8n-backed /api/chat path. A second fire-and-forget request
+    // created a different session for every handled click, added latency, and
+    // surfaced harmless sync failures in the console. No extra request is
+    // needed to retain these turns.
   }
 
   function selectImage(file: File | undefined) {
@@ -725,6 +718,16 @@ export function ChatDemo() {
     }
 
     const canSelectDisplayedProduct = stage !== "quantity" && !pendingQuote && !pendingProduct;
+    if (canSelectDisplayedProduct && lastProducts.length > 0 && asksForRecommendation(clean)) {
+      const recommended = [...lastProducts].sort((left, right) => {
+        const stockScore = (product: Product) => product.stock_status === "in_stock" ? 1 : 0;
+        return stockScore(right) - stockScore(left)
+          || Number(right.available_quantity ?? 0) - Number(left.available_quantity ?? 0);
+      })[0];
+      setQuery("");
+      chooseProduct(recommended, clean);
+      return;
+    }
     const requestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean)
       ? requestedDisplayedProductIndex(clean, lastProducts)
       : null;
@@ -745,7 +748,7 @@ export function ChatDemo() {
       setStage("quantity"); setSuggestions(["1", "6", "12", "24"]); return;
     }
 
-    if (clean === "Choose another item" || clean === "选择其他商品" || requestsAnotherOption(clean)) {
+    if (clean === "Choose another item" || clean === "选择其他商品") {
       syncHandledTurnWithN8n(clean);
       const currentProduct = confirmedProduct ?? pendingProduct ?? lastProducts[0] ?? null;
       const excludedStockIds = new Set(lastProducts.map((product) => product.stock_id));
@@ -929,12 +932,15 @@ export function ChatDemo() {
       if (sessionId.current !== requestSession) return;
       if (!response.ok) throw new Error(reply.error ?? "The assistant could not answer right now.");
       const products = reply.products ?? [];
-      setLastProducts(products);
-      setPendingQuantity(requestedQuantity(clean));
+      // Product cards remain the active choices until Claire displays a new
+      // list. A clarification-only reply must not erase option memory.
+      if (products.length > 0) setLastProducts(products);
+      const requested = requestedQuantity(clean);
+      if (requested !== null) setPendingQuantity(requested);
 
       if (reply.selectedProduct) {
         const product = reply.selectedProduct;
-        const quantity = requestedQuantity(clean);
+        const quantity = requestedQuantity(clean) ?? pendingQuantity;
         setPendingProduct(product); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
         setLastProducts((current) => current.some((item) => item.stock_id === product.stock_id) ? current : [product, ...current]);
         setMessages((current) => [...current, {
@@ -1235,14 +1241,7 @@ export function ChatDemo() {
 
       const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(new Date());
       const filename = `sia-huat-conversation-${date}.pdf`;
-      const url = URL.createObjectURL(pdf.output("blob"));
-      const download = document.createElement("a");
-      download.href = url;
-      download.download = filename;
-      document.body.appendChild(download);
-      download.click();
-      download.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      await pdf.save(filename, { returnPromise: true });
     } catch (error) {
       console.error("[chat] PDF download failed", error);
       setExportError("The PDF could not be downloaded. Please try again.");

@@ -298,6 +298,7 @@ function broadProductTypePattern(product: Product) {
     /\b(?:chef\s+)?(?:pants|trousers)\b/i,
     /\b(?:shoe|shoes|footwear|boot|boots)\b/i,
     /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i,
+    /\bwoks?\b/i,
     /\b(?:fry|frying|omelette|crepe|grill|sauce)?\s*pan\b/i,
     /\b(?:knife|knives|cleaver)\b/i,
     /\b(?:plate|plates|platter|platters)\b/i,
@@ -315,6 +316,7 @@ function broadProductTypeSearch(product: Product) {
   if (/\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(text)) return "coffee grinder";
   if (/\b(?:chef\s+)?(?:pants|trousers)\b/i.test(text)) return "chef pants";
   if (/\b(?:shoe|shoes|footwear|boot|boots)\b/i.test(text)) return "work shoes";
+  if (/\bwoks?\b/i.test(text)) return "wok";
   if (/\b(?:fry|frying|omelette|crepe|grill|sauce)?\s*pan\b/i.test(text)) return "pan";
   if (/\b(?:knife|knives|cleaver)\b/i.test(text)) return "knife";
   if (/\b(?:pot|pots|stockpot|stockpots)\b/i.test(text)) return "pot";

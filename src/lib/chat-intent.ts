@@ -77,11 +77,16 @@ export function catalogueHistoryWithClarification(message: string, history: Hist
     return userHistory;
   }
 
-  const latestClarification = [...history].reverse().find((item) =>
-    item.role === "assistant"
-    && productCategory(item.content) !== null
-    && assistantClarificationPattern.test(item.content),
-  );
+  // Only the assistant turn immediately before the customer's follow-up may
+  // supply clarification context. Searching farther back can revive a stale
+  // product after the customer has already switched enquiries (for example,
+  // an old knife question overriding the current wok search).
+  const latestTurn = history.at(-1);
+  const latestClarification = latestTurn?.role === "assistant"
+    && productCategory(latestTurn.content) !== null
+    && assistantClarificationPattern.test(latestTurn.content)
+    ? latestTurn
+    : null;
 
   return latestClarification
     ? [...userHistory, latestClarification.content]
@@ -160,15 +165,19 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   }
 
   if (activeCategory === "knife") {
-    const changesOrigin = /\b(?:japan|japanese|taiwan|taiwanese)\b/i.test(message);
-    const damascus = /\bdamascus\b/i.test(message)
-      || (!changesOrigin && /\bdamascus\b/i.test(joinedMessages))
+    const latestDamascusIndex = customerMessages.findLastIndex((content) => /\bdamascus\b/i.test(content));
+    const latestOriginIndex = customerMessages.findLastIndex((content) => /\b(?:japan|japanese|taiwan|taiwanese)\b/i.test(content));
+    // A later origin refinement replaces an earlier Damascus requirement. This
+    // prevents a short follow-up such as "show a few" from reviving a stale
+    // constraint that the customer already changed.
+    const damascus = latestDamascusIndex >= 0 && latestDamascusIndex >= latestOriginIndex
       ? "damascus"
       : null;
     const chef = /\bchef(?:'s)?\s+knif|chef\s+knives\b/i.test(joinedMessages) ? "chef" : null;
-    const origin = /\b(?:japan|japanese)\b/i.test(joinedMessages)
+    const originSource = latestOriginIndex >= 0 ? customerMessages[latestOriginIndex] : "";
+    const origin = /\b(?:japan|japanese)\b/i.test(originSource)
       ? "japanese"
-      : /\b(?:taiwan|taiwanese)\b/i.test(joinedMessages)
+      : /\b(?:taiwan|taiwanese)\b/i.test(originSource)
         ? "taiwanese"
         : null;
     const size = [...customerMessages].reverse()
@@ -178,11 +187,27 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   }
 
   if (activeCategory === "wok") {
-    const size = [...customerMessages].reverse()
-      .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
-      .find(Boolean) ?? null;
-    const material = joinedMessages.match(/\b(?:carbon\s+steel|stainless\s+steel|cast\s+iron|aluminium|aluminum)\b/i)?.[0] ?? null;
-    return [material, size, "wok"].filter(Boolean).join(" ");
+    const latestSizeIndex = customerMessages.findLastIndex((content) => /\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(content));
+    const latestSizeSource = latestSizeIndex >= 0 ? customerMessages[latestSizeIndex] : "";
+    const removesLatestSize = latestSizeIndex >= 0
+      && /\b(?:forget|ignore|remove|without|no longer|don'?t need|do not need)\b/i.test(latestSizeSource);
+    const size = removesLatestSize
+      ? null
+      : latestSizeSource.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0] ?? null;
+    const materialSource = [...customerMessages].reverse().find((content) =>
+      /\b(?:carbon\s+steel|stainless\s+steel|cast\s+iron|iron|aluminium|aluminum)\b/i.test(content),
+    ) ?? "";
+    const materials = [
+      /\bcarbon\s+steel\b/i.test(materialSource) ? "carbon steel" : null,
+      /\bcast\s+iron\b/i.test(materialSource) ? "cast iron" : null,
+      /\biron\b/i.test(materialSource) && !/\bcast\s+iron\b/i.test(materialSource) ? "iron" : null,
+      /\bstainless\s+steel\b/i.test(materialSource) ? "stainless steel" : null,
+      /\baluminium|aluminum\b/i.test(materialSource) ? "aluminium" : null,
+    ].filter(Boolean).join(" or ");
+    const closest = size && /\b(?:around|about|approximately|approx|closest|near(?:est)?)\b/i.test(latestSizeSource)
+      ? "closest size"
+      : null;
+    return [materials || null, size, closest, "wok"].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "chef pants") {

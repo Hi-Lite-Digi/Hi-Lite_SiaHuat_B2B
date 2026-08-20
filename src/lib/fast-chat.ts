@@ -98,6 +98,15 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
+  if (/\b(?:you(?:'re| are)?|u(?:r| are)?)\s+(?:broken|buggy|not working)|\bthis\s+(?:is\s+)?broken\b|\b(?:wrong|bad)\s+(?:answer|reply|result)\b/.test(simple)) {
+    return reply(
+      activeTask
+        ? `Sorry, that reply was off. I still have ${activeTask}. Tell me which part was wrong and I’ll correct it without restarting.`
+        : "Sorry, that reply was off. Tell me what you were looking for and I’ll correct it.",
+      activeTask ? ["Show the options again", "Change a detail", "Start again"] : ["Find a product", "Browse products"],
+    );
+  }
+
   if (/\b(are you (okay|ok|alright)|you (okay|ok|alright))\b/.test(simple)) {
     return reply(
       activeTask ? `I’m good, thanks for asking 😊 We can carry on with ${activeTask} whenever you’re ready.` : "I’m good, thanks for asking 😊 How can I help you today?",

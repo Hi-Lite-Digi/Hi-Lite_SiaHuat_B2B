@@ -485,6 +485,71 @@ function matchesDirectCatalogueRequest(message: string, product: Product) {
   return requestedTokens.every((token) => productTokens.has(token));
 }
 
+function searchableProductText(product: Product) {
+  return [
+    product.name,
+    product.brand,
+    product.brand_id,
+    product.description,
+    product.size,
+    product.dimensions,
+    product.category,
+    product.subcategory,
+    product.third_category,
+  ].filter(Boolean).join(" ");
+}
+
+function matchesConstrainedKnifeRequest(message: string, product: Product) {
+  const text = searchableProductText(product);
+  if (productFamily(product) !== "knife") return false;
+  if (/\bdamascus\b/i.test(message) && !/\bdamascus\b/i.test(text)) return false;
+  if (/\bjapan(?:ese)?\b/i.test(message) && !/\bjapan(?:ese)?\b/i.test(text)) return false;
+  if (/\btaiwan(?:ese)?\b/i.test(message) && !/\btaiwan(?:ese)?\b/i.test(text)) return false;
+  if (/\bchef\b/i.test(message) && !/\bchef(?:'s|s)?\s+knif/i.test(text)) return false;
+  return true;
+}
+
+function matchesConstrainedWokRequest(message: string, product: Product) {
+  if (productFamily(product) !== "wok") return false;
+  const text = searchableProductText(product);
+  const asksCarbonSteel = /\bcarbon\s+steel\b/i.test(message);
+  const asksIron = /\b(?:cast\s+)?iron\b/i.test(message);
+  const asksStainless = /\bstainless\s+steel\b/i.test(message);
+  const asksAluminium = /\baluminium|aluminum\b/i.test(message);
+  if (asksCarbonSteel || asksIron || asksStainless || asksAluminium) {
+    const matchesRequestedMaterial = (asksCarbonSteel && /\bcarbon\s+steel\b/i.test(text))
+      || (asksIron && /\b(?:cast\s+)?iron\b/i.test(text))
+      || (asksStainless && /\bstainless\s+steel\b/i.test(text))
+      || (asksAluminium && /\baluminium|aluminum\b/i.test(text));
+    if (!matchesRequestedMaterial) return false;
+  }
+  return true;
+}
+
+function requestedMeasurementCm(message: string) {
+  const match = message.match(/\b(\d+(?:\.\d+)?)[\s-]*(cm|mm|inch|inches|in)\b/i);
+  if (!match) return null;
+  const value = Number.parseFloat(match[1]);
+  if (/^mm$/i.test(match[2])) return value / 10;
+  if (/^(?:inch|inches|in)$/i.test(match[2])) return value * 2.54;
+  return value;
+}
+
+function closestMeasurementDistance(message: string, product: Product) {
+  const requestedCm = requestedMeasurementCm(message);
+  if (requestedCm === null) return Number.POSITIVE_INFINITY;
+  const measurements = [...searchableProductText(product).matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|mm|inch|inches|in|\")/gi)]
+    .map((match) => {
+      const value = Number.parseFloat(match[1]);
+      if (/^mm$/i.test(match[2])) return value / 10;
+      if (/^(?:inch|inches|in|\")$/i.test(match[2])) return value * 2.54;
+      return value;
+    });
+  return measurements.length > 0
+    ? Math.min(...measurements.map((measurement) => Math.abs(measurement - requestedCm)))
+    : Number.POSITIVE_INFINITY;
+}
+
 function relatedUseCase(message: string) {
   if (/\b(?:compost|composting|food\s+waste|discard(?:ing)?\s+food|dispose\s+of\s+food)\b/i.test(message)) {
     return {
@@ -685,7 +750,7 @@ async function groundedWaterDispenserReply(message: string): Promise<ChatReply> 
 
 async function groundedCatalogueReply(
   message: string,
-  options: { authoritative?: boolean } = {},
+  options: { authoritative?: boolean; excludedStockIds?: Set<string> } = {},
 ): Promise<ChatReply | null> {
   for (const code of exactCodeCandidates(message)) {
     const exactProduct = await findCatalogueProductByCode(code);
@@ -708,15 +773,26 @@ async function groundedCatalogueReply(
     const value = message.match(/(?:below|under|less\s+than|up\s+to|budget(?:\s+of)?)\s*\$?\s*(\d+(?:\.\d+)?)/i)?.[1];
     return value ? Number.parseFloat(value) : null;
   })();
-  const searchMessage = message
+  const searchMessage = /\bwoks?\b/i.test(message)
+    ? "wok"
+    : message
     .replace(/(?:below|under|less\s+than|up\s+to|budget(?:\s+of)?)\s*\$?\s*\d+(?:\.\d+)?/gi, " ")
     .replace(/\b\d+\s+(?:outlets?|drinks?(?:\s+per\s+(?:day|hour))?)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
   const searchedProducts = await searchCatalogue(searchMessage || message, { resultLimit: 30, outputLimit: 20 });
-  const products = searchedProducts.filter((product) => matchesExplicitProductCategory(message, product));
+  const excludedStockIds = options.excludedStockIds ?? new Set<string>();
+  const products = searchedProducts
+    .filter((product) => !excludedStockIds.has(product.stock_id))
+    .filter((product) => matchesExplicitProductCategory(message, product));
   const relevantProducts = options.authoritative
-    ? products.filter((product) => matchesDirectCatalogueRequest(message, product))
+    ? products.filter((product) => {
+        if (/\bwoks?\b/i.test(message)) return matchesConstrainedWokRequest(message, product);
+        if (/\b(?:knife|knives)\b/i.test(message) && /\b(?:damascus|japan(?:ese)?|taiwan(?:ese)?)\b/i.test(message)) {
+          return matchesConstrainedKnifeRequest(message, product);
+        }
+        return matchesDirectCatalogueRequest(message, product);
+      })
     : products;
   const priceEligibleProducts = maximumPrice === null
     ? relevantProducts
@@ -729,7 +805,12 @@ async function groundedCatalogueReply(
         && typeof product.available_quantity === "number"
         && product.available_quantity >= minimumQuantity,
       );
-  const displayProducts = diversifyProducts(quantityEligibleProducts);
+  const rankedQuantityEligibleProducts = /\bwoks?\b/i.test(message) && requestedMeasurementCm(message) !== null
+    ? [...quantityEligibleProducts].sort(
+        (left, right) => closestMeasurementDistance(message, left) - closestMeasurementDistance(message, right),
+      )
+    : quantityEligibleProducts;
+  const displayProducts = diversifyProducts(rankedQuantityEligibleProducts);
   if (displayProducts.length === 0) {
     if (/\bdamascus\b/i.test(message)) {
       const ordinaryChefKnives = (await searchCatalogue("chef knife", { resultLimit: 30, outputLimit: 20 }))
@@ -898,6 +979,7 @@ function matchesRequestedDimensions(message: string, product: Product) {
 
 function enforceRequestedDimensions(reply: ChatReply, message: string): ChatReply {
   if (!/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(message)) return reply;
+  if (/\b(?:around|about|approximately|approx|closest|near(?:est)?)\b/i.test(message)) return reply;
   const products = reply.products.filter((product) => matchesRequestedDimensions(message, product));
   const selectedProduct = reply.selectedProduct && matchesRequestedDimensions(message, reply.selectedProduct)
     ? reply.selectedProduct
@@ -1181,6 +1263,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const workflowMessage = prefersChinese(input)
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
     : catalogueMessage;
+  const excludedStockIds = requestsAnotherOption(input.message)
+    ? new Set((input.context?.displayedProducts ?? []).map((product) => product.stock_id))
+    : undefined;
   const pantsSizingReply = !input.image
     ? await groundedPantsSizingReply(input).catch((error) => {
         console.error("[api/chat] pants sizing lookup failed", { message: input.message, error });
@@ -1195,7 +1280,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const mustGroundCatalogueAnswer = isDirectCatalogueAvailabilityRequest(input.message)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
   const authoritativeGroundedReply = !input.image && mustGroundCatalogueAnswer
-    ? await groundedCatalogueReply(catalogueMessage, { authoritative: true }).catch((error) => {
+    ? await groundedCatalogueReply(catalogueMessage, { authoritative: true, excludedStockIds }).catch((error) => {
         console.error("[api/chat] authoritative catalogue check failed", { message: catalogueMessage, error });
         return null;
       })
@@ -1235,7 +1320,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   });
   const groundedReply = input.image
     ? null
-    : await groundedCatalogueReply(catalogueMessage).catch((error) => {
+    : await groundedCatalogueReply(catalogueMessage, { excludedStockIds }).catch((error) => {
         console.error("[api/chat] grounded catalogue search failed", { message: catalogueMessage, error });
         return null;
       });

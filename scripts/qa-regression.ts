@@ -6,8 +6,10 @@ type HistoryItem = { role: "user" | "assistant"; content: string };
 type ReplyProduct = {
   stock_id: string;
   name: string;
+  status?: string;
   list_price: number;
   uom_id: string;
+  source_url?: string | null;
   size?: string | null;
   stock_status?: "in_stock" | "out_of_stock" | "unknown" | null;
   available_quantity?: number | null;
@@ -110,6 +112,11 @@ const avoidsRoboticVoice = (reply: Reply) => {
 const avoidsOperationalLeak = (reply: Reply) => /\b(?:load failed|fetch (?:is )?aborted|failed to fetch|aborterror|network request failed)\b/i.test(reply.message)
   ? "Customer reply leaked an internal transport error"
   : null;
+const contextProducts = (products: ReplyProduct[]) => products.map((product) => ({
+  ...product,
+  status: product.status ?? "Active",
+  source_url: product.source_url ?? `https://store.siahuat.com/search?_text=${encodeURIComponent(product.stock_id)}`,
+}));
 
 await check("CAT-001", "Catalogue scope & latency", "What do you sell?", (reply) =>
   noProducts(reply)
@@ -589,7 +596,7 @@ await check("PDF-KNIFE-001", "PDF regression: mandatory Damascus constraint", "I
       ? "Claimed ordinary knives were matching Damascus options"
       : null;
 }, transcriptKnifeHistory.slice(0, 2), 20_000);
-await check("PDF-KNIFE-002", "PDF regression: explicit Japanese refinement", "Have a japanese made knife?", (reply) => {
+const japaneseKnifeReply = await check("PDF-KNIFE-002", "PDF regression: explicit Japanese refinement", "Have a japanese made knife?", (reply) => {
   const products = reply.products ?? [];
   if (reply.selectedProduct?.stock_id === transcriptKnife.stock_id) return "Silently re-selected the previously displayed Taiwanese knife";
   if (products.length === 0) return /couldn.t find|don.t carry|out of stock/i.test(reply.message) ? null : "Expected Japanese knife results or an explicit unavailable reply";
@@ -602,7 +609,42 @@ await check("PDF-KNIFE-002", "PDF regression: explicit Japanese refinement", "Ha
   quantity: 3,
   displayedProducts: [transcriptKnife],
 });
-await check("PDF-WOK-001", "PDF regression: new product resets stale knife", "Ok nevermind, got a wok? I need 4 woks for zichar", (reply) => {
+const japaneseKnifeProducts = japaneseKnifeReply.products ?? [];
+await check("PDF-KNIFE-003", "PDF regression: short follow-up keeps Japanese constraint", "Can you share a few?", (reply) => {
+  const products = reply.products ?? [];
+  if (/what (?:item|product)|missed that/i.test(reply.message)) return "Forgot that the customer was looking for Japanese chef knives";
+  if (products.length === 0) return /couldn.t find|don.t carry|no (?:more|other)|out of stock/i.test(reply.message)
+    ? null
+    : "Expected additional Japanese knives or an explicit no-more-options reply";
+  if (products.some((product) => japaneseKnifeProducts.some((shown) => shown.stock_id === product.stock_id))) {
+    return "Repeated a Japanese option that was already displayed";
+  }
+  return products.every((product) => /japan|japanese/i.test(product.name))
+    ? null
+    : `Revived an old non-Japanese constraint: ${products.map((product) => product.name).join("; ")}`;
+}, [
+  ...transcriptKnifeHistory,
+  { role: "user", content: "Have a japanese made knife?" },
+  { role: "assistant", content: japaneseKnifeProducts.length > 0
+    ? `Here are Japanese knife options: ${japaneseKnifeProducts.map((product, index) => `${index + 1}. ${product.name}`).join("; ")}`
+    : japaneseKnifeReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: contextProducts(japaneseKnifeProducts),
+});
+await check("PDF-RECOVER-001", "PDF regression: complaint recovery keeps active task", "You are broken", (reply) => {
+  return noProducts(reply)
+    ?? (/sorry|off|wrong/i.test(reply.message) ? null : "Must acknowledge that the previous reply was wrong")
+    ?? (/knife|japanese/i.test(reply.message) ? null : "Must retain the active Japanese knife task while recovering");
+}, [
+  ...transcriptKnifeHistory,
+  { role: "user", content: "Have a japanese made knife?" },
+  { role: "assistant", content: japaneseKnifeReply.message },
+], 5_000);
+
+const initialWokReply = await check("PDF-WOK-001", "PDF regression: new product resets stale knife", "Ok nevermind, got a wok? I need 4 woks for zichar", (reply) => {
   const products = reply.products ?? [];
   if (products.length === 0) return "Expected wok options";
   if (!products.every((product) => /wok/i.test(product.name))) return `Returned stale knife products: ${products.map((product) => product.name).join("; ")}`;
@@ -615,6 +657,66 @@ await check("PDF-WOK-001", "PDF regression: new product resets stale knife", "Ok
   quantity: 3,
   displayedProducts: [transcriptKnife],
 });
+const initialWokProducts = initialWokReply.products ?? [];
+const closestWokHistory: HistoryItem[] = [
+  ...transcriptKnifeHistory,
+  { role: "user", content: "Ok nevermind, got a wok? I need 4 woks for zichar" },
+  { role: "assistant", content: initialWokProducts.length > 0
+    ? `Here are wok options: ${initialWokProducts.map((product, index) => `${index + 1}. ${product.name}`).join("; ")}`
+    : initialWokReply.message },
+];
+const closestWokReply = await check("PDF-WOK-002", "PDF regression: closest size and material fallback", "around 36cm or closest size, iron or carbon steel", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected the closest iron or carbon-steel woks with at least 4 units";
+  const unrelated = products.find((product) => !/wok/i.test(product.name) || !/iron|carbon\s+steel/i.test(product.name));
+  if (unrelated) return `Ignored the wok/material use case: ${unrelated.name}`;
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 4)
+    ? null
+    : "Every closest-size option must be able to supply 4 units";
+}, closestWokHistory, 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 4,
+  displayedProducts: contextProducts(initialWokProducts),
+});
+const closestWokProducts = closestWokReply.products ?? [];
+const correctedWokReply = await check("PDF-WOK-003", "PDF regression: remove stale size constraint", "forget 36cm, show iron woks", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected iron wok options after removing the 36cm constraint";
+  if (products.some((product) => !/wok/i.test(product.name) || !/iron/i.test(product.name))) {
+    return `Returned an unrelated or non-iron product: ${products.map((product) => product.name).join("; ")}`;
+  }
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 4)
+    ? null
+    : "Corrected wok options must still satisfy the remembered quantity of 4";
+}, [
+  ...closestWokHistory,
+  { role: "user", content: "around 36cm or closest size, iron or carbon steel" },
+  { role: "assistant", content: closestWokReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 4,
+  displayedProducts: contextProducts(closestWokProducts),
+});
+const correctedWokProducts = correctedWokReply.products ?? [];
+if (correctedWokProducts.length >= 2) {
+  await check("PDF-WOK-004", "PDF regression: numbered option selection keeps quantity", "option 2 please, 4 pieces", (reply) => {
+    if (reply.selectedProduct?.stock_id !== correctedWokProducts[1].stock_id) {
+      return `Expected option 2 (${correctedWokProducts[1].stock_id}), received ${reply.selectedProduct?.stock_id ?? "no selection"}`;
+    }
+    return reply.stage === "clarify" ? null : `Expected clarification/confirmation stage, received ${reply.stage}`;
+  }, [
+    ...closestWokHistory,
+    { role: "user", content: "forget 36cm, show iron woks" },
+    { role: "assistant", content: correctedWokReply.message },
+  ], 5_000, {
+    stage: "clarify",
+    activeProduct: null,
+    quantity: 4,
+    displayedProducts: contextProducts(correctedWokProducts),
+  });
+}
 await check("PDF-CANCEL-001", "PDF regression: cancellation ends enquiry", "Cancel", (reply) =>
   noProducts(reply)
   ?? (/cancel/i.test(reply.message) ? null : "Cancel must end the active enquiry instead of repeating product cards"), [
@@ -708,6 +810,15 @@ await checkAlternatives("STOCK-002", "960.99", 10, (products) => {
   return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 10)
     ? null
     : "Alternative lookup returned a grinder below the requested stock quantity";
+});
+await checkAlternatives("STOCK-003", "13103-1501", 8, (products) => {
+  if (products.length === 0) return "Expected relevant alternatives for the low-stock iron wok";
+  if (!products.every((product) => /\bwok\b/i.test(product.name))) {
+    return `Wok alternatives included another cookware family: ${products.map((product) => product.name).join("; ")}`;
+  }
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 8)
+    ? null
+    : "Wok alternatives must all supply the requested 8 units";
 });
 
 await check("LANG-001", "Language", "👋", (reply) => avoidsSkuPromotion(reply) ?? (/product|catalogue/i.test(reply.message) ? null : "Emoji-only input should explain purpose"));
