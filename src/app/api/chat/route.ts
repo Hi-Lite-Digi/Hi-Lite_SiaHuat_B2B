@@ -1267,6 +1267,21 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
   };
 }
 
+function conciseImageCatalogueQuery(message: string): string {
+  const normalized = message.toLowerCase();
+  if (/\b(?:camtainer|insulated beverage (?:dispenser|server)|(?:beverage|drink|tea) (?:dispenser|server))\b/.test(normalized)) {
+    return "Cambro Camtainer insulated beverage dispenser";
+  }
+  if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose) (?:box|bin)|cambox)\b/.test(normalized)) {
+    return "plastic utility box Cambox storage box";
+  }
+  if (/\b(?:coffee|spice) grinder\b/.test(normalized)) return "coffee grinder";
+  if (/\b(?:shoe|shoes|footwear|boot|boots)\b/.test(normalized)) return "work shoes";
+  if (/\b(?:knife|knives|cleaver)\b/.test(normalized)) return "chef knife cleaver";
+  if (/\b(?:strainer|skimmer|colander|sieve)\b/.test(normalized)) return "food strainer skimmer colander";
+  return message;
+}
+
 async function groundImageNarrativeReply(reply: ChatReply): Promise<ChatReply | null> {
   if (reply.products.length > 0 || reply.selectedProduct) return reply;
 
@@ -1296,7 +1311,10 @@ async function groundImageNarrativeReply(reply: ChatReply): Promise<ChatReply | 
     };
   }
 
-  const grounded = await groundedCatalogueReply(reply.message, { authoritative: true });
+  // n8n can correctly identify a family but occasionally describe it in prose
+  // without returning product codes. Collapse that prose to a stable catalogue
+  // query so the customer still receives grounded product cards.
+  const grounded = await groundedCatalogueReply(conciseImageCatalogueQuery(reply.message), { authoritative: true });
   if (!grounded || grounded.products.length === 0) return null;
   return {
     ...grounded,
