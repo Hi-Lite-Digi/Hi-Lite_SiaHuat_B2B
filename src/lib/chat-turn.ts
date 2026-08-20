@@ -115,7 +115,8 @@ export function referencesSingleDisplayedProduct(message: string, productCount: 
 
 export function confirmsDisplayedProduct(message: string) {
   const positive = /^(?:yes|yup|yeah|correct|confirm|this is it)\b/i.test(message.trim())
-    || /^(?:是|对|正确|确认|就是这个|就是这件)(?:的|商品)?[。.!\s]*$/u.test(message.trim());
+    || /^(?:(?:是|对|正确)(?:的)?(?:[，,、]\s*)?)?(?:就是这个|就是这件(?:商品)?|这个|这件商品)[。.!\s]*$/u.test(message.trim())
+    || /^(?:是|对|正确|确认)(?:的|商品)?[。.!\s]*$/u.test(message.trim());
   const negative = /\b(?:no|not|wrong|another|other|different|instead)\b/i.test(message)
     || /(?:不是|不对|其他|另外)/u.test(message);
   return positive && !negative;

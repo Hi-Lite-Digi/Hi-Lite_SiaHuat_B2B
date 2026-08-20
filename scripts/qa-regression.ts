@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 import type { ConversationContext } from "../src/lib/chat-contract";
-import { asksForRecommendation, requestsAnotherOption } from "../src/lib/chat-turn";
+import { asksForRecommendation, confirmsDisplayedProduct, requestsAnotherOption } from "../src/lib/chat-turn";
 
 type HistoryItem = { role: "user" | "assistant"; content: string };
 type ReplyProduct = {
@@ -131,6 +131,24 @@ for (const [id, prompt] of [
     prompt,
     pass,
     reason: pass ? "Matched expected behaviour" : "Natural recommendation wording was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt] of [
+  ["INTENT-CONFIRM-ZH-001", "是的，就是这个"],
+  ["INTENT-CONFIRM-ZH-002", "对，就是这件商品。"],
+  ["INTENT-CONFIRM-ZH-003", "就是这个"],
+] as const) {
+  const pass = confirmsDisplayedProduct(prompt);
+  results.push({
+    id,
+    area: "Chinese displayed-product confirmation",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Chinese confirmation wording was not recognized",
     durationMs: 0,
     response: "",
     products: [],
