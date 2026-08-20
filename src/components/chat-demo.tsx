@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, ClipboardEvent, DragEvent, FormEvent, SetStateAction, useEffect, useRef, useState } from "react";
 import { ExternalLink, FileDown, ImagePlus, LoaderCircle, Mic, Pause, Play, RotateCcw, Send, Square, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,7 @@ import type {
   ImageAttachment,
   Product,
 } from "@/lib/chat-contract";
-import { confirmsDisplayedProduct, referencesSingleDisplayedProduct, requestedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
+import { confirmsDisplayedProduct, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 
 type QuoteSummary = {
   item: string;
@@ -33,6 +33,17 @@ function languageForMessage(value: string, current: ChatLanguage): ChatLanguage 
   if (hasChineseText(value)) return "zh";
   if (/[A-Za-z]/.test(value)) return "en";
   return current;
+}
+
+function safeChatFailureMessage(language: ChatLanguage, timedOut = false) {
+  if (language === "zh") {
+    return timedOut
+      ? "刚才的查询超时了，不过我还记得目前的商品要求。请再发送最后一个要求，我会继续。"
+      : "刚才的查询没有完成，不过目前的商品要求仍然保留。请再发送最后一个要求。";
+  }
+  return timedOut
+    ? "That lookup took too long, but I still have the current product details. Send the last requirement once more and I’ll continue."
+    : "That lookup didn’t finish, but I still have the current product details. Send the last requirement once more and I’ll continue.";
 }
 
 function whatsAppQuoteMessage(quote: QuoteSummary, confirmed = false, language: ChatLanguage = "en") {
@@ -88,7 +99,7 @@ function WhatsAppText({ text }: { text: string }) {
 
 type VoiceNote = { audioUrl: string; durationSeconds: number; transcript: string };
 
-type ChatMessage = { id: number; role: "user" | "assistant"; text: string; imageUrl?: string; voiceNote?: VoiceNote; products?: Product[]; selectedProduct?: Product; needsConfirmation?: boolean; quoteSummary?: QuoteSummary };
+type ChatMessage = { id: number; role: "user" | "assistant"; text: string; time?: string; imageUrl?: string; voiceNote?: VoiceNote; products?: Product[]; selectedProduct?: Product; needsConfirmation?: boolean; quoteSummary?: QuoteSummary };
 
 type SpeechRecognitionResultEvent = {
   resultIndex: number;
@@ -223,11 +234,11 @@ function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: str
   </p>;
 }
 
-const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send me the item name, brand or a photo." };
+const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send me the item name, brand or a photo.", time: singaporeTime() };
 const initialSuggestions = ["Chef knives", "Glassware", "Coffee beans"];
 
 export function ChatDemo() {
-  const [messages, setMessages] = useState<ChatMessage[]>([welcome]);
+  const [messages, setMessageState] = useState<ChatMessage[]>([welcome]);
   const [conversationLanguage, setConversationLanguage] = useState<ChatLanguage>("en");
   const [query, setQuery] = useState("");
   const [stage, setStage] = useState<ChatReply["stage"]>("discover");
@@ -257,7 +268,6 @@ export function ChatDemo() {
   const queuedMessages = useRef<string[]>([]);
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const messageTimes = useRef(new Map<number, string>());
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -265,10 +275,19 @@ export function ChatDemo() {
   const finalTranscriptRef = useRef("");
   const latestTranscriptRef = useRef("");
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const recordingStartedAtRef = useRef(0);
+  const recordingElapsedSecondsRef = useRef(0);
   const recordingActiveRef = useRef(false);
   const discardRecordingRef = useRef(false);
   const voiceDraftRef = useRef<VoiceNote | null>(null);
+  const n8nSyncSequenceRef = useRef(0);
+
+  function setMessages(update: SetStateAction<ChatMessage[]>) {
+    const time = singaporeTime();
+    setMessageState((current) => {
+      const next = typeof update === "function" ? update(current) : update;
+      return next.map((message) => message.time ? message : { ...message, time });
+    });
+  }
 
   function contentForBrain(message: ChatMessage) {
     const productOptions = message.products?.map(
@@ -292,11 +311,13 @@ export function ChatDemo() {
 
   function syncHandledTurnWithN8n(message: string) {
     const requestSession = sessionId.current;
+    n8nSyncSequenceRef.current += 1;
+    const syncSequence = n8nSyncSequenceRef.current;
     const history = brainHistory();
     void fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: `${requestSession}-sync-${Date.now()}`, message, history, brain: "n8n" }),
+      body: JSON.stringify({ sessionId: `${requestSession}-sync-${syncSequence}`, message, history, brain: "n8n" }),
       signal: AbortSignal.timeout(8_000),
     }).then((response) => {
       if (!response.ok) {
@@ -305,14 +326,6 @@ export function ChatDemo() {
     }).catch((error) => {
       console.error("[chat] n8n handled-turn sync failed", { message, error });
     });
-  }
-
-  function timeForMessage(messageId: number) {
-    const existing = messageTimes.current.get(messageId);
-    if (existing) return existing;
-    const time = singaporeTime();
-    messageTimes.current.set(messageId, time);
-    return time;
   }
 
   function selectImage(file: File | undefined) {
@@ -417,7 +430,7 @@ export function ChatDemo() {
       finalTranscriptRef.current = "";
       latestTranscriptRef.current = "";
       discardRecordingRef.current = false;
-      recordingStartedAtRef.current = Date.now();
+      recordingElapsedSecondsRef.current = 0;
       recordingActiveRef.current = true;
       setRecordingSeconds(0);
       setVoiceTranscript("");
@@ -431,7 +444,7 @@ export function ChatDemo() {
         clearRecordingResources();
       };
       recorder.onstop = () => {
-        const durationSeconds = Math.max(1, Math.round((Date.now() - recordingStartedAtRef.current) / 1_000));
+        const durationSeconds = Math.max(1, recordingElapsedSecondsRef.current);
         const chunks = [...audioChunksRef.current];
         const mimeType = recorder.mimeType || supportedType || "audio/webm";
         const discard = discardRecordingRef.current;
@@ -465,7 +478,7 @@ export function ChatDemo() {
         const recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
-        recognition.lang = navigator.language || "en-SG";
+        recognition.lang = conversationLanguage === "zh" ? "zh-SG" : navigator.language || "en-SG";
         recognition.onresult = (event) => {
           let interim = "";
           for (let index = event.resultIndex; index < event.results.length; index += 1) {
@@ -487,10 +500,11 @@ export function ChatDemo() {
 
       recorder.start(250);
       recordingTimerRef.current = setInterval(() => {
-        const elapsed = Math.floor((Date.now() - recordingStartedAtRef.current) / 1_000);
+        recordingElapsedSecondsRef.current += 1;
+        const elapsed = recordingElapsedSecondsRef.current;
         setRecordingSeconds(elapsed);
         if (elapsed >= 60) stopVoiceRecording();
-      }, 250);
+      }, 1_000);
     } catch (error) {
       clearRecordingResources();
       const blocked = error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError");
@@ -526,7 +540,9 @@ export function ChatDemo() {
       console.error("[voice] multilingual transcription failed", error);
       transcript = browserTranscript;
       if (!transcript) {
-        setVoiceError("I couldn’t understand that voice message. Please try recording it again.");
+        setVoiceError(conversationLanguage === "zh"
+          ? "这段语音没有成功转成文字。录音仍然保留，您可以重试，或在下方输入商品名称。"
+          : "That voice note wasn’t transcribed. The recording is still here, so you can retry or type the product name below.");
         setTranscribingVoice(false);
         return;
       }
@@ -660,7 +676,27 @@ export function ChatDemo() {
       return;
     }
 
-    const confirmedQuantity = requestedQuantity(clean);
+    const parsedQuantity = parseRequestedQuantity(clean);
+    const confirmedQuantity = parsedQuantity.kind === "valid" ? parsedQuantity.value : null;
+    if (parsedQuantity.kind === "invalid") {
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean, voiceNote },
+        {
+          id: nextId.current++, role: "assistant",
+          text: replyLanguage === "zh"
+            ? parsedQuantity.reason === "fractional"
+              ? "请输入整数数量，例如 2 或 3。"
+              : "请输入 1 到 100,000 之间的数量。"
+            : parsedQuantity.reason === "fractional"
+              ? "Please use a whole-number quantity, for example 2 or 3."
+              : "Please enter a quantity from 1 to 100,000.",
+          selectedProduct: confirmedProduct ?? pendingProduct ?? undefined,
+        },
+      ]);
+      setQuery("");
+      setSuggestions(confirmedProduct || pendingProduct ? ["1", "6", "12", "24"] : []);
+      return;
+    }
     if (pendingQuote && confirmedProduct && confirmedQuantity !== null) {
       syncHandledTurnWithN8n(clean);
       setPendingQuote(null);
@@ -689,9 +725,8 @@ export function ChatDemo() {
     }
 
     const canSelectDisplayedProduct = stage !== "quantity" && !pendingQuote && !pendingProduct;
-    const requestedIndex = canSelectDisplayedProduct
-      ? requestedProductIndex(clean, lastProducts.length)
-        ?? (referencesSingleDisplayedProduct(clean, lastProducts.length) ? 0 : null)
+    const requestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean)
+      ? requestedDisplayedProductIndex(clean, lastProducts)
       : null;
     if (!pendingProduct && requestedIndex !== null) {
       const product = lastProducts[requestedIndex];
@@ -883,6 +918,7 @@ export function ChatDemo() {
             stage,
             activeProduct: confirmedProduct ?? pendingProduct,
             quantity: pendingQuantity,
+            displayedProducts: lastProducts.slice(0, 5),
           },
           ...(attachedImage ? { image: attachedImage } : {}),
         }),
@@ -919,9 +955,7 @@ export function ChatDemo() {
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
       const timedOut = reason instanceof DOMException && reason.name === "TimeoutError";
-      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: replyLanguage === "zh"
-        ? timedOut ? "抱歉，查询时间太久了。请再告诉我商品名称，我会重新查询。" : "抱歉，刚才无法回复。请再试一次。"
-        : timedOut ? "Sorry, that took too long. Send the item name or code and I’ll try again." : reason instanceof Error ? reason.message : "Sorry, I couldn’t answer that just now. Please try again." }]);
+      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: safeChatFailureMessage(replyLanguage, timedOut) }]);
     } finally {
       if (sessionId.current !== requestSession) return;
       loadingRef.current = false;
@@ -1028,14 +1062,14 @@ export function ChatDemo() {
             : "The available quantity could not be confirmed. Would you like another option, or should Sia Huat staff verify this item?", selectedProduct: liveProduct }]);
         setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "交由人员确认"] : ["Choose another item", "Continue for staff review"]);
       }
-    } catch (error) {
+    } catch {
       if (quantity !== null) {
         setStage("clarify");
         setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `我已记录您需要 ${quantity} ${product.uom_id}，但无法确认库存和价格。要交由 Sia Huat 人员确认吗？` : `I have your request for ${quantity} ${product.uom_id}, but the available quantity and price could not be confirmed. Would you like Sia Huat staff to verify it?`, selectedProduct: product }]);
         setSuggestions(conversationLanguage === "zh" ? ["交由人员确认", "选择其他商品"] : ["Continue for staff review", "Choose another item"]);
       } else {
         setStage("quantity");
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时无法确认库存。\n\n您需要多少 ${product.uom_id}？销售人员会进一步确认。` : `${error instanceof Error ? error.message : "Stock could not be confirmed."}\n\nHow many ${product.uom_id} do you need for staff verification?`, selectedProduct: product }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时无法确认库存。\n\n您需要多少 ${product.uom_id}？销售人员会进一步确认。` : `I couldn’t confirm the live stock just now, but I still have the selected item.\n\nHow many ${product.uom_id} do you need for staff verification?`, selectedProduct: product }]);
         setSuggestions(["1", "6", "12", "24"]);
       }
     } finally {
@@ -1063,7 +1097,6 @@ export function ChatDemo() {
     });
     discardVoiceDraft();
     nextId.current = 2;
-    messageTimes.current.clear();
     sessionId.current = crypto.randomUUID();
     loadingRef.current = false;
     queuedMessages.current = [];
@@ -1162,7 +1195,7 @@ export function ChatDemo() {
           productText,
         ].filter(Boolean).join("\n\n"));
         const lines = pdf.splitTextToSize(body, textWidth) as string[];
-        const label = `${message.role === "user" ? "You (customer)" : "Claire (assistant)"} - ${timeForMessage(message.id)}`;
+        const label = `${message.role === "user" ? "You (customer)" : "Claire (assistant)"} - ${message.time ?? ""}`;
         let lineIndex = 0;
 
         while (lineIndex < lines.length) {
@@ -1223,13 +1256,13 @@ export function ChatDemo() {
     <div className="chat-phone flex h-[70dvh] min-h-[540px] min-w-0 flex-col overflow-hidden rounded-[2rem] bg-[#f8f5ee] sm:rounded-[2.55rem] lg:h-[min(720px,calc(100dvh-3rem))] lg:min-h-[560px]">
       <header className="chat-screen-header flex min-w-0 items-center gap-2 bg-[#176853] px-3 py-4 text-white sm:gap-3 sm:px-5 sm:py-5"><div className="grid size-10 shrink-0 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f] sm:size-11">C</div><div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold sm:text-base">Claire · Sia Huat</h2><p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#5be08f]" /> online</p></div><div className="print-hide flex shrink-0 items-center gap-0.5 sm:gap-1"><Button aria-label="Download conversation PDF" title="Download conversation PDF" disabled={exportingPdf} variant="ghost" className="h-9 rounded-full px-2 text-white hover:bg-white/10 hover:text-white sm:px-2.5" onClick={() => void saveConversationAsPdf()}>{exportingPdf ? <LoaderCircle className="size-4 animate-spin" /> : <FileDown className="size-4" />}<span className="hidden text-[11px] font-semibold min-[350px]:inline">PDF</span></Button><Button aria-label="Reset conversation" size="icon" variant="ghost" className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button></div></header>
       <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
-        {messages.map((message) => <div key={`${sessionId.current}-${message.id}`} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
+        {messages.map((message) => <div key={message.id} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
           {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <WhatsAppText text={message.text} />}
           {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product, index) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" onClick={() => chooseProduct(product, String(index + 1))} className="block w-full text-left"><p className="break-words font-semibold leading-5"><span className="mr-1 text-[#176853]">{index + 1}.</span>{product.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product, conversationLanguage)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}<p className="pt-1 text-xs font-medium text-[#176853]">{productOptionPrompt(message.products.length, conversationLanguage)}</p></div>}
           {message.selectedProduct && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
            {message.needsConfirmation && pendingProduct?.stock_id === message.selectedProduct?.stock_id && <div className="mt-3 grid grid-cols-2 gap-2"><Button type="button" disabled={checkingStock} onClick={() => void confirmProduct()} className="rounded-full bg-[#176853] hover:bg-[#125441]">{checkingStock ? <LoaderCircle className="size-4 animate-spin" /> : conversationLanguage === "zh" ? "是的，就是这个" : "Yes, this is it"}</Button><Button type="button" disabled={checkingStock} onClick={() => rejectProduct()} variant="outline" className="rounded-full border-[#176853]/25 text-[#176853]">{conversationLanguage === "zh" ? "不是，查看其他" : "No, show others"}</Button></div>}
-          <MessageTimestamp role={message.role} time={timeForMessage(message.id)} />
+          <MessageTimestamp role={message.role} time={message.time ?? ""} />
         </div>)}
         {loading && <div aria-label="Sia Huat is typing" aria-live="polite" className="flex w-fit items-center gap-1.5 rounded-2xl bg-white px-4 py-3 shadow-sm"><i className="typing-dot" /><i className="typing-dot" /><i className="typing-dot" /></div>}
         {!loading && suggestions.length > 0 && <div className="chat-suggestions flex flex-wrap gap-2">{suggestions.map((item) => <button key={item} onClick={() => void submit(item)} className="rounded-full border border-[#176853]/20 bg-white/90 px-3 py-2 text-xs font-medium text-[#176853] hover:bg-white">{item}</button>)}</div>}

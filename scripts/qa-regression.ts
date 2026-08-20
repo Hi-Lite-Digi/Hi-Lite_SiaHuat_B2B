@@ -12,7 +12,7 @@ type ReplyProduct = {
   stock_status?: "in_stock" | "out_of_stock" | "unknown" | null;
   available_quantity?: number | null;
 };
-type Reply = { message: string; stage: string; products?: ReplyProduct[]; suggestions?: string[] };
+type Reply = { message: string; stage: string; products?: ReplyProduct[]; selectedProduct?: ReplyProduct | null; suggestions?: string[] };
 type Result = { id: string; area: string; prompt: string; pass: boolean; reason: string; durationMs: number; response: string; products: string[] };
 
 const results: Result[] = [];
@@ -68,6 +68,32 @@ async function checkAlternatives(
   });
 }
 
+async function checkMalformedJson() {
+  const started = performance.now();
+  const response = await fetch(`${qaBaseUrl}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{not valid json}",
+  });
+  const durationMs = Math.round(performance.now() - started);
+  const body = await response.json().catch(() => ({})) as { error?: string };
+  const failure = response.status !== 400
+    ? `Expected HTTP 400, received ${response.status}`
+    : !/valid json/i.test(body.error ?? "")
+      ? `Expected a readable JSON error, received: ${body.error ?? "blank body"}`
+      : null;
+  results.push({
+    id: "API-001",
+    area: "Request validation",
+    prompt: "Malformed JSON request body",
+    pass: !failure,
+    reason: failure ?? "Matched expected behaviour",
+    durationMs,
+    response: body.error ?? "",
+    products: [],
+  });
+}
+
 const noProducts = (reply: Reply) => (reply.products?.length ?? 0) === 0 ? null : `Expected no products, received ${reply.products?.length}`;
 const includes = (...terms: string[]) => (reply: Reply) => terms.every((term) => reply.message.toLowerCase().includes(term.toLowerCase())) ? null : `Expected response to include: ${terms.join(", ")}`;
 const avoidsSkuPromotion = (reply: Reply) => {
@@ -81,6 +107,9 @@ const avoidsRoboticVoice = (reply: Reply) => {
   if (/based on (?:your|the) request|please be advised|it is important to note|live-confirmed stock|I checked live stock before showing/i.test(reply.message)) return "Reply used formal AI-style filler";
   return null;
 };
+const avoidsOperationalLeak = (reply: Reply) => /\b(?:load failed|fetch (?:is )?aborted|failed to fetch|aborterror|network request failed)\b/i.test(reply.message)
+  ? "Customer reply leaked an internal transport error"
+  : null;
 
 await check("CAT-001", "Catalogue scope & latency", "What do you sell?", (reply) =>
   noProducts(reply)
@@ -356,6 +385,101 @@ await check("CTX-011", "Context & product refinement", "no preference", (reply) 
   { role: "user", content: "I want 20L" },
   { role: "assistant", content: "Do you prefer stainless steel, aluminium, or no preference?" },
 ], 15_000);
+
+await check("CTX-012", "Displayed-option memory", "give me the one with the Forged Premium Handle", (reply) => {
+  if (reply.selectedProduct?.stock_id !== "1461F12") {
+    return `Expected the displayed 15cm forged-handle knife (1461F12), got ${reply.selectedProduct?.stock_id ?? "no selected product"}`;
+  }
+  return reply.selectedProduct.name.includes("15cm")
+    ? null
+    : `Expected the displayed 15cm option, got ${reply.selectedProduct.name}`;
+}, [], 5_000, {
+  stage: "clarify",
+  quantity: null,
+  activeProduct: null,
+  displayedProducts: [
+    {
+      stock_id: "1461F12",
+      name: "Atlantic Chef Chef Knife 15cm With Forged Premium Handle",
+      status: "Active",
+      list_price: 71.47,
+      uom_id: "PC",
+      stock_status: "in_stock",
+    },
+    {
+      stock_id: "8321T12-R",
+      name: "Atlantic Chef Chef Knife 15cm Red Handle",
+      status: "Active",
+      list_price: 37.52,
+      uom_id: "PC",
+      stock_status: "in_stock",
+    },
+  ],
+});
+
+const blenderHistory: HistoryItem[] = [
+  { role: "user", content: "hi got blender" },
+  { role: "assistant", content: "Are you looking for a commercial blender or a home-use blender?" },
+  { role: "user", content: "commercial ones" },
+  { role: "assistant", content: "What will you mainly blend?" },
+  { role: "user", content: "I run a juice shop with 8 outlets" },
+  { role: "assistant", content: "About how many drinks per outlet each day?" },
+];
+await check("PDF-BLEND-001", "PDF regression: blender context", "maybe about 200", (reply) => {
+  const products = reply.products ?? [];
+  return avoidsOperationalLeak(reply)
+    ?? (/missed that|what are you looking for/i.test(reply.message) ? "Lost the commercial blender context" : null)
+    ?? (products.length === 0 ? "Expected commercial blender recommendations" : null)
+    ?? (products.every((product) => /blender/i.test(product.name)) ? null : `Returned unrelated products: ${products.map((product) => product.name).join("; ")}`);
+}, blenderHistory, 20_000);
+await check("PDF-BLEND-002", "PDF regression: budget is not a code", "Got something cheaper, below $1000?", (reply) => {
+  const products = reply.products ?? [];
+  return avoidsOperationalLeak(reply)
+    ?? (products.some((product) => product.stock_id === "1000" || /glove/i.test(product.name)) ? "Budget 1000 was treated as an item code" : null)
+    ?? (products.every((product) => /blender/i.test(product.name) && Number(product.list_price) <= 1000)
+      ? null
+      : "Expected only blender options at or below $1000")
+    ?? (products.length === 0 && !/none|couldn.t|no matching|at or below/i.test(reply.message)
+      ? "When no blender meets the budget, the reply must say so clearly"
+      : null);
+}, blenderHistory, 20_000);
+
+await check("PDF-STRAIN-001", "PDF regression: strainer refinement memory", "Handheld skimmer (fine mesh)", (reply) => {
+  const products = reply.products ?? [];
+  return avoidsOperationalLeak(reply)
+    ?? (/missed that|what are you looking for/i.test(reply.message) ? "Lost the strainer refinements" : null)
+    ?? (products.length === 0 ? "Expected handheld fine-mesh strainer options" : null)
+    ?? (products.every((product) => /strainer|skimmer/i.test(product.name)) ? null : `Returned unrelated products: ${products.map((product) => product.name).join("; ")}`);
+}, [
+  { role: "user", content: "I need a strainer for noodles" },
+  { role: "assistant", content: "Fine mesh or coarse mesh?" },
+  { role: "user", content: "Fine mesh" },
+  { role: "assistant", content: "Handheld skimmer or bowl style?" },
+], 20_000);
+
+await check("PDF-PLATE-001", "PDF regression: fine-dining plate memory", "Restaurant / commercial", (reply) => {
+  const products = reply.products ?? [];
+  return avoidsOperationalLeak(reply)
+    ?? (products.length === 0 ? "Expected commercial plate options" : null)
+    ?? (products.every((product) => /plate|platter/i.test(product.name) && !/induction|heat\s+tamer|machine\s+plate/i.test(product.name))
+      ? null
+      : `Returned unrelated products: ${products.map((product) => product.name).join("; ")}`);
+}, [
+  { role: "user", content: "I need fine dining plates" },
+  { role: "assistant", content: "Are the plates for commercial or home use?" },
+], 20_000);
+
+await check("PDF-PHOTO-001", "PDF regression: product photo follow-up", "Got sample photo?", (reply) =>
+  avoidsOperationalLeak(reply)
+  ?? (/listing link|official photos/i.test(reply.message) ? null : "Must explain how to view catalogue photos without losing context"), [
+  { role: "user", content: "I need a Damascus chef knife" },
+  { role: "assistant", content: "What blade length do you need?" },
+], 5_000);
+
+await check("PDF-SCOPE-001", "PDF regression: unsupported fresh produce", "Never mind, now I want to buy fresh mangoes", (reply) =>
+  avoidsOperationalLeak(reply)
+  ?? noProducts(reply)
+  ?? (/don.t carry|fresh fruit|produce/i.test(reply.message) ? null : "Must reject fresh produce without inventing availability"), [], 5_000);
 const blackPlateHistory: HistoryItem[] = [
   { role: "user", content: "I need a black plate" },
   { role: "assistant", content: "Do you need dinner plates or side plates?" },
@@ -393,6 +517,42 @@ await check("STOCK-001", "Stock-qualified catalogue options", "I need 10 coffee 
     ? null
     : "Every displayed grinder must have live-confirmed stock of at least 10";
 }, [], 20_000);
+await check("QTY-001", "Quantity validation", "Give me 20 of this", (reply) => {
+  if ((reply.products?.length ?? 0) > 0) return "A contextless reference must not return products";
+  if (/couldn.t confirm.*available|smaller quantity/i.test(reply.message)) return "Must not claim a stock check without knowing the item";
+  return /which item|item name|which product/i.test(reply.message)
+    ? null
+    : "Must ask which item the customer means";
+}, [], 5_000);
+await check("QTY-002", "Quantity validation", "I want 2.5 chef knives", (reply) =>
+  noProducts(reply) ?? (/whole-number|integer/i.test(reply.message) ? null : "Decimal quantities must be rejected as non-whole numbers"), [], 5_000);
+await check("QTY-003", "Quantity validation", "I want 0 chef knives", (reply) =>
+  noProducts(reply) ?? (/1\s+to\s+100,?000/i.test(reply.message) ? null : "Zero must receive the valid quantity range"), [], 5_000);
+await check("QTY-004", "Quantity validation", "I want 100001 chef knives", (reply) =>
+  noProducts(reply) ?? (/1\s+to\s+100,?000/i.test(reply.message) ? null : "An oversized quantity must receive the valid range"), [], 5_000);
+await check("QTY-005", "Quantity validation", "I want negative 5 chef knives", (reply) =>
+  noProducts(reply) ?? (/1\s+to\s+100,?000/i.test(reply.message) ? null : "A negative quantity must receive the valid range"), [], 5_000);
+await check("QTY-006", "Latest quantity correction", "I want 5 chef knives, actually make it 10", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected chef knives with at least 10 units";
+  if (!products.every((product) => /knife/i.test(product.name))) return "A non-knife product was returned";
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 10)
+    ? null
+    : "The latest corrected quantity (10) must win over the earlier quantity (5)";
+}, [], 20_000);
+await check("PLATE-001", "Strict product relevance", "I need 10 black plates for restaurant use", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected at least one matching black plate with 10 units";
+  const invalid = products.find((product) =>
+    !/\b(?:plate|platter)\b/i.test(product.name)
+    || !/\bblack\b/i.test(product.name)
+    || /\b(?:holder|stand|rack|cover|accessor(?:y|ies))\b/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 10,
+  );
+  return invalid ? `Returned a plate accessory or stock-ineligible item: ${invalid.name}` : null;
+}, [], 20_000);
+await checkMalformedJson();
 await checkAlternatives("STOCK-002", "960.99", 10, (products) => {
   if (products.length === 0) return "Expected relevant alternatives for the low-stock coffee grinder";
   if (!products.every((product) => /grinder/i.test(product.name))) {

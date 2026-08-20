@@ -15,7 +15,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|cutlery|fork|spoon|scoop|plate|bowl|glass|glassware|cup|mug|pan|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|coffee|bean|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|cutlery|fork|spoon|scoop|strainer|skimmer|colander|plate|bowl|glass|glassware|cup|mug|pan|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|blender|blenders|coffee|bean|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -25,6 +25,8 @@ export const productCategories = [
   { pattern: /\b(pot|pots)\b/i, label: "pot" },
   { pattern: /\b(glass|glassware|tumbler)\b/i, label: "glassware" },
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
+  { pattern: /\b(strainer|strainers|skimmer|skimmers|colander|colanders)\b/i, label: "strainer" },
+  { pattern: /\b(blender|blenders|blending machine)\b/i, label: "blender" },
   { pattern: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i, label: "coffee grinder" },
   { pattern: /\bcoffee(?:\s+beans?)?\b(?!\s*grinders?)/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
@@ -81,6 +83,45 @@ export function extractShoeStyle(messages: string[]) {
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
   const customerMessages = [...userHistory, message];
+  const joinedMessages = customerMessages.join(" ");
+
+  if (customerMessages.some((content) => productCategory(content) === "blender")) {
+    const commercial = /\b(commercial|restaurant|juice\s+shop|outlets?|high[ -]?volume|heavy[ -]?duty)\b/i.test(joinedMessages);
+    const useCase = /\b(juice|smoothie|frozen\s+drink|beverage)\b/i.test(joinedMessages)
+      ? "juice smoothie"
+      : null;
+    const budget = [...customerMessages].reverse()
+      .map((content) => content.match(/(?:below|under|less\s+than|up\s+to|budget(?:\s+of)?)\s*\$?\s*(\d+(?:\.\d+)?)/i)?.[1])
+      .find(Boolean);
+    return [commercial ? "commercial blender" : "blender", useCase, budget ? `under $${budget}` : null].filter(Boolean).join(" ");
+  }
+
+  if (customerMessages.some((content) => productCategory(content) === "strainer")) {
+    const handheld = /\b(hand[ -]?held|skimmer)\b/i.test(joinedMessages) ? "handheld" : null;
+    const mesh = /\b(fine[ -]?mesh|fine mesh)\b/i.test(joinedMessages) ? "fine mesh" : null;
+    return [handheld, mesh, "strainer skimmer"].filter(Boolean).join(" ");
+  }
+
+  if (customerMessages.some((content) => productCategory(content) === "tableware")) {
+    if (productCategory(message) === "tableware" && /\b(?:plate|plates|platter|platters)\b/i.test(message)) {
+      return message;
+    }
+    const fineDining = /\b(fine\s+dining)\b/i.test(joinedMessages) ? "fine dining" : null;
+    const commercial = /\b(commercial|restaurant)\b/i.test(joinedMessages) ? "commercial" : null;
+    const colour = joinedMessages.match(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/i)?.[0] ?? null;
+    const size = [...customerMessages].reverse().map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0]).find(Boolean) ?? null;
+    return [fineDining, commercial, colour, size, "plate tableware"].filter(Boolean).join(" ");
+  }
+
+  if (customerMessages.some((content) => productCategory(content) === "knife")) {
+    const damascus = /\bdamascus\b/i.test(joinedMessages) ? "damascus" : null;
+    const chef = /\bchef(?:'s)?\s+knif|chef\s+knives\b/i.test(joinedMessages) ? "chef" : null;
+    const size = [...customerMessages].reverse()
+      .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    return [damascus, chef, "knife", size].filter(Boolean).join(" ");
+  }
+
   if (customerMessages.some((content) => productCategory(content) === "chef pants")) {
     return /\b(?:pants|trousers)\b/i.test(message) ? message : `chef pants ${message}`;
   }
@@ -127,7 +168,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
 
   if (productCategory(message)) return message;
 
-  const isProductRefinement = /\b(?:no\s+preference|any\s+material|red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|small|medium|large|cheap|cheapest|budget)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|pieces?|pcs?)?\b/i.test(message);
+  const isProductRefinement = /\b(?:no\s+preference|any\s+material|red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|small|medium|large|cheap|cheapest|budget|below|under|commercial|restaurant|fine\s+dining|hand[ -]?held|fine[ -]?mesh)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in|pieces?|pcs?)?\b/i.test(message);
   if (!isProductRefinement) return message;
 
   const rememberedCategory = rememberedActiveCategories(userHistory).at(-1);

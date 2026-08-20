@@ -49,6 +49,7 @@ export const conversationContextSchema = z.object({
   stage: chatStageSchema,
   activeProduct: productSchema.nullable().default(null),
   quantity: z.coerce.number().int().positive().max(100_000).nullable().default(null),
+  displayedProducts: z.array(productSchema).max(5).optional(),
 }).optional();
 
 export const chatRequestSchema = z.object({

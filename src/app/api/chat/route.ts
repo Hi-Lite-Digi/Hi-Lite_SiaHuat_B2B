@@ -15,7 +15,7 @@ import {
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
 import { catalogueMessageWithContext } from "@/lib/chat-intent";
-import { requestedQuantity } from "@/lib/chat-turn";
+import { parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
@@ -58,9 +58,19 @@ function chineseSuggestion(suggestion: string) {
 
 function customerReply<T extends { message: string; suggestions?: string[]; products?: Product[]; selectedProduct?: Product | null }>(reply: T, input: Pick<ChatRequest, "message" | "history">): T {
   const useChinese = prefersChinese(input);
+  const operationalFailure = /^(?:load failed|fetch (?:is )?aborted|failed to fetch|network(?: request)? failed|aborterror|timeout(?:error)?|internal server error)\.?$/i.test(reply.message.trim());
+  const rememberedRequest = catalogueMessageWithContext(
+    input.message,
+    input.history.filter((item) => item.role === "user").map((item) => item.content),
+  );
+  const safeMessage = operationalFailure
+    ? useChinese
+      ? `刚才的查询没有完成。我还记得您要找的是 ${rememberedRequest}。请再发送最后一个要求，我会继续。`
+      : `That lookup didn’t finish, but I still have your ${rememberedRequest} request. Send the last detail once more and I’ll continue.`
+    : reply.message;
   return {
     ...reply,
-    message: useChinese ? chineseCustomerMessage(reply) : normalizeClaireMessage(reply.message),
+    message: useChinese ? chineseCustomerMessage({ ...reply, message: safeMessage }) : normalizeClaireMessage(safeMessage),
     ...(reply.suggestions
       ? { suggestions: reply.suggestions
           .filter((suggestion) => !/\bsku\b/i.test(suggestion))
@@ -256,18 +266,24 @@ function productFamily(product: Product) {
 }
 
 function exactCodeCandidates(message: string) {
+  const hasExplicitCodeCue = /\b(?:code|item\s+code|product\s+code|sku)\s*[:#-]?\s*[a-z0-9]/i.test(message);
+  const isStandaloneNumericCode = /^\s*\d{4,}\s*$/.test(message);
   return [...new Set(
     message.toUpperCase().match(/\b(?=[A-Z0-9./-]*\d)[A-Z0-9]+(?:[./-][A-Z0-9]+)*\b/g) ?? [],
   )].filter((candidate) =>
     candidate.length >= 3
     && candidate.length <= 50
-    && !/^\d+(?:\.\d+)?-?(?:CM|MM|IN|INCH)$/.test(candidate),
+    && !/^\d+(?:\.\d+)?-?(?:CM|MM|IN|INCH)$/.test(candidate)
+    && (!/^\d+(?:\.\d+)?$/.test(candidate) || hasExplicitCodeCue || isStandaloneNumericCode)
   ).slice(0, 5);
 }
 
 function isConcreteCatalogueRequest(message: string) {
   return /\b(?:chef|cleaver|boning|paring|bread|yanagi|sashimi|frying|fryng|saucepan|omele+t+e?|grill)\b/i.test(message)
     || /\b(?:spoon|spoons|serving\s+spoon|ladle|ladles|fork|forks|cutlery)\b/i.test(message)
+    || /\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)
+    || /\b(?:strainer|strainers|skimmer|skimmers|colander|colanders)\b/i.test(message)
+    || /\b(?:commercial\s+)?blenders?\b/i.test(message)
     || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
     || /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(message)
     || /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message)
@@ -275,9 +291,34 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:chef\s+)?(?:pants|trousers)\b/i.test(message)
     || /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i.test(message)
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
-    || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i.test(message)
+    || /\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|in)\b/i.test(message)
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
     || exactCodeCandidates(message).length > 0;
+}
+
+function matchesExplicitProductCategory(message: string, product: Product) {
+  const productText = [product.name, product.description, product.category, product.subcategory, product.third_category]
+    .filter(Boolean)
+    .join(" ");
+  if (/\bblenders?\b/i.test(message)) return /\bblenders?\b/i.test(productText);
+  if (/\b(?:strainer|skimmer|colander)s?\b/i.test(message)) return /\b(?:strainer|skimmer|colander)s?\b/i.test(productText);
+  if (/\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)) {
+    return /\b(?:plate|plates|platter|platters)\b/i.test(productText)
+      && !/\b(?:induction\s+plate|heat\s+tamer|machine\s+plate|plate\s+(?:holder|stand|rack|cover)|(?:holder|stand|rack)\s+(?:for\s+)?(?:[\w/-]+\s+){0,4}plates?|plate\s+accessor(?:y|ies))\b/i.test(productText);
+  }
+  return true;
+}
+
+function enforceExplicitProductCategory(reply: ChatReply, message: string): ChatReply {
+  if (isExactCodeRequest(message, reply.products)) return reply;
+  const products = reply.products.filter((product) => matchesExplicitProductCategory(message, product));
+  const selectedProduct = reply.selectedProduct && matchesExplicitProductCategory(message, reply.selectedProduct)
+    ? reply.selectedProduct
+    : null;
+  const customerMessage = products.length > 0 && /^Here are \d+ different\b/i.test(reply.message)
+    ? reply.message.replace(/^Here are \d+ different\b/i, `Here are ${products.length} different`)
+    : reply.message;
+  return { ...reply, message: customerMessage, products, selectedProduct };
 }
 
 function isDirectCatalogueAvailabilityRequest(message: string) {
@@ -652,14 +693,27 @@ async function groundedCatalogueReply(
   if (isStockpotRequest(message)) return groundedStockpotReply(message);
 
   if (!isConcreteCatalogueRequest(message) && !options.authoritative) return null;
-  const products = await searchCatalogue(message, { resultLimit: 30, outputLimit: 20 });
+  const maximumPrice = (() => {
+    const value = message.match(/(?:below|under|less\s+than|up\s+to|budget(?:\s+of)?)\s*\$?\s*(\d+(?:\.\d+)?)/i)?.[1];
+    return value ? Number.parseFloat(value) : null;
+  })();
+  const searchMessage = message
+    .replace(/(?:below|under|less\s+than|up\s+to|budget(?:\s+of)?)\s*\$?\s*\d+(?:\.\d+)?/gi, " ")
+    .replace(/\b\d+\s+(?:outlets?|drinks?(?:\s+per\s+(?:day|hour))?)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const searchedProducts = await searchCatalogue(searchMessage || message, { resultLimit: 30, outputLimit: 20 });
+  const products = searchedProducts.filter((product) => matchesExplicitProductCategory(message, product));
   const relevantProducts = options.authoritative
     ? products.filter((product) => matchesDirectCatalogueRequest(message, product))
     : products;
+  const priceEligibleProducts = maximumPrice === null
+    ? relevantProducts
+    : relevantProducts.filter((product) => Number(product.list_price) <= maximumPrice);
   const minimumQuantity = requestedQuantity(message);
   const quantityEligibleProducts = minimumQuantity === null
-    ? relevantProducts
-    : relevantProducts.filter((product) =>
+    ? priceEligibleProducts
+    : priceEligibleProducts.filter((product) =>
         product.stock_status === "in_stock"
         && typeof product.available_quantity === "number"
         && product.available_quantity >= minimumQuantity,
@@ -675,6 +729,15 @@ async function groundedCatalogueReply(
         products: [],
         selectedProduct: null,
         suggestions: ["Try a smaller quantity", "Choose another item"],
+      };
+    }
+    if (maximumPrice !== null && relevantProducts.length > 0) {
+      return {
+        message: `I found matching items, but none are listed at or below $${maximumPrice.toFixed(2)}. Would you like the closest-priced options instead?`,
+        stage: "clarify",
+        products: [],
+        selectedProduct: null,
+        suggestions: ["Show closest-priced options", "Change budget"],
       };
     }
     return options.authoritative ? unavailableCatalogueReply(message) : null;
@@ -773,6 +836,35 @@ function meetsRequestedQuantity(product: Product, quantity: number | null) {
   return product.stock_status === "in_stock"
     && typeof product.available_quantity === "number"
     && product.available_quantity >= quantity;
+}
+
+function matchesRequestedDimensions(message: string, product: Product) {
+  const requested = message.match(/\b(\d+(?:\.\d+)?)[\s-]*(cm|mm|inch|inches|in)\b/i);
+  if (!requested) return true;
+  const requestedValue = Number.parseFloat(requested[1]);
+  const requestedCm = /^mm$/i.test(requested[2])
+    ? requestedValue / 10
+    : /^(?:inch|inches|in)$/i.test(requested[2])
+      ? requestedValue * 2.54
+      : requestedValue;
+  const productText = [product.name, product.size, product.dimensions, product.description].filter(Boolean).join(" ");
+  const measurements = [...productText.matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|mm|inch|inches|in|\")/gi)]
+    .map((match) => {
+      const value = Number.parseFloat(match[1]);
+      if (/^mm$/i.test(match[2])) return value / 10;
+      if (/^(?:inch|inches|in|")$/i.test(match[2])) return value * 2.54;
+      return value;
+    });
+  return measurements.some((measurement) => Math.abs(measurement - requestedCm) <= 1.1);
+}
+
+function enforceRequestedDimensions(reply: ChatReply, message: string): ChatReply {
+  if (!/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(message)) return reply;
+  const products = reply.products.filter((product) => matchesRequestedDimensions(message, product));
+  const selectedProduct = reply.selectedProduct && matchesRequestedDimensions(message, reply.selectedProduct)
+    ? reply.selectedProduct
+    : null;
+  return products.length > 0 || selectedProduct ? { ...reply, products, selectedProduct } : reply;
 }
 
 function enforceRequestedQuantityOptions(reply: ChatReply, message: string): ChatReply {
@@ -878,17 +970,19 @@ async function addAvailableAlternatives(reply: ChatReply, message: string): Prom
   const existingAvailable = reply.products.filter(
       (product) => product.stock_id !== unavailable.stock_id
       && meetsRequestedQuantity(product, minimumQuantity)
+      && matchesRequestedDimensions(message, product)
       && isSameProductType(unavailable, product),
   );
   if (existingAvailable.length >= 3) return reply;
 
   const candidates = new Map<string, Product>();
-  for (const term of alternativeSearchTerms(unavailable)) {
+  for (const term of [message, ...alternativeSearchTerms(unavailable)]) {
     try {
       const results = await searchCatalogue(term);
       for (const product of results) {
         if (product.stock_id !== unavailable.stock_id && isSameProductType(unavailable, product)) {
           if (!meetsRequestedQuantity(product, minimumQuantity)) continue;
+          if (!matchesRequestedDimensions(message, product)) continue;
           candidates.set(product.stock_id, product);
         }
       }
@@ -908,6 +1002,7 @@ async function addAvailableAlternatives(reply: ChatReply, message: string): Prom
     enriched.products.filter(
       (product) => product.stock_id !== unavailable.stock_id
         && meetsRequestedQuantity(product, minimumQuantity)
+        && matchesRequestedDimensions(message, product)
         && isSameProductType(unavailable, product),
     ),
   );
@@ -1009,10 +1104,17 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
     };
   }
 
+  const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const rememberedRequest = catalogueMessageWithContext(input.message, userHistory);
+  const hasRememberedProduct = rememberedRequest.toLowerCase() !== input.message.trim().toLowerCase()
+    || /\b(?:knife|blender|strainer|skimmer|plate|tableware|pan|pot|glass|shoe|pants|grinder|dispenser)\b/i.test(rememberedRequest);
+
   return {
-    message: isCatalogueRequest(input.message)
-      ? "Sorry, I couldn’t pull that up. What item or brand are you looking for? I’ll try another way."
-      : "Sorry, I missed that. What are you looking for?",
+    message: hasRememberedProduct
+      ? `I still have your ${rememberedRequest} request. I couldn’t complete that lookup just now, so please send the last detail once more and I’ll continue from there.`
+      : isCatalogueRequest(input.message)
+        ? "I couldn’t complete that product lookup just now. Please send the item name once more and I’ll retry."
+        : "I missed that. What product are you looking for?",
     stage: "clarify",
     products: [],
     selectedProduct: null,
@@ -1022,7 +1124,11 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
 
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
   const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
-  const catalogueMessage = catalogueMessageWithContext(input.message, userHistory);
+  const rememberedCatalogueMessage = catalogueMessageWithContext(input.message, userHistory);
+  const originalQuantity = requestedQuantity(input.message);
+  const catalogueMessage = originalQuantity !== null && requestedQuantity(rememberedCatalogueMessage) === null
+    ? `${rememberedCatalogueMessage} ${originalQuantity} units`
+    : rememberedCatalogueMessage;
   let n8nError: unknown = null;
   const workflowMessage = prefersChinese(input)
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
@@ -1061,7 +1167,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       });
     }
     const prioritizedReply = await prioritizeRequestedUseCase(authoritativeGroundedReply, catalogueMessage);
-    const liveReply = await addLiveCatalogueState(prioritizedReply);
+    const dimensionReply = enforceRequestedDimensions(prioritizedReply, catalogueMessage);
+    const liveReply = await addLiveCatalogueState(dimensionReply);
     return deduplicateReplyProducts(
       enforceLiveCheckoutGate(explainUnavailableProducts(
         enforceRequestedQuantityOptions(liveReply, catalogueMessage),
@@ -1100,7 +1207,13 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       : exactReply.stage,
   };
   const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, catalogueMessage);
-  const diverseReply = await addDiverseProductOptions(prioritizedReply, catalogueMessage);
+  const diverseReply = enforceRequestedDimensions(
+    enforceExplicitProductCategory(
+      await addDiverseProductOptions(prioritizedReply, catalogueMessage),
+      catalogueMessage,
+    ),
+    catalogueMessage,
+  );
   const liveReply = await addLiveCatalogueState(diverseReply);
   const alternativesReply = await addAvailableAlternatives(liveReply, catalogueMessage);
   const quantityReadyReply = enforceRequestedQuantityOptions(alternativesReply, catalogueMessage);
@@ -1111,6 +1224,53 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
 
 async function processChat(input: ChatRequest) {
   const startedAt = performance.now();
+  const quantity = parseRequestedQuantity(input.message);
+  if (quantity.kind === "invalid") {
+    const reply: ChatReply = {
+      message: quantity.reason === "fractional"
+        ? "Please use a whole-number quantity, for example 2 or 3."
+        : "Please enter a quantity from 1 to 100,000.",
+      stage: input.context?.activeProduct ? "quantity" : "clarify",
+      products: [],
+      selectedProduct: input.context?.activeProduct ?? null,
+      suggestions: input.context?.activeProduct ? ["1", "6", "12", "24"] : [],
+    };
+    return NextResponse.json(customerReply(reply, input));
+  }
+
+  const displayedProducts = input.context?.displayedProducts ?? [];
+  const displayedProductIndex = requestsAnotherOption(input.message)
+    ? null
+    : requestedDisplayedProductIndex(input.message, displayedProducts);
+  if (displayedProductIndex !== null) {
+    const selectedProduct = displayedProducts[displayedProductIndex];
+    const reply: ChatReply = {
+      message: quantity.kind === "valid"
+        ? `Just to confirm—do you want ${quantity.value} ${selectedProduct.uom_id} of ${selectedProduct.name}?`
+        : `Just to confirm, do you want ${selectedProduct.name}?`,
+      stage: "clarify",
+      products: [selectedProduct],
+      selectedProduct,
+      suggestions: [],
+    };
+    return NextResponse.json(customerReply(reply, input));
+  }
+
+  const hasUnresolvedReference = quantity.kind === "valid"
+    && /\b(?:this|that|these|those|them|it)\b/i.test(input.message)
+    && !isConcreteCatalogueRequest(input.message)
+    && !input.context?.activeProduct;
+  if (hasUnresolvedReference) {
+    const reply: ChatReply = {
+      message: `Which item would you like ${quantity.value} of? Send the item name or choose one from the previous options.`,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: ["Find a product", "Browse products"],
+    };
+    return NextResponse.json(customerReply(reply, input));
+  }
+
   const fastReply = input.brain === "n8n" ? null : getFastChatReply(input);
   if (fastReply) {
     console.log("[api/chat] fast deterministic reply", {
@@ -1159,7 +1319,17 @@ async function processChat(input: ChatRequest) {
 }
 
 export async function POST(request: Request) {
-  const input = chatRequestSchema.safeParse(await request.json());
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "The request body must be valid JSON." },
+      { status: 400 },
+    );
+  }
+
+  const input = chatRequestSchema.safeParse(body);
 
   if (!input.success) {
     return NextResponse.json(

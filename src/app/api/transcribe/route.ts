@@ -8,11 +8,33 @@ const ALLOWED_AUDIO_TYPES = new Set([
   "audio/x-wav",
 ]);
 
-function readTranscript(value: unknown) {
-  if (!value || typeof value !== "object") return "";
+function readTranscript(value: unknown, depth = 0): string {
+  if (depth > 5 || value === null || value === undefined) return "";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (parsed !== trimmed) return readTranscript(parsed, depth + 1) || trimmed;
+    } catch {
+      // Plain-text webhook responses are valid transcripts too.
+    }
+    return trimmed;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const transcript = readTranscript(item, depth + 1);
+      if (transcript) return transcript;
+    }
+    return "";
+  }
+  if (typeof value !== "object") return "";
   const record = value as Record<string, unknown>;
-  const transcript = record.transcript ?? record.text;
-  return typeof transcript === "string" ? transcript.trim() : "";
+  for (const key of ["transcript", "text", "output", "result", "data", "message", "content"]) {
+    const transcript = readTranscript(record[key], depth + 1);
+    if (transcript) return transcript;
+  }
+  return "";
 }
 
 export async function POST(request: Request) {
@@ -44,6 +66,7 @@ export async function POST(request: Request) {
     const outgoing = new FormData();
     outgoing.append("data", audio, audio.name || "voice-note.webm");
     outgoing.append("sessionId", sessionId);
+    outgoing.append("language", "auto");
 
     console.log("[api/transcribe] sending voice note to n8n", {
       bytes: audio.size,
@@ -59,7 +82,9 @@ export async function POST(request: Request) {
       cache: "no-store",
     });
 
-    const body = await response.json().catch(() => null);
+    const responseText = await response.text();
+    let body: unknown = responseText;
+    try { body = JSON.parse(responseText) as unknown; } catch { /* Plain text is supported. */ }
     if (!response.ok) {
       console.error("[api/transcribe] n8n rejected voice note", { status: response.status });
       return Response.json({ error: "VOICE_TRANSCRIPTION_FAILED" }, { status: 502 });

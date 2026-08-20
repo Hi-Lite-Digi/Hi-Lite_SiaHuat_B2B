@@ -58,12 +58,16 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   const asksClaireForProductPhoto = /\b(can|could|will|would)\s+(?:you|u)\s+(?:please\s+)?(?:send|show|share|post)\b.{0,40}\b(pic|photo|image|picture)s?\b/i.test(message)
-    || /\b(pic|photo|image|picture)s?\b.{0,30}\b(send|show|share|post)\b/i.test(message);
+    || /\b(pic|photo|image|picture)s?\b.{0,30}\b(send|show|share|post)\b/i.test(message)
+    || /\b(?:got|have|show|share|see|view)\b.{0,25}\b(?:sample\s+)?(?:pic|photo|image|picture)s?\b/i.test(message)
+    || /\b(?:sample\s+)?(?:pic|photo|image|picture)s?\b/i.test(message);
 
   if (asksClaireForProductPhoto) {
     return reply(
-      "I can’t send product photos from this chat yet, sorry. If you send me a photo or product name, I can still help check the item.",
-      ["Send a photo", "Enter product name", "Add a brand"],
+      activeTask
+        ? `I can’t send product photos directly in this chat yet. The product cards include a Sia Huat listing link with the official photos. I still have ${activeTask}; choose an option and open its link.`
+        : "I can’t send product photos directly in this chat yet. The product cards include a Sia Huat listing link with the official photos. Tell me the item first and I’ll find the right listings.",
+      activeTask ? ["Show the options again", "Add a brand"] : ["Enter product name", "Add a brand"],
     );
   }
 
@@ -190,6 +194,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     { pattern: /\b(car parts?|motorcycle parts?|automotive parts?|tyres?|motor oil)\b/, label: "automotive products" },
     { pattern: /\b(jewellery|jewelry|necklaces?|earrings?|bracelets?)\b/, label: "jewellery" },
     { pattern: /\b(cigarettes?|tobacco|vapes?|e-?cigarettes?)\b/, label: "tobacco or vaping products" },
+    { pattern: /\b(?:mango(?:es)?|oranges?|apples?|fresh\s+fruit|fresh\s+produce)\b/, label: "fresh fruit or produce" },
   ].filter((family) => family.pattern.test(simple));
 
   if (unsupportedProductFamilies.length > 0) {
