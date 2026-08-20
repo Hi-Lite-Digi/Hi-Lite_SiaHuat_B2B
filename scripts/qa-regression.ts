@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 import type { ConversationContext } from "../src/lib/chat-contract";
+import { asksForRecommendation } from "../src/lib/chat-turn";
 
 type HistoryItem = { role: "user" | "assistant"; content: string };
 type ReplyProduct = {
@@ -117,6 +118,23 @@ const contextProducts = (products: ReplyProduct[]) => products.map((product) => 
   status: product.status ?? "Active",
   source_url: product.source_url ?? `https://store.siahuat.com/search?_text=${encodeURIComponent(product.stock_id)}`,
 }));
+
+for (const [id, prompt] of [
+  ["INTENT-REC-001", "Recommend one for me"],
+  ["INTENT-REC-002", "Which one would you choose"],
+] as const) {
+  const pass = asksForRecommendation(prompt);
+  results.push({
+    id,
+    area: "Displayed-product recommendation intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Natural recommendation wording was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
 
 await check("CAT-001", "Catalogue scope & latency", "What do you sell?", (reply) =>
   noProducts(reply)

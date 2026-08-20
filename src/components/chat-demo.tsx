@@ -11,7 +11,7 @@ import type {
   ImageAttachment,
   Product,
 } from "@/lib/chat-contract";
-import { confirmsDisplayedProduct, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
+import { asksForRecommendation, confirmsDisplayedProduct, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 
 type QuoteSummary = {
   item: string;
@@ -164,10 +164,6 @@ function productOptionPrompt(productCount: number, language: ChatLanguage = "en"
   }
   if (options.length < 2) return "Reply with 1 to choose this item.";
   return `Reply with ${options.slice(0, -1).join(", ")} or ${options.at(-1)}.`;
-}
-
-function asksForRecommendation(message: string) {
-  return /^(?:(?:can|could|would) you\s+)?(?:recommend(?: one)?|which (?:one|option) (?:do you |would you )?recommend|pick (?:one|the best one)(?: for me)?)\??$/i.test(message.trim());
 }
 
 function singaporeTime() {

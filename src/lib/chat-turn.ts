@@ -129,6 +129,10 @@ export function requestsAnotherOption(message: string) {
     || /(?:选择|查看|显示|找)(?:另一个|其他|别的)(?:商品|产品|选项)?/u.test(normalized);
 }
 
+export function asksForRecommendation(message: string) {
+  return /^(?:(?:can|could|would) you\s+)?(?:recommend(?: one)?(?: for me)?|which (?:one|option) (?:do you |would you )?recommend|which (?:one|option) would you (?:pick|choose)|pick (?:one|the best one)(?: for me)?|choose (?:one|the best one) for me)\??$/i.test(message.trim());
+}
+
 export type QuantityParseResult =
   | { kind: "none" }
   | { kind: "valid"; value: number }
