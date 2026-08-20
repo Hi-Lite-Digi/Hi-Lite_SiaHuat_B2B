@@ -416,6 +416,19 @@ await check("CTX-012", "Displayed-option memory", "give me the one with the Forg
     },
   ],
 });
+await check("CTX-013", "Cutlery refinement memory", "any material is ok", (reply) => {
+  const products = reply.products ?? [];
+  if (/missed that|what product are you looking for|pick an exact catalogue item first/i.test(reply.message)) {
+    return "Must retain the cutlery-set category after a material clarification";
+  }
+  if (products.length === 0) return "Expected cutlery-set options after accepting any material";
+  return products.every((product) => /cutlery set/i.test(product.name))
+    ? null
+    : `Returned a non-cutlery product: ${products.map((product) => product.name).join("; ")}`;
+}, [
+  { role: "user", content: "I want a cutlery set" },
+  { role: "assistant", content: "Do you want stainless steel cutlery sets only, or is any material okay?" },
+], 20_000);
 await check("OOS-001", "Out-of-stock alternatives", "like a cutlery set", (reply) => {
   const products = reply.products ?? [];
   if (!/cutlery set.*\(code:\s*R-52713B81\).*out of stock/i.test(reply.message)) {

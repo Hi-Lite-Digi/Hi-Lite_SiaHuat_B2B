@@ -303,6 +303,7 @@ function matchesExplicitProductCategory(message: string, product: Product) {
     .join(" ");
   if (/\bblenders?\b/i.test(message)) return /\bblenders?\b/i.test(productText);
   if (/\b(?:strainer|skimmer|colander)s?\b/i.test(message)) return /\b(?:strainer|skimmer|colander)s?\b/i.test(productText);
+  if (/\b(?:cutlery|flatware)\s+sets?\b/i.test(message)) return productFamily(product) === "cutlery-set";
   if (/\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)) {
     return /\b(?:plate|plates|platter|platters)\b/i.test(productText)
       && !/\b(?:induction\s+plate|heat\s+tamer|machine\s+plate|plate\s+(?:holder|stand|rack|cover)|(?:holder|stand|rack)\s+(?:for\s+)?(?:[\w/-]+\s+){0,4}plates?|plate\s+accessor(?:y|ies))\b/i.test(productText);

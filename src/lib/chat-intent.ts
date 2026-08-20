@@ -20,6 +20,7 @@ export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b/i, label: "knife" },
+  { pattern: /\b(cutlery|flatware)(?:\s+sets?)?\b/i, label: "cutlery set" },
   { pattern: /\b(pan|pans|skillet)\b/i, label: "pan" },
   { pattern: /\b(stockpot|stockpots|stock\s+pot|stock\s+pots)\b/i, label: "stockpot" },
   { pattern: /\b(pot|pots)\b/i, label: "pot" },
