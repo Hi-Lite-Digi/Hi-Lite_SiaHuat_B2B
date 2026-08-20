@@ -747,13 +747,14 @@ export function ChatDemo() {
 
     if (clean === "Choose another item" || clean === "选择其他商品" || requestsAnotherOption(clean)) {
       syncHandledTurnWithN8n(clean);
-      const currentProduct = confirmedProduct ?? pendingProduct;
-      const excludedStockId = currentProduct?.stock_id;
+      const currentProduct = confirmedProduct ?? pendingProduct ?? lastProducts[0] ?? null;
+      const excludedStockIds = new Set(lastProducts.map((product) => product.stock_id));
+      if (currentProduct) excludedStockIds.add(currentProduct.stock_id);
       const minimumQuantity = pendingQuantity;
       let alternatives = currentProduct
         ? []
         : lastProducts.filter(
-            (product) => product.stock_id !== excludedStockId
+            (product) => !excludedStockIds.has(product.stock_id)
               && product.stock_status === "in_stock"
               && (minimumQuantity === null
                 || (typeof product.available_quantity === "number" && product.available_quantity >= minimumQuantity)),
@@ -779,7 +780,7 @@ export function ChatDemo() {
           if (!response.ok) throw new Error(result.error ?? "Alternative lookup failed.");
           alternatives = [...new Map(
             [...alternatives, ...(result.products ?? [])]
-              .filter((product) => product.stock_id !== excludedStockId)
+              .filter((product) => !excludedStockIds.has(product.stock_id))
               .map((product) => [product.stock_id, product]),
           ).values()].slice(0, 3);
         } catch (error) {

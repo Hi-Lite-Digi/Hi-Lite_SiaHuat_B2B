@@ -510,12 +510,39 @@ await check("PDF-STRAIN-001", "PDF regression: strainer refinement memory", "Han
   return avoidsOperationalLeak(reply)
     ?? (/missed that|what are you looking for/i.test(reply.message) ? "Lost the strainer refinements" : null)
     ?? (products.length === 0 ? "Expected handheld fine-mesh strainer options" : null)
-    ?? (products.every((product) => /strainer|skimmer/i.test(product.name)) ? null : `Returned unrelated products: ${products.map((product) => product.name).join("; ")}`);
+    ?? (products.some((product) => /bar|cocktail|liquor|julep|hawthorne/i.test(product.name)) ? "Returned a bar/cocktail strainer for a noodle-straining request" : null)
+    ?? (products.every((product) => /strainer|skimmer|colander|sieve/i.test(product.name)) ? null : `Returned unrelated products: ${products.map((product) => product.name).join("; ")}`);
 }, [
   { role: "user", content: "I need a strainer for noodles" },
   { role: "assistant", content: "Fine mesh or coarse mesh?" },
   { role: "user", content: "Fine mesh" },
   { role: "assistant", content: "Handheld skimmer or bowl style?" },
+], 20_000);
+
+await check("PDF-STRAIN-002", "Noodle colander relevance", "Colander/strainer", (reply) => {
+  const products = reply.products ?? [];
+  return avoidsOperationalLeak(reply)
+    ?? (/missed that|what are you looking for/i.test(reply.message) ? "Lost the noodle-strainer context" : null)
+    ?? (products.length === 0 ? "Expected food-straining options" : null)
+    ?? (products.some((product) => /bar|cocktail|liquor|julep|hawthorne/i.test(product.name)) ? "Returned a bar/cocktail strainer for draining noodles" : null)
+    ?? (products.every((product) => /strainer|skimmer|colander|sieve/i.test(product.name)) ? null : `Returned unrelated products: ${products.map((product) => product.name).join("; ")}`);
+}, [
+  { role: "user", content: "I need something to drain Maggi mee noodles" },
+  { role: "assistant", content: "For Maggi mee people usually use a small handheld noodle strainer (sieve) or a bowl-shaped colander. Want me to show some options?" },
+], 20_000);
+
+await check("MEM-STRAIN-001", "Assistant clarification memory", "yeah that is fine", (reply) => {
+  const products = reply.products ?? [];
+  return avoidsOperationalLeak(reply)
+    ?? (/missed that|what product are you looking for|what are you looking for/i.test(reply.message) ? "Forgot the accepted noodle-strainer proposal" : null)
+    ?? (products.length === 0 ? "Expected the accepted noodle-strainer search to continue" : null)
+    ?? (products.some((product) => /bar|cocktail|liquor|julep|hawthorne/i.test(product.name)) ? "Returned a bar/cocktail strainer" : null)
+    ?? (products.some((product) => /bamboo/i.test(product.name) && /strainer|skimmer|colander|sieve/i.test(product.name)) ? null : "Expected a bamboo-handled food-strainer option");
+}, [
+  { role: "user", content: "I need something to drain noodles" },
+  { role: "assistant", content: "Do you prefer stainless steel, plastic, or bamboo for the noodle strainer?" },
+  { role: "user", content: "bamboo" },
+  { role: "assistant", content: "I couldn't find a fully bamboo noodle strainer. Is a stainless steel strainer with a bamboo handle acceptable?" },
 ], 20_000);
 
 await check("PDF-PLATE-001", "PDF regression: fine-dining plate memory", "Restaurant / commercial", (reply) => {
@@ -535,6 +562,65 @@ await check("PDF-PHOTO-001", "PDF regression: product photo follow-up", "Got sam
   ?? (/listing link|official photos/i.test(reply.message) ? null : "Must explain how to view catalogue photos without losing context"), [
   { role: "user", content: "I need a Damascus chef knife" },
   { role: "assistant", content: "What blade length do you need?" },
+], 5_000);
+
+const transcriptKnife = {
+  stock_id: "8321T62-R",
+  name: "Atlantic Chef Chef Knife 30cm, Red Handle",
+  status: "Active",
+  list_price: 55.87,
+  uom_id: "PC",
+  source_url: "https://store.siahuat.com/product/8667987047",
+  stock_status: "in_stock" as const,
+  available_quantity: 3,
+};
+const transcriptKnifeHistory: HistoryItem[] = [
+  { role: "user", content: "Hi got knife" },
+  { role: "assistant", content: "Which type of knife do you need and what will you use it for?" },
+  { role: "user", content: "I need a damascus chef knife. 3 pcs" },
+  { role: "assistant", content: `This looks like the closest match:\n${transcriptKnife.name}\ncode: ${transcriptKnife.stock_id}` },
+];
+await check("PDF-KNIFE-001", "PDF regression: mandatory Damascus constraint", "I need a damascus chef knife. 3 pcs", (reply) => {
+  const products = reply.products ?? [];
+  const containsOrdinaryKnife = products.some((product) => !/damascus/i.test(product.name));
+  return containsOrdinaryKnife && !/non-Damascus|couldn.t find.*Damascus/i.test(reply.message)
+    ? "Returned ordinary knives without clearly disclosing that they are not Damascus"
+    : /matching options/i.test(reply.message) && containsOrdinaryKnife
+      ? "Claimed ordinary knives were matching Damascus options"
+      : null;
+}, transcriptKnifeHistory.slice(0, 2), 20_000);
+await check("PDF-KNIFE-002", "PDF regression: explicit Japanese refinement", "Have a japanese made knife?", (reply) => {
+  const products = reply.products ?? [];
+  if (reply.selectedProduct?.stock_id === transcriptKnife.stock_id) return "Silently re-selected the previously displayed Taiwanese knife";
+  if (products.length === 0) return /couldn.t find|don.t carry|out of stock/i.test(reply.message) ? null : "Expected Japanese knife results or an explicit unavailable reply";
+  return products.every((product) => /japan|japanese/i.test(product.name))
+    ? null
+    : `Returned non-Japanese products: ${products.map((product) => product.name).join("; ")}`;
+}, transcriptKnifeHistory, 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: [transcriptKnife],
+});
+await check("PDF-WOK-001", "PDF regression: new product resets stale knife", "Ok nevermind, got a wok? I need 4 woks for zichar", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected wok options";
+  if (!products.every((product) => /wok/i.test(product.name))) return `Returned stale knife products: ${products.map((product) => product.name).join("; ")}`;
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 4)
+    ? null
+    : "Every wok option must have at least 4 PC available";
+}, transcriptKnifeHistory, 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: [transcriptKnife],
+});
+await check("PDF-CANCEL-001", "PDF regression: cancellation ends enquiry", "Cancel", (reply) =>
+  noProducts(reply)
+  ?? (/cancel/i.test(reply.message) ? null : "Cancel must end the active enquiry instead of repeating product cards"), [
+  ...transcriptKnifeHistory,
+  { role: "user", content: "I need 4 woks" },
+  { role: "assistant", content: "Here are three wok options." },
 ], 5_000);
 
 await check("PDF-SCOPE-001", "PDF regression: unsupported fresh produce", "Never mind, now I want to buy fresh mangoes", (reply) =>

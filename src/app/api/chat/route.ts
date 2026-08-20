@@ -14,7 +14,7 @@ import {
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
-import { catalogueMessageWithContext } from "@/lib/chat-intent";
+import { catalogueHistoryWithClarification, catalogueMessageWithContext } from "@/lib/chat-intent";
 import { parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
@@ -61,7 +61,7 @@ function customerReply<T extends { message: string; suggestions?: string[]; prod
   const operationalFailure = /^(?:load failed|fetch (?:is )?aborted|failed to fetch|network(?: request)? failed|aborterror|timeout(?:error)?|internal server error)\.?$/i.test(reply.message.trim());
   const rememberedRequest = catalogueMessageWithContext(
     input.message,
-    input.history.filter((item) => item.role === "user").map((item) => item.content),
+    catalogueHistoryWithClarification(input.message, input.history),
   );
   const safeMessage = operationalFailure
     ? useChinese
@@ -253,6 +253,7 @@ function productFamily(product: Product) {
     { name: "plate", pattern: /\b(?:plate|plates|platter|platters)\b/ },
     { name: "food-pan", pattern: /\b(?:melamine\s+)?gn\s+pan\b|\bgastronorm\s+pan\b|\bfood\s+pan\b/ },
     { name: "cookware-set", pattern: /\bcookware\s+set\b|\bset\b.*\b(?:pan|pot|skillet)s?\b/ },
+    { name: "wok", pattern: /\bwoks?\b/ },
     { name: "pan", pattern: /\b(?:pan|pans|skillet|skillets)\b/ },
     { name: "stockpot", pattern: /\b(?:stockpot|stockpots|stock\s+pots?)\b/ },
     { name: "pot", pattern: /\b(?:pot|pots|stockpot|saucepot)\b/ },
@@ -288,6 +289,7 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:coffee\s+beans?|wine\s+glass(?:es)?|glassware)\b/i.test(message)
     || /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(message)
     || /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message)
+    || /\bwoks?\b/i.test(message)
     || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
     || /\b(?:chef\s+)?(?:pants|trousers)\b/i.test(message)
     || /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i.test(message)
@@ -302,6 +304,12 @@ function matchesExplicitProductCategory(message: string, product: Product) {
     .filter(Boolean)
     .join(" ");
   if (/\bblenders?\b/i.test(message)) return /\bblenders?\b/i.test(productText);
+  if (/\bwoks?\b/i.test(message)) return /\bwoks?\b/i.test(productText);
+  if (/\b(?:noodles?|maggi|food|kitchen|cooking|drain(?:ing)?|colander|sieve)\b/i.test(message)
+    && /\b(?:strainer|skimmer|colander|sieve)\b/i.test(message)) {
+    return /\b(?:strainer|skimmer|colander|sieve)\b/i.test(productText)
+      && !/\b(?:bar|cocktail|liquor|julep|hawthorne)\b/i.test(productText);
+  }
   if (/\b(?:strainer|skimmer|colander)s?\b/i.test(message)) return /\b(?:strainer|skimmer|colander)s?\b/i.test(productText);
   if (/\b(?:cutlery|flatware)\s+sets?\b/i.test(message)) return productFamily(product) === "cutlery-set";
   if (/\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)) {
@@ -436,6 +444,7 @@ const catalogueTokenStopWords = new Set([
   "a", "an", "and", "any", "buy", "can", "carry", "could", "do", "does", "for", "get",
   "guys", "have", "hello", "hey", "hi", "i", "in", "is", "like", "looking", "me", "need",
   "of", "order", "please", "sell", "selling", "some", "stock", "the", "to", "u", "want", "you",
+  "unit", "units", "piece", "pieces", "pc", "pcs", "pair", "pairs", "set", "sets",
 ]);
 
 function catalogueToken(value: string) {
@@ -720,10 +729,37 @@ async function groundedCatalogueReply(
         && typeof product.available_quantity === "number"
         && product.available_quantity >= minimumQuantity,
       );
-  const displayProducts = options.authoritative
-    ? quantityEligibleProducts.slice(0, 3)
-    : diversifyProducts(quantityEligibleProducts);
+  const displayProducts = diversifyProducts(quantityEligibleProducts);
   if (displayProducts.length === 0) {
+    if (/\bdamascus\b/i.test(message)) {
+      const ordinaryChefKnives = (await searchCatalogue("chef knife", { resultLimit: 30, outputLimit: 20 }))
+        .filter((product) => /\bchef(?:'s|s)?\s+knife\b/i.test([
+          product.name,
+          product.description,
+          product.category,
+          product.subcategory,
+          product.third_category,
+        ].filter(Boolean).join(" ")))
+        .filter((product) => minimumQuantity === null || (
+          product.stock_status === "in_stock"
+          && typeof product.available_quantity === "number"
+          && product.available_quantity >= minimumQuantity
+        ))
+        .slice(0, 3);
+      return {
+        message: ordinaryChefKnives.length > 0
+          ? minimumQuantity === null
+            ? "I couldn't find a confirmed Damascus chef knife. These are non-Damascus chef knives we carry instead:"
+            : `I couldn't find a confirmed Damascus chef knife with at least ${minimumQuantity} PC available. These non-Damascus chef knives do meet the quantity:`
+          : minimumQuantity === null
+            ? "I couldn't find a confirmed Damascus chef knife in the catalogue."
+            : `I couldn't find a confirmed Damascus chef knife with at least ${minimumQuantity} PC available.`,
+        stage: "clarify",
+        products: ordinaryChefKnives,
+        selectedProduct: null,
+        suggestions: ordinaryChefKnives.length > 0 ? [] : ["Try another knife type"],
+      };
+    }
     if (minimumQuantity !== null && relevantProducts.length > 0) {
       return {
         message: `I found matching items, but I couldn't confirm one with at least ${minimumQuantity} units available. Would you like a smaller quantity or another option?`,
@@ -878,10 +914,13 @@ function enforceRequestedQuantityOptions(reply: ChatReply, message: string): Cha
     ? reply.selectedProduct
     : null;
   const uom = products[0]?.uom_id ?? selectedProduct?.uom_id ?? "units";
+  const alreadyDisclosesAlternative = /\bnon-Damascus\b/i.test(reply.message);
   return {
     ...reply,
     message: products.length > 0 || selectedProduct
-      ? `These matching options have at least ${quantity} ${uom} available:`
+      ? alreadyDisclosesAlternative
+        ? reply.message
+        : `These matching options have at least ${quantity} ${uom} available:`
       : `I couldn't confirm a matching item with at least ${quantity} ${uom} available. Would you like a smaller quantity?`,
     stage: "clarify",
     products,
@@ -1113,7 +1152,7 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
     };
   }
 
-  const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const userHistory = catalogueHistoryWithClarification(input.message, input.history);
   const rememberedRequest = catalogueMessageWithContext(input.message, userHistory);
   const hasRememberedProduct = rememberedRequest.toLowerCase() !== input.message.trim().toLowerCase()
     || /\b(?:knife|blender|strainer|skimmer|plate|tableware|pan|pot|glass|shoe|pants|grinder|dispenser)\b/i.test(rememberedRequest);
@@ -1132,7 +1171,7 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
 }
 
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
-  const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const userHistory = catalogueHistoryWithClarification(input.message, input.history);
   const rememberedCatalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   const originalQuantity = requestedQuantity(input.message);
   const catalogueMessage = originalQuantity !== null && requestedQuantity(rememberedCatalogueMessage) === null
@@ -1153,7 +1192,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     const liveReply = await addLiveCatalogueState(pantsSizingReply);
     return deduplicateReplyProducts(explainUnavailableProducts(liveReply));
   }
-  const authoritativeGroundedReply = !input.image && isDirectCatalogueAvailabilityRequest(catalogueMessage)
+  const mustGroundCatalogueAnswer = isDirectCatalogueAvailabilityRequest(input.message)
+    || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
+  const authoritativeGroundedReply = !input.image && mustGroundCatalogueAnswer
     ? await groundedCatalogueReply(catalogueMessage, { authoritative: true }).catch((error) => {
         console.error("[api/chat] authoritative catalogue check failed", { message: catalogueMessage, error });
         return null;

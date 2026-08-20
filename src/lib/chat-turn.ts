@@ -28,6 +28,12 @@ const DISPLAY_REFERENCE_FILLER = new Set([
   "the", "this", "to", "want", "with", "would",
 ]);
 
+const GENERIC_PRODUCT_REFERENCE = new Set([
+  "item", "product", "option", "knife", "knives", "pan", "pans", "wok", "woks",
+  "plate", "plates", "glass", "glassware", "shoe", "shoes", "spoon", "spoons",
+  "fork", "forks", "strainer", "strainers", "pot", "pots", "grinder", "grinders",
+]);
+
 function referenceTokens(value: string) {
   return value
     .toLocaleLowerCase()
@@ -77,7 +83,11 @@ export function requestedDisplayedProductIndex(message: string, products: Produc
   const scores = products.map((product, index) => {
     const text = productTexts[index];
     const tokens = productTokenSets[index];
-    const distinctive = messageTokens.filter((token) => tokens.has(token) && tokenFrequency.get(token) === 1);
+    const distinctive = messageTokens.filter((token) =>
+      tokens.has(token)
+      && tokenFrequency.get(token) === 1
+      && !GENERIC_PRODUCT_REFERENCE.has(token),
+    );
     const allMatches = messageTokens.filter((token) => tokens.has(token));
     const phraseBonus = messageTokens.length >= 2 && text.includes(messageTokens.join(" ")) ? 20 : 0;
     return {
@@ -114,6 +124,7 @@ export function confirmsDisplayedProduct(message: string) {
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
   return /\b(?:another|different|other)\s+(?:item|option|product|one)\b/i.test(normalized)
+    || /^(?:(?:i don'?t know[, ]*)?(?:(?:can|could|would) you\s+)?)?(?:recommend|recommend something|share (?:a )?few|show (?:me )?(?:a )?few|show (?:me )?(?:some )?options?|are there (?:any )?others?|got (?:any )?others?)\??$/i.test(normalized)
     || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized)
     || /(?:选择|查看|显示|找)(?:另一个|其他|别的)(?:商品|产品|选项)?/u.test(normalized);
 }

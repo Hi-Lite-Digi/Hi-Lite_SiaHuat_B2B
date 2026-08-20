@@ -15,12 +15,13 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|damascus|cutlery|fork|spoon|scoop|strainer|skimmer|colander|plate|bowl|glass|glassware|cup|mug|pan|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|blender|blenders|coffee|bean|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|cutlery|fork|spoon|scoop|strainer|skimmer|colander|plate|bowl|glass|glassware|cup|mug|pan|wok|woks|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trolley|blender|blenders|coffee|bean|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|item|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b/i, label: "knife" },
   { pattern: /\b(cutlery|flatware)(?:\s+sets?)?\b/i, label: "cutlery set" },
+  { pattern: /\b(wok|woks)\b/i, label: "wok" },
   { pattern: /\b(pan|pans|skillet)\b/i, label: "pan" },
   { pattern: /\b(stockpot|stockpots|stock\s+pot|stock\s+pots)\b/i, label: "stockpot" },
   { pattern: /\b(pot|pots)\b/i, label: "pot" },
@@ -59,6 +60,34 @@ export function productCategory(message: string) {
   return productCategories.find((category) => category.pattern.test(message))?.label ?? null;
 }
 
+const assistantClarificationPattern = /\?|\b(?:acceptable|would (?:that|this|it) work|do you prefer|which (?:one|type|size|material)|what (?:kind|type|size|material)|is (?:that|this|it) (?:okay|ok|fine))\b/i;
+
+/**
+ * Keeps a short customer follow-up attached to Claire's latest catalogue
+ * clarification. This is intentionally limited to the most recent assistant
+ * question so older product cards cannot introduce unrelated categories.
+ */
+export function catalogueHistoryWithClarification(message: string, history: HistoryItem[]) {
+  const userHistory = history
+    .filter((item) => item.role === "user")
+    .map((item) => item.content);
+  const words = simplifyMessage(message).split(" ").filter(Boolean);
+
+  if (productCategory(message) || isCatalogueRequest(message) || words.length > 16) {
+    return userHistory;
+  }
+
+  const latestClarification = [...history].reverse().find((item) =>
+    item.role === "assistant"
+    && productCategory(item.content) !== null
+    && assistantClarificationPattern.test(item.content),
+  );
+
+  return latestClarification
+    ? [...userHistory, latestClarification.content]
+    : userHistory;
+}
+
 const explicitShoeSizePattern = /\b(?:(?:eu|euro|uk|us)\s*(?:size\s*)?\d{1,2}(?:\.5)?|size\s*\d{1,2}(?:\.5)?)\b/i;
 const shoeStylePattern = /\b(slip[ -]?on|lace[ -]?up|loafer|sneaker|work shoe|safety shoe|show both|both styles?)\b/i;
 
@@ -83,10 +112,17 @@ export function extractShoeStyle(messages: string[]) {
 }
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
-  const customerMessages = [...userHistory, message];
+  const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
+  const currentCategory = productCategory(message);
+  const activeCategory = currentCategory ?? previousCategory;
+  // A plainly stated new product starts a fresh catalogue search. Earlier
+  // constraints from the previous item must not leak into it.
+  const customerMessages = currentCategory && previousCategory && currentCategory !== previousCategory
+    ? [message]
+    : [...userHistory, message];
   const joinedMessages = customerMessages.join(" ");
 
-  if (customerMessages.some((content) => productCategory(content) === "blender")) {
+  if (activeCategory === "blender") {
     const commercial = /\b(commercial|restaurant|juice\s+shop|outlets?|high[ -]?volume|heavy[ -]?duty)\b/i.test(joinedMessages);
     const useCase = /\b(juice|smoothie|frozen\s+drink|beverage)\b/i.test(joinedMessages)
       ? "juice smoothie"
@@ -97,13 +133,22 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return [commercial ? "commercial blender" : "blender", useCase, budget ? `under $${budget}` : null].filter(Boolean).join(" ");
   }
 
-  if (customerMessages.some((content) => productCategory(content) === "strainer")) {
+  if (activeCategory === "strainer") {
     const handheld = /\b(hand[ -]?held|skimmer)\b/i.test(joinedMessages) ? "handheld" : null;
     const mesh = /\b(fine[ -]?mesh|fine mesh)\b/i.test(joinedMessages) ? "fine mesh" : null;
-    return [handheld, mesh, "strainer skimmer"].filter(Boolean).join(" ");
+    const foodDraining = /\b(noodles?|maggi|food|kitchen|cooking|drain(?:ing)?|colander|sieve)\b/i.test(joinedMessages);
+    const materialSource = [...customerMessages].reverse().find((content) =>
+      /\b(?:stainless(?: steel)?|plastic|bamboo)\b/i.test(content),
+    ) ?? "";
+    const materials = [
+      /\bstainless(?: steel)?\b/i.test(materialSource) ? "stainless steel" : null,
+      /\bplastic\b/i.test(materialSource) ? "plastic" : null,
+      /\bbamboo\b/i.test(materialSource) ? "bamboo" : null,
+    ].filter(Boolean).join(" ");
+    return [handheld, mesh, materials || null, foodDraining ? "noodle strainer colander" : "strainer skimmer"].filter(Boolean).join(" ");
   }
 
-  if (customerMessages.some((content) => productCategory(content) === "tableware")) {
+  if (activeCategory === "tableware") {
     if (productCategory(message) === "tableware" && /\b(?:plate|plates|platter|platters)\b/i.test(message)) {
       return message;
     }
@@ -114,25 +159,42 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return [fineDining, commercial, colour, size, "plate tableware"].filter(Boolean).join(" ");
   }
 
-  if (customerMessages.some((content) => productCategory(content) === "knife")) {
-    const damascus = /\bdamascus\b/i.test(joinedMessages) ? "damascus" : null;
+  if (activeCategory === "knife") {
+    const changesOrigin = /\b(?:japan|japanese|taiwan|taiwanese)\b/i.test(message);
+    const damascus = /\bdamascus\b/i.test(message)
+      || (!changesOrigin && /\bdamascus\b/i.test(joinedMessages))
+      ? "damascus"
+      : null;
     const chef = /\bchef(?:'s)?\s+knif|chef\s+knives\b/i.test(joinedMessages) ? "chef" : null;
+    const origin = /\b(?:japan|japanese)\b/i.test(joinedMessages)
+      ? "japanese"
+      : /\b(?:taiwan|taiwanese)\b/i.test(joinedMessages)
+        ? "taiwanese"
+        : null;
     const size = [...customerMessages].reverse()
       .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
       .find(Boolean) ?? null;
-    return [damascus, chef, "knife", size].filter(Boolean).join(" ");
+    return [damascus, origin, chef, "knife", size].filter(Boolean).join(" ");
   }
 
-  if (customerMessages.some((content) => productCategory(content) === "chef pants")) {
+  if (activeCategory === "wok") {
+    const size = [...customerMessages].reverse()
+      .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    const material = joinedMessages.match(/\b(?:carbon\s+steel|stainless\s+steel|cast\s+iron|aluminium|aluminum)\b/i)?.[0] ?? null;
+    return [material, size, "wok"].filter(Boolean).join(" ");
+  }
+
+  if (activeCategory === "chef pants") {
     return /\b(?:pants|trousers)\b/i.test(message) ? message : `chef pants ${message}`;
   }
-  if (customerMessages.some((content) => productCategory(content) === "shoe")) {
+  if (activeCategory === "shoe") {
     const size = extractExplicitShoeSize(customerMessages);
     const style = extractShoeStyle(customerMessages);
     return ["shoe", style ?? "work", size].filter(Boolean).join(" ");
   }
 
-  if (customerMessages.some((content) => productCategory(content) === "water dispenser")) {
+  if (activeCategory === "water dispenser") {
     let capacity: string | null = null;
     let placement: string | null = null;
     let temperature: string | null = null;
@@ -151,7 +213,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return ["water dispenser", capacity, placement, temperature].filter(Boolean).join(" ");
   }
 
-  if (customerMessages.some((content) => productCategory(content) === "coffee grinder")) {
+  if (activeCategory === "coffee grinder") {
     const quantity = customerMessages
       .map((content) => content.match(/\b(\d+)\s*(?:pieces?|pcs?|units?)?\s*(?:coffee\s+)?grinders?\b/i)?.[1])
       .filter(Boolean)
@@ -207,7 +269,10 @@ export function rememberedActiveCategories(messages: string[]) {
       active = [categories.at(-1)!];
     } else if (/\b(add|also|too|as well|both)\b/i.test(content)) {
       active = [...new Set([...active, ...categories])];
-    } else if (active.length === 0) {
+    } else {
+      // A new unqualified product request replaces the prior active search.
+      // The original request is still available from the full history, but it
+      // must not control the next catalogue lookup.
       active = [...new Set(categories)];
     }
   }

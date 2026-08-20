@@ -1,5 +1,6 @@
 import {
   createFastReply as reply,
+  catalogueHistoryWithClarification,
   extractExplicitShoeSize,
   extractShoeStyle,
   isCatalogueRequest,
@@ -19,6 +20,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const message = input.message.trim();
   const simple = simplifyMessage(message);
   const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const hasAssistantClarificationContext = catalogueHistoryWithClarification(message, input.history).length > userHistory.length;
   const hasProductContext = userHistory.slice(-6).some((content) => productWords.test(content));
   const mentionedCategories = userHistory.flatMap((content) => productCategories.filter((category) => category.pattern.test(content)).map((category) => category.label));
   const previousCategories = rememberedActiveCategories(userHistory);
@@ -75,6 +77,15 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply(
       `No problem—I won’t request human follow-up.${activeTask ? ` Your ${activeTask.replace(/^your /, "")} enquiry is still here.` : " What else can I help you find?"}`,
       activeTask ? ["Continue with my enquiry", "Start again"] : ["Find a product", "Browse products"],
+    );
+  }
+
+  if (/^(cancel|cancel this|cancel enquiry|stop|never mind|nevermind|forget it)$/.test(simple)) {
+    return reply(
+      activeTask
+        ? `Okay, I’ve cancelled the ${activeTask.replace(/^your /, "")} enquiry. What else can I help you find?`
+        : "Okay, cancelled. What else can I help you find?",
+      ["Find a product", "Browse products"],
     );
   }
 
@@ -378,6 +389,12 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
+  if (currentCategory && lastCategory && currentCategory !== lastCategory && /\bnever ?mind\b/.test(simple)) {
+    // "Never mind, got a wok?" is an explicit replacement request. Let the
+    // grounded catalogue route answer it instead of asking add-vs-switch.
+    return null;
+  }
+
   if (currentCategory && lastCategory && currentCategory !== lastCategory) {
     const previousDisplay = lastCategory === "glassware" || lastCategory === "tableware" ? lastCategory : `a ${lastCategory}`;
     const currentDisplay = currentCategory === "glassware" || currentCategory === "tableware" ? currentCategory : `a ${currentCategory}`;
@@ -450,7 +467,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply("You’re welcome! What else can I help you find?", ["Find another product", "Browse products"]);
   }
 
-  if (/^(ok|okay|alright|sure|got it|i see|understood|nice|great|sounds good)$/.test(simple)) {
+  if (/^(ok|okay|alright|sure|got it|i see|understood|nice|great|sounds good)$/.test(simple) && !hasAssistantClarificationContext) {
     return reply("Great 👍 Tell me what you’d like to look for next.", ["Find a product", "Browse products"]);
   }
 

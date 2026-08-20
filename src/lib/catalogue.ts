@@ -30,6 +30,13 @@ const productSelect = [
 ].join(",");
 
 const productUseCases = [
+  {
+    key: "food-strainer",
+    label: "food or noodle strainer",
+    search: "noodle strainer colander",
+    request: /\b(?:noodles?|maggi|food|kitchen|cooking|drain(?:ing)?|colander|sieve)\b[\s\S]*\b(?:strainer|skimmer|colander|sieve)\b|\b(?:strainer|skimmer|colander|sieve)\b[\s\S]*\b(?:noodles?|maggi|food|kitchen|cooking|drain(?:ing)?|colander|sieve)\b/i,
+    candidate: /^(?![\s\S]*\b(?:bar|cocktail|liquor|julep|hawthorne)\b)[\s\S]*\b(?:colander|sieve|noodle\s+strainer|mesh\s+(?:skimmer|strainer)|(?:food|kitchen)\s+strainer)\b/i,
+  },
   { key: "omelette-pan", label: "omelette pan", search: "omelette pan", request: /\bomele+t+e?\b/i, candidate: /\bomele+t+e?\b/i },
   { key: "crepe-pan", label: "crepe pan", search: "crepe pan", request: /\bcrepes?\b/i, candidate: /\bcrepes?\b/i },
   { key: "pancake-pan", label: "pancake pan", search: "pancake pan", request: /\bpancakes?\b/i, candidate: /\bpancakes?\b/i },
@@ -134,7 +141,9 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\bboning\b/, candidate: /\bboning\b/ },
     { requested: /\bparing\b/, candidate: /\bparing\b/ },
     { requested: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/, candidate: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/ },
+    { requested: /\bdamascus\b/, candidate: /\bdamascus\b/ },
     { requested: /\bknife\b/, candidate: /\bknife|cleaver\b/ },
+    { requested: /\bwoks?\b/, candidate: /\bwoks?\b/ },
     { requested: /\bpan\b/, candidate: /\bpan\b/ },
     { requested: /\b(?:plate|plates)\b/, candidate: /\b(?:plate|plates|platter|platters)\b/ },
     { requested: /\b(?:bowl|bowls)\b/, candidate: /\b(?:bowl|bowls)\b/ },
@@ -155,6 +164,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
   const requestedUseCase = detectProductUseCase(query);
   if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
   if (/\bknife\b/.test(requested) && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
+  if (/\b(?:japan|japanese)\b/.test(requested) && !/\b(?:japan|japanese)\b/.test(candidate)) return false;
 
   const requestedColour = requested.match(/\b(red|yellow|blue|black|white|green|silver)\b/)?.[1];
   if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`).test(candidate)) return false;
