@@ -124,13 +124,14 @@ export function confirmsDisplayedProduct(message: string) {
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
   return /\b(?:another|different|other)\s+(?:item|option|product|one)\b/i.test(normalized)
+    || /\b(?:show|share|give|find)\b[\s\S]{0,40}\b(?:more|different|other)\b(?:[\s\S]{0,20}\b(?:options?|ones?|items?|products?)\b)?/i.test(normalized)
     || /^(?:(?:i don'?t know[, ]*)?(?:(?:can|could|would) you\s+)?)?(?:recommend|recommend something|share (?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:some )?(?:more )?options?|are there (?:any )?(?:more |other )?(?:options?|items?|products?|ones?)|got (?:any )?(?:more |other )?(?:options?|items?|products?|ones?))\??$/i.test(normalized)
     || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized)
     || /(?:选择|查看|显示|找)(?:另一个|其他|别的)(?:商品|产品|选项)?/u.test(normalized);
 }
 
 export function asksForRecommendation(message: string) {
-  return /^(?:(?:can|could|would) you\s+)?(?:recommend(?: one)?(?: for me)?|which (?:one|option) (?:do you |would you )?recommend|which (?:one|option) would you (?:pick|choose)|pick (?:one|the best one)(?: for me)?|choose (?:one|the best one) for me)\??$/i.test(message.trim());
+  return /^(?:(?:can|could|would) you\s+)?(?:recommend(?: one)?(?: for me)?|which (?:one|option) (?:do you |would you )?recommend|which (?:one|option) would you (?:personally\s+)?(?:pick|choose)|pick (?:one|the best one)(?: for me)?|choose (?:one|the best one) for me)\??$/i.test(message.trim());
 }
 
 export type QuantityParseResult =
@@ -139,6 +140,45 @@ export type QuantityParseResult =
   | { kind: "invalid"; reason: "fractional" | "range" };
 
 type QuantityCandidate = { index: number; raw: string };
+
+const wordQuantities: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+const chineseQuantityDigits: Record<string, number> = {
+  零: 0,
+  〇: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+function parseChineseQuantity(value: string) {
+  if (value === "十") return 10;
+  const [tens, ones] = value.split("十");
+  if (ones !== undefined) {
+    return (tens ? chineseQuantityDigits[tens] ?? 0 : 1) * 10 + (ones ? chineseQuantityDigits[ones] ?? 0 : 0);
+  }
+  return chineseQuantityDigits[value] ?? null;
+}
 
 function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) {
   const candidates: QuantityCandidate[] = [];
@@ -157,7 +197,7 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
   const candidates = [
     ...collectQuantityCandidates(
       message,
-      /\b(?:actually\s+)?(?:make\s+it|change(?:\s+the)?\s+quantity(?:\s+to)?|quantity(?:\s+to)?|change\s+to)\s*(-?\d+(?:\.\d+)?)/gi,
+      /\b(?:actually\s+)?(?:make\s+(?:it|that)|change(?:\s+the)?\s+quantity(?:\s+to)?|quantity(?:\s+to)?|change\s+to)\s*(-?\d+(?:\.\d+)?)/gi,
     ),
     ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?|sets?|pairs?)\w*\b/gi),
     ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:个|件|只|套|把|双|份)/gu),
@@ -167,6 +207,22 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
       /\b(?:get|want|need|order|buy|take|have|give(?:\s+me)?|qty|quantity(?:\s+of)?)(?:\s+(?:no\.?|number))?\s*(-?\d+(?:\.\d+)?)/gi,
     ),
   ];
+
+  for (const match of message.matchAll(/\b(a|one|two|three|four|five|six|half)?\s*dozen\b/gi)) {
+    const amount = match[1]?.toLowerCase();
+    const quantity = amount === "half" ? 6 : amount && amount !== "a" ? (wordQuantities[amount] ?? 1) * 12 : 12;
+    candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
+
+  for (const match of message.matchAll(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:pieces?|pcs?|units?|sets?|pairs?)\b/gi)) {
+    const quantity = wordQuantities[match[1].toLowerCase()];
+    if (quantity) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
+
+  for (const match of message.matchAll(/([零〇一二两三四五六七八九十]+)\s*(?:个|件|只|套|把|双|份)/gu)) {
+    const quantity = parseChineseQuantity(match[1]);
+    if (quantity !== null) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
 
   for (const match of message.matchAll(/\bnegative\s+(\d+(?:\.\d+)?)/gi)) {
     candidates.push({ index: match.index ?? 0, raw: `-${match[1]}` });

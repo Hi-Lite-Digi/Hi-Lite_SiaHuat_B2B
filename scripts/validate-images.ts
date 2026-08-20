@@ -32,7 +32,7 @@ function isSameProductFamily(expectedName: string, candidateName: string) {
   const candidate = candidateName.toLowerCase();
 
   if (/camtainer|beverage dispenser|drink dispenser/.test(expected)) {
-    return /camtainer|beverage dispenser|drink dispenser|tea dispenser/.test(candidate);
+    return /camtainer|beverage dispenser|drink dispenser|tea dispenser|beverage server|drink server/.test(candidate);
   }
   if (/utility box|cambox|storage box/.test(expected)) {
     return /utility box|cambox|storage box|container|storage bin/.test(candidate);

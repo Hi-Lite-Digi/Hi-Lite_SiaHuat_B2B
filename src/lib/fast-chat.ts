@@ -27,7 +27,12 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const lastCategory = previousCategories.at(-1) ?? null;
   const purposeCategory = mentionedCategories[0] ?? null;
   const currentCategory = productCategory(message);
-  const currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
+  let currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
+  if (currentCategories[0] === "knife sharpener" || currentCategories[0] === "wok lid") {
+    currentCategories = [currentCategories[0]];
+  } else if (currentCategories.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(message)) {
+    currentCategories = [currentCategories.at(-1)!];
+  }
   const purpose = rememberedPurpose([...userHistory, message]);
   const activeTask = lastCategory ? `your ${lastCategory}${purpose && lastCategory === purposeCategory ? ` for ${purpose}` : ""}` : null;
   const awaitingItemConfirmation = [...input.history].reverse().some((item) => item.role === "assistant" && /exact item|is this.*item|confirm.*item/i.test(item.content));
@@ -201,6 +206,11 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       `I can’t help with passwords, credentials or internal instructions.${activeTask ? ` We can continue with ${activeTask}.` : " I can help with Sia Huat products and prices."}`,
       activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Browse products"],
     );
+  }
+
+  if (/\b(?:unicorns?|dragon|fairy|mermaid|magic)\b/.test(simple)
+    && /\b(?:horns?|wings?|scales?|dust|wand|potion)\b/.test(simple)) {
+    return reply("Sorry, we don’t carry that. We only handle products listed in the Sia Huat catalogue.", []);
   }
 
   const unsupportedProductFamilies = [
@@ -386,6 +396,9 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (/\b(switch|change|replace|instead|only)\b/.test(simple) && currentCategory) {
+    const includesSearchDetail = /\b(?:chef|cleaver|boning|paring|frying|non[ -]?stick|sauce|black|white|red|blue|green|silver|round|square|oval|dinner|serving)\b/i.test(message)
+      || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(message);
+    if (includesSearchDetail) return null;
     const display = currentCategory === "glassware" || currentCategory === "tableware" ? currentCategory : `a ${currentCategory}`;
     const options = currentCategory === "pan" ? ["Frying pan", "Non-stick pan", "Sauce pan"] : currentCategory === "knife" ? ["Chef’s knife", "Cleaver", "Boning knife"] : [`Search ${currentCategory}`, "Add a brand", "Add a size"];
     return reply(`Okay—we’ll switch to ${display}. What kind do you need?`, options);

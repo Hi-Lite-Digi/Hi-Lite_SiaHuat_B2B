@@ -106,6 +106,8 @@ export function normalizeCatalogueQuery(message: string) {
     .replace(/\bche+f+f?\b/gi, "chef")
     .replace(/\b(?:knfie|kinife|knive)\b/gi, "knife")
     .replace(/\b(?:fryng|fryin)\b/gi, "frying")
+    .replace(/\b(?:noodal|noodel|noodles?)\b/gi, "noodle")
+    .replace(/\b(?:strainner|straner|strainn?er)\b/gi, "strainer")
     .replace(/\bshows\b/gi, "shoes")
     .replace(/\b(?:bananna|bannana)\b/gi, "banana")
     .replace(/\buk\s*(?:size\s*)?(\d{1,2}(?:\.5)?)\b/gi, (match, size: string) => ukToEuro[size] ? `Euro Size ${ukToEuro[size]}` : match)
@@ -115,6 +117,8 @@ export function normalizeCatalogueQuery(message: string) {
     .replace(/\b(need|want|looking for|look for|search for|search|find me|find|show me|show|have|sell|selling|carry|stock|price|pricing|cost|how much|add|also|while|there|too|a|an|some|the|and|or|if)\b/gi, " ")
     .replace(/[^a-z0-9'\-/\s]/gi, " ")
     .replace(/\b(?:no\s+preference|any\s+material)\b/gi, " ")
+    .replace(/\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:pieces?|pcs?|units?|sets?|pairs?)\b/gi, " ")
+    .replace(/\b(?:a|one|two|three|four|five|six|half)?\s*dozen\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\bknives\b/gi, "knife")
@@ -135,6 +139,11 @@ function matchesExplicitConstraints(query: string, product: Product) {
   const requested = query.toLowerCase();
   const candidate = searchableProductText(product).toLowerCase();
   const productName = product.name.toLowerCase();
+  if (/\bserving\s+spoons?\b/.test(requested) && !/\bserving\s+spoons?\b/.test(productName)) return false;
+  if (/\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/.test(requested)
+    && !/\bwok\b[\s\S]*\b(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/.test(productName)) return false;
+  if (/\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/.test(requested)
+    && !/\b(?:sharpener|sharpening|whetstone|honing)\b/.test(productName)) return false;
   const requiredCategories = [
     { requested: /\bchef\b.*\bknife\b|\bknife\b.*\bchef\b/, candidate: /\bchef(?:'s|s)?\s+knife\b/ },
     { requested: /\bcleaver\b/, candidate: /\bcleaver\b/ },
@@ -142,7 +151,10 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\bparing\b/, candidate: /\bparing\b/ },
     { requested: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/, candidate: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/ },
     { requested: /\bdamascus\b/, candidate: /\bdamascus\b/ },
-    { requested: /\bknife\b/, candidate: /\bknife|cleaver\b/ },
+    { requested: /\bknife\b(?!\s+(?:sharpener|sharpening|stone|steel))/, candidate: /\bknife|cleaver\b/ },
+    { requested: /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/, candidate: /\b(?:sharpener|sharpening|whetstone|honing)\b/ },
+    { requested: /\bserving\s+spoons?\b/, candidate: /\bserving\s+spoons?\b/ },
+    { requested: /\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/, candidate: /\bwok\b[\s\S]*\b(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/ },
     { requested: /\bwoks?\b/, candidate: /\bwoks?\b/ },
     { requested: /\bpan\b/, candidate: /\bpan\b/ },
     { requested: /\b(?:plate|plates)\b/, candidate: /\b(?:plate|plates|platter|platters)\b/ },
@@ -163,10 +175,11 @@ function matchesExplicitConstraints(query: string, product: Product) {
   if (requiredCategories.some((rule) => rule.requested.test(requested) && !rule.candidate.test(candidate))) return false;
   const requestedUseCase = detectProductUseCase(query);
   if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
-  if (/\bknife\b/.test(requested) && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
+  const requestsKnifeSharpening = /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/.test(requested);
+  if (/\bknife\b/.test(requested) && !requestsKnifeSharpening && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
   if (/\b(?:japan|japanese)\b/.test(requested) && !/\b(?:japan|japanese)\b/.test(candidate)) return false;
 
-  const requestedColour = requested.match(/\b(red|yellow|blue|black|white|green|silver)\b/)?.[1];
+  const requestedColour = [...requested.matchAll(/\b(red|yellow|blue|black|white|green|silver)\b/g)].at(-1)?.[1];
   if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`).test(candidate)) return false;
 
   const requestedMetricSize = requested.match(/\b(\d+(?:\.\d+)?)\s*(cm|mm)\b/);

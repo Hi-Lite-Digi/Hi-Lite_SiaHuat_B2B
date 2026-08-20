@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 import type { ConversationContext } from "../src/lib/chat-contract";
-import { asksForRecommendation } from "../src/lib/chat-turn";
+import { asksForRecommendation, requestsAnotherOption } from "../src/lib/chat-turn";
 
 type HistoryItem = { role: "user" | "assistant"; content: string };
 type ReplyProduct = {
@@ -122,6 +122,7 @@ const contextProducts = (products: ReplyProduct[]) => products.map((product) => 
 for (const [id, prompt] of [
   ["INTENT-REC-001", "Recommend one for me"],
   ["INTENT-REC-002", "Which one would you choose"],
+  ["INTENT-REC-003", "Which one would you personally pick?"],
 ] as const) {
   const pass = asksForRecommendation(prompt);
   results.push({
@@ -130,6 +131,21 @@ for (const [id, prompt] of [
     prompt,
     pass,
     reason: pass ? "Matched expected behaviour" : "Natural recommendation wording was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+{
+  const prompt = "Can show me more? Different ones please";
+  const pass = requestsAnotherOption(prompt);
+  results.push({
+    id: "INTENT-MORE-001",
+    area: "Natural alternative intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Natural request for different options was not recognized",
     durationMs: 0,
     response: "",
     products: [],
@@ -219,6 +235,15 @@ await check("CAT-015", "Catalogue authority", "Do you guys sell banana leaf plat
     ? null
     : `Must not widen banana-leaf plates into generic platters: ${products.map((product) => product.name).join("; ")}`;
 }, [], 15_000);
+await check("CAT-016", "Catalogue authority", "Do you sell unicorn horn soup bowls?", (reply) => {
+  return noProducts(reply)
+    ?? (/don.?t carry|not in (?:our|the) catalogue/i.test(reply.message)
+      ? null
+      : "Must reject a mythical product without a speculative follow-up")
+    ?? ((reply.suggestions?.length ?? 0) === 0
+      ? null
+      : "Nonsense catalogue requests must stop without suggestions");
+}, [], 5_000);
 await check("CONV-001", "Conversation", "what is your issue?", (reply) => noProducts(reply) ?? (/no issue|claire/i.test(reply.message) && !/issue with a product|your order|website/i.test(reply.message) ? null : "Must answer as Claire without assuming the customer has a problem"));
 await check("CONV-002", "Conversation", "what are yoaaua here for?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /catalogue|product/i.test(reply.message) ? null : "Typo-tolerant purpose question must explain Claire's role"));
 await check("CONV-003", "Conversation", "why are you here?", (reply) => noProducts(reply) ?? (/claire|here to/i.test(reply.message) && /product|catalogue/i.test(reply.message) ? null : "Purpose question must receive a conversational reply"));
@@ -310,6 +335,65 @@ await check("MATCH-010", "Product relevance", "I want a stainless steel serving 
     ? null
     : "Serving-spoon request returned an unrelated product";
 });
+await check("MATCH-011", "Product relevance", "I need two dozen stainless steel serving spoons", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) {
+    return /24|two dozen|stock|available|smaller quantity/i.test(reply.message)
+      ? null
+      : "Expected stock-qualified serving spoons or a clear two-dozen availability response";
+  }
+  if (!products.every((product) => /serving spoon/i.test(product.name))) {
+    return `Serving-spoon request returned another utensil: ${products.map((product) => product.name).join("; ")}`;
+  }
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 24)
+    ? null
+    : "Two dozen must be treated as 24 for live-stock qualification";
+}, [], 20_000);
+await check("MATCH-012", "Product-part relevance", "I need a 32cm wok lid", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) {
+    return /couldn.?t find|don.?t carry|not available|no matching/i.test(reply.message)
+      ? null
+      : "Expected a matching 32cm wok lid or a clear unavailable response";
+  }
+  return products.every((product) =>
+    /\bwok\b[\s\S]*\b(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/i.test(product.name)
+    && /32\s*cm|ø32|32ø/i.test(product.name),
+  ) ? null : `Wok-lid request returned a complete wok or wrong size: ${products.map((product) => product.name).join("; ")}`;
+});
+await check("MATCH-013", "Product-part relevance", "I need a knife sharpener", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) {
+    return /couldn.?t find|don.?t carry|not available|out of stock/i.test(reply.message)
+      ? null
+      : "Expected knife sharpeners or a clear unavailable response";
+  }
+  return products.every((product) => /\b(?:sharpener|sharpening|whetstone|honing)\b/i.test(product.name))
+    ? null
+    : `Knife-sharpener request returned a knife or accessory: ${products.map((product) => product.name).join("; ")}`;
+});
+await check("MATCH-014", "Product-part relevance", "Show me knife sharpeners, not knives", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) {
+    return /couldn.?t find|don.?t carry|not available|out of stock/i.test(reply.message)
+      ? null
+      : "Expected knife sharpeners or a clear unavailable response";
+  }
+  return products.every((product) => /\b(?:sharpener|sharpening|whetstone|honing)\b/i.test(product.name))
+    ? null
+    : `Plural knife-sharpener request returned a knife: ${products.map((product) => product.name).join("; ")}`;
+});
+await check("MATCH-015", "Typo-tolerant relevance", "got 7 pcs noodal strainner for maggi anot? handheld one leh", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected handheld noodle strainers that can supply 7 pieces";
+  const invalid = products.find((product) =>
+    !/strainer|skimmer|sieve/i.test(product.name)
+    || /bar|cocktail|julep/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 7,
+  );
+  return invalid ? `Typo-heavy noodle-strainer request returned an unsuitable item: ${invalid.name}` : null;
+}, [], 20_000);
 await check("MATCH-008", "Human tone", "Got chef knife anot?", (reply) => {
   if (/supabase|database|stock_id|list_price/i.test(reply.message)) return "Customer-facing reply exposed implementation jargon";
   return (reply.products?.length ?? 0) <= 3 ? null : "Customer-facing reply showed more than 3 options";
@@ -779,6 +863,17 @@ await check("CTX-005", "Context & product relevance", "black", (reply) => {
     ? null
     : `Expected only black plates, got ${products.map((product) => product.name).join("; ")}`;
 }, blackPlateHistory, 15_000);
+await check("CTX-012", "Explicit product switch", "Forget the knives. Show me black dinner plates instead", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected black dinner-plate options after an explicit switch";
+  if (/what kind|what product|which product/i.test(reply.message)) return "Must not re-ask for a category already given in the switch";
+  return products.every((product) => /\b(?:plate|platter)\b/i.test(product.name) && /\bblack\b/i.test(product.name))
+    ? null
+    : `Explicit switch kept the old knife category: ${products.map((product) => product.name).join("; ")}`;
+}, [
+  { role: "user", content: "Show me chef knives" },
+  { role: "assistant", content: "Here are three chef knives." },
+], 20_000);
 
 const switchHistory: HistoryItem[] = [...knifeHistory,
   { role: "user", content: "Actually switch to a pan" },
@@ -828,6 +923,18 @@ await check("QTY-006", "Latest quantity correction", "I want 5 chef knives, actu
     ? null
     : "The latest corrected quantity (10) must win over the earlier quantity (5)";
 }, [], 20_000);
+await check("QTY-007", "Latest quantity and colour correction", "I need 5 black dinner plates, sorry, make that 10 white dinner plates", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected white dinner plates with at least 10 units";
+  const invalid = products.find((product) =>
+    !/\b(?:plate|platter)\b/i.test(product.name)
+    || !/\bwhite\b/i.test(product.name)
+    || /\bblack\b/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 10,
+  );
+  return invalid ? `Latest correction did not win: ${invalid.name}` : null;
+}, [], 20_000);
 await check("PLATE-001", "Strict product relevance", "I need 10 black plates for restaurant use", (reply) => {
   const products = reply.products ?? [];
   if (products.length === 0) return "Expected at least one matching black plate with 10 units";
@@ -867,6 +974,85 @@ await check("LANG-004", "Language", "I need 切鸡的刀, for bones", (reply) =>
 await check("LANG-005", "Language", "我要 chef knife，5个", (reply) => {
   if (!/\p{Script=Han}/u.test(reply.message)) return "Chinese voice-style request must receive a Chinese reply";
   return (reply.products?.length ?? 0) > 0 ? null : "Mixed Chinese-English product request should return catalogue products";
+});
+await check("LANG-006", "Language and Chinese quantity", "我要六个 black dinner plate，餐厅用", (reply) => {
+  if (!/\p{Script=Han}/u.test(reply.message)) return "Chinese request must receive a Chinese reply";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected black dinner plates that can supply six units";
+  const invalid = products.find((product) =>
+    !/\b(?:plate|platter)\b/i.test(product.name)
+    || !/\bblack\b/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 6,
+  );
+  return invalid ? `Chinese quantity was not applied to a matching plate: ${invalid.name}` : null;
+}, [], 20_000);
+await check("LANG-007", "Chinese product relevance", "我要五把中式砍骨刀", (reply) => {
+  if (!/\p{Script=Han}/u.test(reply.message)) return "Chinese request must receive a Chinese reply";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected cleavers that can supply five units";
+  const invalid = products.find((product) =>
+    !/cleaver/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 5,
+  );
+  return invalid ? `Chinese cleaver request returned an unsuitable item: ${invalid.name}` : null;
+}, [], 20_000);
+await check("LANG-008", "Language switch and memory", "Actually, chef knives instead, same quantity", (reply) => {
+  if (/\p{Script=Han}/u.test(reply.message)) return "An explicit English product switch must receive an English reply";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected chef knives after switching from Chinese to English";
+  const invalid = products.find((product) =>
+    !/chef.*knife|knife.*chef/i.test(product.name)
+    || /cleaver/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 5,
+  );
+  return invalid ? `Language switch retained the old cleaver intent: ${invalid.name}` : null;
+}, [
+  { role: "user", content: "我要五把中式砍骨刀" },
+  { role: "assistant", content: "我找到两款有货的中式砍骨刀。" },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 5,
+  displayedProducts: [],
+});
+
+const firstBlackPlateReply = await check("FLOW-ALT-001", "Alternative flow", "I need 3 black dinner plates", (reply) =>
+  (reply.products?.length ?? 0) > 0 ? null : "Expected an initial set of black dinner plates", [], 20_000);
+const firstBlackPlateProducts = firstBlackPlateReply.products ?? [];
+const moreBlackPlateReply = await check("FLOW-ALT-002", "Alternative flow", "Can show me more? Different ones please", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected a fresh set of alternatives";
+  const previousIds = new Set(firstBlackPlateProducts.map((product) => product.stock_id));
+  const repeated = products.find((product) => previousIds.has(product.stock_id));
+  return repeated ? `Alternative flow repeated an already shown item: ${repeated.stock_id}` : null;
+}, [
+  { role: "user", content: "I need 3 black dinner plates" },
+  { role: "assistant", content: firstBlackPlateReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: contextProducts(firstBlackPlateProducts),
+});
+const moreBlackPlateProducts = moreBlackPlateReply.products ?? [];
+await check("FLOW-REC-001", "Recommendation flow", "Which one would you personally pick?", (reply) => {
+  if (!reply.selectedProduct) return "Expected a concrete recommendation from the displayed alternatives";
+  return moreBlackPlateProducts.some((product) => product.stock_id === reply.selectedProduct?.stock_id)
+    ? null
+    : "Recommendation selected an item that was not in the displayed options";
+}, [
+  { role: "user", content: "I need 3 black dinner plates" },
+  { role: "assistant", content: firstBlackPlateReply.message },
+  { role: "user", content: "Can show me more? Different ones please" },
+  { role: "assistant", content: moreBlackPlateReply.message },
+], 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: contextProducts(moreBlackPlateProducts),
 });
 
 const standardHandoff = /alerted a human colleague.*5.{0,3}10 minutes/i;
