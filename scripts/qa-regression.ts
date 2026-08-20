@@ -634,6 +634,27 @@ await check("PDF-KNIFE-003", "PDF regression: short follow-up keeps Japanese con
   quantity: 3,
   displayedProducts: contextProducts(japaneseKnifeProducts),
 });
+await check("PDF-KNIFE-003B", "PDF regression: natural more-options wording does not repeat", "Can you share a few more options?", (reply) => {
+  const products = reply.products ?? [];
+  if (/what (?:item|product)|missed that/i.test(reply.message)) return "Forgot the active Japanese knife request";
+  if (products.some((product) => japaneseKnifeProducts.some((shown) => shown.stock_id === product.stock_id))) {
+    return "Repeated a Japanese option that was already displayed";
+  }
+  return products.length === 0 || products.every((product) => /japan|japanese/i.test(product.name))
+    ? null
+    : `Returned non-Japanese products: ${products.map((product) => product.name).join("; ")}`;
+}, [
+  ...transcriptKnifeHistory,
+  { role: "user", content: "Have a japanese made knife?" },
+  { role: "assistant", content: japaneseKnifeProducts.length > 0
+    ? `Here are Japanese knife options: ${japaneseKnifeProducts.map((product, index) => `${index + 1}. ${product.name}`).join("; ")}`
+    : japaneseKnifeReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: contextProducts(japaneseKnifeProducts),
+});
 await check("PDF-RECOVER-001", "PDF regression: complaint recovery keeps active task", "You are broken", (reply) => {
   return noProducts(reply)
     ?? (/sorry|off|wrong/i.test(reply.message) ? null : "Must acknowledge that the previous reply was wrong")

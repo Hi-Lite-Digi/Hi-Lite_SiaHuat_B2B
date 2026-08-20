@@ -124,7 +124,7 @@ export function confirmsDisplayedProduct(message: string) {
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
   return /\b(?:another|different|other)\s+(?:item|option|product|one)\b/i.test(normalized)
-    || /^(?:(?:i don'?t know[, ]*)?(?:(?:can|could|would) you\s+)?)?(?:recommend|recommend something|share (?:a )?few|show (?:me )?(?:a )?few|show (?:me )?(?:some )?options?|are there (?:any )?others?|got (?:any )?others?)\??$/i.test(normalized)
+    || /^(?:(?:i don'?t know[, ]*)?(?:(?:can|could|would) you\s+)?)?(?:recommend|recommend something|share (?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:some )?(?:more )?options?|are there (?:any )?(?:more |other )?(?:options?|items?|products?|ones?)|got (?:any )?(?:more |other )?(?:options?|items?|products?|ones?))\??$/i.test(normalized)
     || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized)
     || /(?:选择|查看|显示|找)(?:另一个|其他|别的)(?:商品|产品|选项)?/u.test(normalized);
 }
