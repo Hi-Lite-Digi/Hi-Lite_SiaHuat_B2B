@@ -140,6 +140,12 @@ function matchesExplicitConstraints(query: string, product: Product) {
   const requested = query.toLowerCase();
   const candidate = searchableProductText(product).toLowerCase();
   const productName = product.name.toLowerCase();
+  const requestsUtensils = /\b(?:kitchen\s+)?utensils?\b/.test(requested);
+  const requestsUtensilAccessory = /\b(?:storage|stand|organizer|hanger|holder|rack)\b/.test(requested);
+  if (requestsUtensils) {
+    if (!/\b(?:utensils?|spatulas?|turners?|whisks?|peelers?|tongs?|ladles?|spoons?|forks?)\b/.test(candidate)) return false;
+    if (!requestsUtensilAccessory && /\b(?:storage\s+stand|counter\s+organizer|wall\s+hanger|utensil\s+(?:holder|rack)|(?:holder|rack)\s+for\s+utensils?)\b/.test(productName)) return false;
+  }
   if (/\bserving\s+spoons?\b/.test(requested) && !/\bserving\s+spoons?\b/.test(productName)) return false;
   if (/\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/.test(requested)
     && !/\bwok\b[\s\S]*\b(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/.test(productName)) return false;

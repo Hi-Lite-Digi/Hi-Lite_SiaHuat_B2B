@@ -288,6 +288,7 @@ function isConcreteCatalogueRequest(message: string) {
   return /\b(?:chef|cleaver|boning|paring|bread|yanagi|sashimi|frying|fryng|saucepan|omele+t+e?|grill)\b/i.test(message)
     || /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/i.test(message)
     || /\b(?:spoon|spoons|serving\s+spoon|ladle|ladles|fork|forks|cutlery)\b/i.test(message)
+    || /\b(?:kitchen\s+)?utensils?\b|\b(?:spatulas?|turners?|whisks?|peelers?|tongs?)\b/i.test(message)
     || /\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)
     || /\b(?:strainer|strainers|skimmer|skimmers|colander|colanders)\b/i.test(message)
     || /\b(?:commercial\s+)?blenders?\b/i.test(message)
@@ -330,6 +331,12 @@ function matchesExplicitProductCategory(message: string, product: Product) {
   }
   if (/\bwoks?\b/i.test(message)) return /\bwoks?\b/i.test(productText);
   if (/\bserving\s+spoons?\b/i.test(message)) return /\bserving\s+spoons?\b/i.test(productName);
+  if (/\b(?:kitchen\s+)?utensils?\b/i.test(message)) {
+    const requestsAccessory = /\b(?:storage|stand|organizer|hanger|holder|rack)\b/i.test(message);
+    const isUtensil = /\b(?:utensils?|spatulas?|turners?|whisks?|peelers?|tongs?|ladles?|spoons?|forks?)\b/i.test(productText);
+    const isAccessory = /\b(?:storage\s+stand|counter\s+organizer|wall\s+hanger|utensil\s+(?:holder|rack)|(?:holder|rack)\s+for\s+utensils?)\b/i.test(productName);
+    return isUtensil && (requestsAccessory || !isAccessory);
+  }
   if (/\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/i.test(message)) {
     return /\b(?:sharpener|sharpening|whetstone|honing)\b/i.test(productName);
   }
@@ -781,6 +788,35 @@ async function groundedWaterDispenserReply(message: string): Promise<ChatReply> 
   };
 }
 
+function isBroadUtensilRequest(message: string) {
+  return /\b(?:kitchen\s+)?utensils?\b/i.test(message)
+    && !/\b(?:spatulas?|turners?|whisks?|peelers?|tongs?|ladles?|spoons?|forks?|storage|stand|organizer|hanger|holder|rack)\b/i.test(message);
+}
+
+async function searchBroadUtensils() {
+  const searches = await Promise.all(
+    ["spatula", "kitchen tongs", "peeler"].map((term) =>
+      searchCatalogue(term, { resultLimit: 20, outputLimit: 8 }),
+    ),
+  );
+  const products: Product[] = [];
+  const seen = new Set<string>();
+
+  for (const matches of searches) {
+    const product = matches.find((candidate) => {
+      if (seen.has(candidate.stock_id)) return false;
+      const name = candidate.name.toLowerCase();
+      return /\b(?:spatulas?|tongs?|peelers?)\b/.test(name)
+        && !/\b(?:accessor(?:y|ies)|storage|stand|organizer|hanger|holder|rack)\b/.test(name);
+    });
+    if (!product) continue;
+    products.push(product);
+    seen.add(product.stock_id);
+  }
+
+  return products;
+}
+
 async function groundedCatalogueReply(
   message: string,
   options: { authoritative?: boolean; excludedStockIds?: Set<string> } = {},
@@ -815,7 +851,9 @@ async function groundedCatalogueReply(
     .replace(/\b\d+\s+(?:outlets?|drinks?(?:\s+per\s+(?:day|hour))?)\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const searchedProducts = await searchCatalogue(searchMessage || message, { resultLimit: 30, outputLimit: 20 });
+  const searchedProducts = isBroadUtensilRequest(searchMessage || message)
+    ? await searchBroadUtensils()
+    : await searchCatalogue(searchMessage || message, { resultLimit: 30, outputLimit: 20 });
   const excludedStockIds = options.excludedStockIds ?? new Set<string>();
   const products = searchedProducts
     .filter((product) => !excludedStockIds.has(product.stock_id))
