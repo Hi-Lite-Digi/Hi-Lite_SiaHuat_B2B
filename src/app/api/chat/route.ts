@@ -310,6 +310,20 @@ function matchesExplicitProductCategory(message: string, product: Product) {
   const productText = [product.name, product.description, product.category, product.subcategory, product.third_category]
     .filter(Boolean)
     .join(" ");
+  const requestedUseCase = detectProductUseCase(message);
+  if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
+  const requestedMaterials = [
+    /\bstainless(?:\s+steel)?\b/i.test(message) ? /\bstainless(?:\s+steel)?\b/i : null,
+    /\bblack\s+steel\b/i.test(message) ? /\bblack\s+steel\b/i : null,
+    /\bcarbon\s+steel\b/i.test(message) ? /\bcarbon\s+steel\b/i : null,
+    /\bcast\s+iron\b/i.test(message) ? /\bcast\s+iron\b/i : null,
+    /\biron\b/i.test(message) && !/\bcast\s+iron\b/i.test(message) ? /\biron\b/i : null,
+    /\baluminium|aluminum\b/i.test(message) ? /\baluminium|aluminum\b/i : null,
+    /\bnon[ -]?stick\b/i.test(message) ? /\bnon[ -]?stick\b/i : null,
+  ].filter((pattern): pattern is RegExp => pattern !== null);
+  if (requestedMaterials.length > 0 && !requestedMaterials.some((pattern) => pattern.test(productText))) return false;
+  const requestedColour = [...message.matchAll(/\b(red|yellow|blue|black|white|green|silver)\b/gi)].at(-1)?.[1];
+  if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`, "i").test(productText)) return false;
   if (/\bblenders?\b/i.test(message)) return /\bblenders?\b/i.test(productText);
   if (/\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/i.test(message)) {
     return /\bwok\b[\s\S]*\b(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/i.test(productName);

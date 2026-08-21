@@ -129,7 +129,8 @@ export function normalizeCatalogueQuery(message: string) {
     const kind = detectProductUseCase(cleaned)?.search ?? cleaned.match(/\b(non[ -]?stick|frying|sauce|grill)\b/i)?.[0] ?? "";
     const colour = cleaned.match(/\b(red|yellow|blue|black|white|green|silver)\b/i)?.[0] ?? "";
     const size = cleaned.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i)?.[0] ?? "";
-    return `${colour} ${size} ${kind}${kind.toLowerCase().endsWith("pan") ? "" : " pan"}`.replace(/\s+/g, " ").trim();
+    const material = cleaned.match(/\b(stainless(?:\s+steel)?|black\s+steel|carbon\s+steel|cast\s+iron|aluminium|aluminum|non[ -]?stick)\b/i)?.[0] ?? "";
+    return `${colour} ${size} ${material} ${kind}${kind.toLowerCase().endsWith("pan") ? "" : " pan"}`.replace(/\s+/g, " ").trim();
   }
 
   return cleaned;
@@ -178,6 +179,17 @@ function matchesExplicitConstraints(query: string, product: Product) {
   const requestsKnifeSharpening = /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/.test(requested);
   if (/\bknife\b/.test(requested) && !requestsKnifeSharpening && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
   if (/\b(?:japan|japanese)\b/.test(requested) && !/\b(?:japan|japanese)\b/.test(candidate)) return false;
+
+  const requestedMaterials = [
+    /\bstainless(?:\s+steel)?\b/.test(requested) ? /\bstainless(?:\s+steel)?\b/ : null,
+    /\bblack\s+steel\b/.test(requested) ? /\bblack\s+steel\b/ : null,
+    /\bcarbon\s+steel\b/.test(requested) ? /\bcarbon\s+steel\b/ : null,
+    /\bcast\s+iron\b/.test(requested) ? /\bcast\s+iron\b/ : null,
+    /\biron\b/.test(requested) && !/\bcast\s+iron\b/.test(requested) ? /\biron\b/ : null,
+    /\baluminium|aluminum\b/.test(requested) ? /\baluminium|aluminum\b/ : null,
+    /\bnon[ -]?stick\b/.test(requested) ? /\bnon[ -]?stick\b/ : null,
+  ].filter((pattern): pattern is RegExp => pattern !== null);
+  if (requestedMaterials.length > 0 && !requestedMaterials.some((pattern) => pattern.test(candidate))) return false;
 
   const requestedColour = [...requested.matchAll(/\b(red|yellow|blue|black|white|green|silver)\b/g)].at(-1)?.[1];
   if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`).test(candidate)) return false;

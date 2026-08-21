@@ -1153,6 +1153,49 @@ await check("FLOW-REC-001", "Recommendation flow", "Which one would you personal
   displayedProducts: contextProducts(moreBlackPlateProducts),
 });
 
+const addedSteelPanReply = await check("FLOW-MULTI-001", "Multi-item order memory", "Add a steel pan as well", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Adding a steel pan must return grounded catalogue cards";
+  const invalid = products.find((product) =>
+    !/fry(?:ing)?\s+pan/i.test(product.name)
+    || !/stainless(?:\s+steel)?/i.test(product.name),
+  );
+  return invalid
+    ? `Steel-pan request returned the wrong item family or material: ${invalid.name}`
+    : null;
+}, [
+  { role: "user", content: "I need 3 Damascus chef knives" },
+  { role: "assistant", content: "Here are three chef knives." },
+  { role: "user", content: "I will take 5 of the Atlantic chef knife" },
+  { role: "assistant", content: "ORDER SUMMARY: 5 Atlantic Chef Chef Knife 21cm, Red Handle." },
+], 20_000);
+const addedSteelPanProducts = addedSteelPanReply.products ?? [];
+await check("FLOW-MULTI-002", "Multi-item order memory", "any size, just show me a few", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "A short follow-up must keep the active pan enquiry and return product cards";
+  const invalid = products.find((product) =>
+    !/fry(?:ing)?\s+pan/i.test(product.name)
+    || !/stainless(?:\s+steel)?/i.test(product.name),
+  );
+  return invalid
+    ? `Pan follow-up forgot the requested item or material: ${invalid.name}`
+    : null;
+}, [
+  { role: "user", content: "I need 3 Damascus chef knives" },
+  { role: "assistant", content: "Here are three chef knives." },
+  { role: "user", content: "I will take 5 of the Atlantic chef knife" },
+  { role: "assistant", content: "ORDER SUMMARY: 5 Atlantic Chef Chef Knife 21cm, Red Handle." },
+  { role: "user", content: "Add a steel pan as well" },
+  { role: "assistant", content: addedSteelPanProducts.length > 0
+    ? `Here are steel pan options: ${addedSteelPanProducts.map((product, index) => `${index + 1}. ${product.name}`).join("; ")}`
+    : addedSteelPanReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: contextProducts(addedSteelPanProducts),
+});
+
 const standardHandoff = /alerted a human colleague.*5.{0,3}10 minutes/i;
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);

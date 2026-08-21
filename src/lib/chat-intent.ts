@@ -247,6 +247,59 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return [materials || null, size, closest, "wok"].filter(Boolean).join(" ");
   }
 
+  if (activeCategory === "pan") {
+    const latestPanTypeIndex = customerMessages.findLastIndex((content) =>
+      /\b(?:fry(?:ing)?\s*pan|skillet|omele+t+e?\s*pan|crepe\s*pan|pancake\s*pan|grill\s*pan|sauce\s*pan|saucepan|gn\s*pan|gastronorm\s*pan|food\s*pan)\b/i.test(content),
+    );
+    const panTypeSource = latestPanTypeIndex >= 0 ? customerMessages[latestPanTypeIndex] : "";
+    const panType = /\b(?:gn\s*pan|gastronorm\s*pan|food\s*pan)\b/i.test(panTypeSource)
+      ? "GN food pan"
+      : /\b(?:omele+t+e?)\s*pan\b/i.test(panTypeSource)
+        ? "omelette pan"
+        : /\bcrepe\s*pan\b/i.test(panTypeSource)
+          ? "crepe pan"
+          : /\bpancake\s*pan\b/i.test(panTypeSource)
+            ? "pancake pan"
+            : /\bgrill\s*pan\b/i.test(panTypeSource)
+              ? "grill pan"
+              : /\b(?:sauce\s*pan|saucepan)\b/i.test(panTypeSource)
+                ? "saucepan"
+                : /\b(?:fry(?:ing)?\s*pan|skillet)\b/i.test(panTypeSource)
+                  ? "frying pan"
+                  : null;
+    const materialSource = [...customerMessages].reverse().find((content) =>
+      /\b(?:stainless(?:\s+steel)?|black\s+steel|carbon\s+steel|cast\s+iron|iron|aluminium|aluminum|non[ -]?stick|steel)\b/i.test(content),
+    ) ?? "";
+    const material = /\bblack\s+steel\b/i.test(materialSource)
+      ? "black steel"
+      : /\bcarbon\s+steel\b/i.test(materialSource)
+        ? "carbon steel"
+        : /\bcast\s+iron\b/i.test(materialSource)
+          ? "cast iron"
+          : /\baluminium|aluminum\b/i.test(materialSource)
+            ? "aluminium"
+            : /\bnon[ -]?stick\b/i.test(materialSource)
+              ? "non-stick"
+              : /\bstainless(?:\s+steel)?\b|\bsteel\b/i.test(materialSource)
+                ? "stainless steel"
+                : null;
+    const latestSizeIndex = customerMessages.findLastIndex((content) =>
+      /\b(?:any\s+size|no\s+size\s+preference)\b|\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(content),
+    );
+    const latestSizeSource = latestSizeIndex >= 0 ? customerMessages[latestSizeIndex] : "";
+    const size = /\b(?:any\s+size|no\s+size\s+preference)\b/i.test(latestSizeSource)
+      ? null
+      : latestSizeSource.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0] ?? null;
+    const colour = [...customerMessages].reverse()
+      .map((content) => [...content.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0])
+      .find(Boolean) ?? null;
+    // "Steel pan" is commonly used for cookware in customer chat. Unless the
+    // customer explicitly asks for a GN/food pan, keep the request in the
+    // frying-pan family so a storage/steam-table pan is never substituted.
+    const resolvedPanType = panType ?? (material ? "frying pan" : "pan");
+    return [material, colour, size, resolvedPanType].filter(Boolean).join(" ");
+  }
+
   if (activeCategory === "chef pants") {
     return /\b(?:pants|trousers)\b/i.test(message) ? message : `chef pants ${message}`;
   }

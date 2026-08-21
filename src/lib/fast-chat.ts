@@ -388,6 +388,9 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (/\b(add|also|too|as well)\b/.test(simple) && currentCategory === "pan") {
+    const includesPanDetails = /\b(?:stainless(?:\s+steel)?|black\s+steel|carbon\s+steel|cast\s+iron|iron|aluminium|aluminum|steel|non[ -]?stick|fry(?:ing)?|skillet|omele+t+e?|crepe|pancake|grill|saucepan|gn|gastronorm|food\s+pan)\b/i.test(message)
+      || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(message);
+    if (includesPanDetails) return null;
     const originalCategory = previousCategories.find((category) => category !== currentCategory) ?? lastCategory ?? "first item";
     return reply(
       `Got it—I’ll keep the ${originalCategory}${purpose ? ` for ${purpose}` : ""} and add a pan as well. What kind of pan do you need?`,
