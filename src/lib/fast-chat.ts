@@ -27,6 +27,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const lastCategory = previousCategories.at(-1) ?? null;
   const purposeCategory = mentionedCategories[0] ?? null;
   const currentCategory = productCategory(message);
+  const correctsPreviousCategory = /\b(?:i\s+)?(?:was\s+)?thinking\s+(?:more\s+)?of\b|\b(?:i\s+)?meant\b|\bmore\s+like\b/i.test(message);
   let currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
   if (currentCategories[0] === "knife sharpener" || currentCategories[0] === "wok lid") {
     currentCategories = [currentCategories[0]];
@@ -414,9 +415,11 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  if (currentCategory && lastCategory && currentCategory !== lastCategory && /\bnever ?mind\b/.test(simple)) {
-    // "Never mind, got a wok?" is an explicit replacement request. Let the
-    // grounded catalogue route answer it instead of asking add-vs-switch.
+  if (currentCategory && lastCategory && currentCategory !== lastCategory
+    && (/\bnever ?mind\b/.test(simple) || correctsPreviousCategory)) {
+    // Explicit corrections such as "I was thinking more of spoons and forks"
+    // replace the prior category. Let the grounded catalogue route answer
+    // instead of asking the customer to confirm the switch they already made.
     return null;
   }
 

@@ -22,7 +22,7 @@ export const productCategories = [
   { pattern: /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/i, label: "knife sharpener" },
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b|砍骨刀|菜刀|刀/u, label: "knife" },
   { pattern: /\bserving\s+spoons?\b/i, label: "serving spoon" },
-  { pattern: /\b(cutlery|flatware)(?:\s+sets?)?\b/i, label: "cutlery set" },
+  { pattern: /\b(cutlery|flatware)(?:\s+sets?)?\b|\bspoons?\b[\s\S]*\bforks?\b|\bforks?\b[\s\S]*\bspoons?\b/i, label: "cutlery set" },
   { pattern: /\b(?:kitchen\s+)?utensils?\b|\b(?:spatulas?|turners?|whisks?|peelers?|tongs?)\b/i, label: "utensil" },
   { pattern: /\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/i, label: "wok lid" },
   { pattern: /\b(wok|woks)\b/i, label: "wok" },
@@ -148,6 +148,11 @@ export function catalogueMessageWithContext(message: string, userHistory: string
 
   if (activeCategory === "serving spoon") {
     return "serving spoon";
+  }
+
+  if (activeCategory === "cutlery set") {
+    const material = /\bstainless(?:\s+steel)?\b/i.test(joinedMessages) ? "stainless steel" : null;
+    return [material, "cutlery set"].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "utensil") {
