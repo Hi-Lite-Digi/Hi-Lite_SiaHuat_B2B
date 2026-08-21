@@ -651,6 +651,25 @@ await check("CTX-014", "Utensil refinement and card formatting", "any material i
   { role: "user", content: "I want some kitchen utensils" },
   { role: "assistant", content: "Do you have a material preference for the kitchen utensils?" },
 ], 20_000);
+const validatesUtensilToCutleryCorrection = (reply: Reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected cutlery product cards after the customer corrected the utensil request";
+  const staleUtensil = products.find((product) => /spatula|turner|tongs?|peeler|whisk/i.test(product.name));
+  if (staleUtensil) return `Retained the stale broad-utensil intent: ${staleUtensil.name}`;
+  return products.every((product) => /cutlery set/i.test(product.name))
+    ? null
+    : `Expected spoon-and-fork cutlery sets, received: ${products.map((product) => product.name).join("; ")}`;
+};
+await check("CTX-015", "Utensil-to-cutlery category correction", "I was thinking more of like spoons and forks", validatesUtensilToCutleryCorrection, [
+  { role: "user", content: "Hi, i would like to buy some utensil" },
+  { role: "assistant", content: "Here are 3 different turners, spatulas and paddles:" },
+], 20_000);
+await check("CTX-016", "Repeated utensil-to-cutlery correction", "spoon and forks ??", validatesUtensilToCutleryCorrection, [
+  { role: "user", content: "Hi, i would like to buy some utensil" },
+  { role: "assistant", content: "Here are 3 different turners, spatulas and paddles:" },
+  { role: "user", content: "I was thinking more of like spoons and forks" },
+  { role: "assistant", content: "Here are 3 different turners, spatulas and paddles:" },
+], 20_000);
 await check("OOS-001", "Out-of-stock alternatives", "like a cutlery set", (reply) => {
   const products = reply.products ?? [];
   if (!/cutlery set.*\(code:\s*R-52713B81\).*out of stock/i.test(reply.message)) {
