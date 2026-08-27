@@ -725,6 +725,13 @@ function litresFromText(value: string) {
   return match ? Number.parseFloat(match[1]) : null;
 }
 
+function stockpotCapacityLitresFromText(value: string) {
+  const litres = litresFromText(value);
+  if (litres !== null) return litres;
+  const quarts = value.match(/\b(\d+(?:\.\d+)?)\s*(?:qt|quarts?)\b/i)?.[1];
+  return quarts ? Number.parseFloat(quarts) * 0.946353 : null;
+}
+
 function isStockpotRequest(message: string) {
   return /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message);
 }
@@ -742,15 +749,18 @@ function isStockpotProduct(product: Product) {
 async function groundedStockpotReply(message: string): Promise<ChatReply> {
   const stockpots = (await searchCatalogue("stockpot", { resultLimit: 40, outputLimit: 40 }))
     .filter(isStockpotProduct);
-  const requestedCapacity = litresFromText(message);
+  const requestedCapacity = stockpotCapacityLitresFromText(message);
   const exactProducts = requestedCapacity === null
     ? stockpots
-    : stockpots.filter((product) => litresFromText([
-        product.name,
-        product.description,
-        product.size,
-        product.dimensions,
-      ].filter(Boolean).join(" ")) === requestedCapacity);
+    : stockpots.filter((product) => {
+        const capacity = stockpotCapacityLitresFromText([
+          product.name,
+          product.description,
+          product.size,
+          product.dimensions,
+        ].filter(Boolean).join(" "));
+        return capacity !== null && Math.abs(capacity - requestedCapacity) <= 0.15;
+      });
   if (exactProducts.length > 0) {
     return {
       message: exactProducts.length === 1 ? "This is the closest match:" : "Here are the matching stockpots:",
@@ -762,7 +772,7 @@ async function groundedStockpotReply(message: string): Promise<ChatReply> {
   }
 
   const nearbyProducts = stockpots.slice(0, 3);
-  const capacityLabel = message.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?)\b/i)?.[0]?.replace(/\s+/g, "");
+  const capacityLabel = message.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?|qt|quarts?)\b/i)?.[0]?.replace(/\s+/g, "");
   const requestedLabel = capacityLabel ? `${capacityLabel} stockpot` : "stockpot";
   return {
     message: nearbyProducts.length > 0
