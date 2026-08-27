@@ -1510,9 +1510,10 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     const prioritizedReply = await prioritizeRequestedUseCase(authoritativeGroundedReply, catalogueMessage);
     const dimensionReply = enforceRequestedDimensions(prioritizedReply, catalogueMessage);
     const liveReply = await addLiveCatalogueState(dimensionReply);
+    const alternativesReply = await addAvailableAlternatives(liveReply, catalogueMessage);
     return deduplicateReplyProducts(
       enforceLiveCheckoutGate(explainUnavailableProducts(
-        enforceRequestedQuantityOptions(liveReply, catalogueMessage),
+        enforceRequestedQuantityOptions(alternativesReply, catalogueMessage),
       )),
     );
   }

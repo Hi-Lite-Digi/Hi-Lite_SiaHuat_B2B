@@ -706,6 +706,19 @@ await check("OOS-001", "Out-of-stock alternatives", "like a cutlery set", (reply
     ? null
     : `Returned an unrelated alternative: ${products.map((product) => product.name).join("; ")}`;
 }, [], 20_000);
+await check("OOS-003", "Exact-code out-of-stock alternatives", "Do you have R-52713B81?", (reply) => {
+  const products = reply.products ?? [];
+  if (!/R-52713B81.*out of stock/i.test(reply.message)) {
+    return `The unavailable exact code must be named, got: ${reply.message}`;
+  }
+  if (products.length === 0) return "Expected in-stock alternatives for the unavailable exact code";
+  if (products.some((product) => product.stock_id === "R-52713B81")) {
+    return "The unavailable product must not be offered as a selectable alternative";
+  }
+  return products.every((product) => /cutlery set/i.test(product.name) && product.stock_status === "in_stock")
+    ? null
+    : `Returned an unavailable or unrelated alternative: ${products.map((product) => product.name).join("; ")}`;
+}, [], 20_000);
 await check("OOS-002", "Displayed out-of-stock alternative memory", "give me the Gold,100", (reply) => {
   if (reply.selectedProduct?.stock_id !== "R-52770G81") {
     return `Expected the displayed Gold, 100 cutlery set (R-52770G81), got ${reply.selectedProduct?.stock_id ?? "no selected product"}`;
