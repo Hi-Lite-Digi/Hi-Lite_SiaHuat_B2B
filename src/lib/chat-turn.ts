@@ -30,7 +30,7 @@ const DISPLAY_REFERENCE_FILLER = new Set([
 
 const GENERIC_PRODUCT_REFERENCE = new Set([
   "item", "product", "option", "knife", "knives", "pan", "pans", "wok", "woks",
-  "plate", "plates", "glass", "glassware", "shoe", "shoes", "spoon", "spoons",
+  "plate", "plates", "glass", "glasses", "glassware", "shoe", "shoes", "spoon", "spoons",
   "fork", "forks", "strainer", "strainers", "pot", "pots", "grinder", "grinders",
 ]);
 
@@ -128,7 +128,7 @@ export function confirmsOrderRequest(message: string) {
     || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核)[。.！!\s]*$/u.test(normalized);
 }
 
-const PRODUCT_NOUN = /\b(?:apron|bowl|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|glass|glassware|grinder|knife|knives|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|spoon|stove|strainer|table|tableware|tray|trolley|uniform|wok)\b/i;
+const PRODUCT_NOUN = /\b(?:apron|bowl|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|glass|glasses|glassware|grinder|knife|knives|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|spoon|stove|strainer|table|tableware|tray|trolley|uniform|wok)\b/i;
 const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-]+)+\b/i;
 
 /**
@@ -162,6 +162,20 @@ export function splitMultipleProductRequest(message: string) {
   return productClauses.length >= 2
     ? productClauses.map((clause, index) => index > 0 && /^\d+\b/.test(clause) ? `I need ${clause}` : clause)
     : [];
+}
+
+/**
+ * Keeps a bare attribute correction in the catalogue-search path instead of
+ * treating it as a request to select whichever displayed card happens to
+ * share one token. Explicit choices such as "take the black one" still use
+ * the displayed-product resolver.
+ */
+export function isProductRefinementOnly(message: string) {
+  const refinement = /\b(?:actually|instead|make\s+that|change(?:\s+it)?\s+to|red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|rectangular|rectangle|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|commercial|restaurant|fine\s+dining)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(message);
+  if (!refinement) return false;
+
+  const explicitSelection = /\b(?:take|choose|select|pick|order|buy|give\s+me|go\s+with)\b|\b(?:this|that|the)\s+(?:one|item|product|option)\b|\b(?:option|choice|item|number|no\.?)\s*#?\s*\d+\b|\b(?:first|1st|second|2nd|third|3rd|fourth|4th|last|top|bottom)(?:\s+one)?\b/i.test(message);
+  return !explicitSelection;
 }
 
 export function requestsAnotherOption(message: string) {
@@ -241,6 +255,10 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
     ...collectQuantityCandidates(
       message,
       /\b(?:actually\s+)?(?:make\s+(?:it|that)|change(?:\s+the)?\s+quantity(?:\s+to)?|quantity(?:\s+to)?|change\s+to)\s*(-?\d+(?:\.\d+)?)/gi,
+    ),
+    ...collectQuantityCandidates(
+      message,
+      /\b(-?\d+(?:\.\d+)?)\s+(?:(?:\w[\w'-]*)\s+){0,3}(?:knives?|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?)\b/gi,
     ),
     ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?|sets?|pairs?)\w*\b/gi),
     ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:个|件|只|套|把|双|份)/gu),

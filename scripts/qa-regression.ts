@@ -5,6 +5,7 @@ import {
   asksForRecommendation,
   confirmsDisplayedProduct,
   confirmsOrderRequest,
+  isProductRefinementOnly,
   referencesSingleDisplayedProduct,
   requestedQuantity,
   requestsAdditionalProduct,
@@ -102,6 +103,25 @@ async function checkMalformedJson() {
     reason: failure ?? "Matched expected behaviour",
     durationMs,
     response: body.error ?? "",
+    products: [],
+  });
+}
+
+for (const [id, prompt, expected] of [
+  ["INTENT-REFINE-001", "black", true],
+  ["INTENT-REFINE-002", "Actually black instead", true],
+  ["INTENT-REFINE-003", "27cm round for restaurant service", true],
+  ["INTENT-REFINE-004", "I’ll take the black one", false],
+] as const) {
+  const pass = isProductRefinementOnly(prompt) === expected;
+  results.push({
+    id,
+    area: "Displayed-product refinement intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Expected refinement-only intent to be ${expected}`,
+    durationMs: 0,
+    response: "",
     products: [],
   });
 }
@@ -259,6 +279,24 @@ for (const [id, prompt, expected] of [
   });
 }
 
+{
+  const prompt = "I need 4 chef knives and 6 wine glasses";
+  const clauses = splitMultipleProductRequest(prompt);
+  const pass = clauses.length === 2
+    && clauses[0].includes("4 chef knives")
+    && clauses[1].includes("6 wine glasses");
+  results.push({
+    id: "INTENT-MULTI-SPLIT-002",
+    area: "Multi-item request memory",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Expected knife and wine-glass requests, received: ${clauses.join(" | ")}`,
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
 for (const [id, prompt] of [
   ["INTENT-DISPLAYED-QTY-001", "okie give me 5 of this"],
   ["INTENT-DISPLAYED-QTY-002", "ok i will take 5 of that"],
@@ -270,6 +308,21 @@ for (const [id, prompt] of [
     prompt,
     pass,
     reason: pass ? "Matched expected behaviour" : "Quantity follow-up did not retain the displayed product and quantity",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+{
+  const prompt = "What about the 6 wine glasses?";
+  const pass = requestedQuantity(prompt) === 6;
+  results.push({
+    id: "INTENT-FOLLOWUP-QTY-001",
+    area: "Natural product quantity",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Expected the wine-glass follow-up quantity to be 6",
     durationMs: 0,
     response: "",
     products: [],
@@ -1034,6 +1087,25 @@ await check("CTX-005", "Context & product relevance", "black", (reply) => {
     ? null
     : `Expected only black plates, got ${products.map((product) => product.name).join("; ")}`;
 }, blackPlateHistory, 15_000);
+const whiteDinnerPlateHistory: HistoryItem[] = [
+  { role: "user", content: "I need white dinner plates" },
+  { role: "assistant", content: "Here are three white dinner plate options." },
+];
+for (const [id, prompt] of [
+  ["CTX-018", "black"],
+  ["CTX-019", "Actually black instead"],
+] as const) {
+  await check(id, "Short colour correction", prompt, (reply) => {
+    const products = reply.products ?? [];
+    if (/only help with Sia Huat products|shall we get back/i.test(reply.message)) {
+      return "A colour correction was misclassified as off-topic";
+    }
+    if (products.length === 0) return "Expected black plate options after the colour correction";
+    return products.every((product) => /\b(?:plate|platter)\b/i.test(product.name) && /\bblack\b/i.test(product.name))
+      ? null
+      : `The correction returned a non-black plate: ${products.map((product) => product.name).join("; ")}`;
+  }, whiteDinnerPlateHistory, 20_000);
+}
 await check("CTX-012", "Explicit product switch", "Forget the knives. Show me black dinner plates instead", (reply) => {
   const products = reply.products ?? [];
   if (products.length === 0) return "Expected black dinner-plate options after an explicit switch";
@@ -1140,6 +1212,54 @@ await check("CTX-017", "Queued same-category refinement", "27cm round plates for
   stage: "clarify",
   activeProduct: null,
   quantity: 10,
+  displayedProducts: [],
+});
+await check("CTX-020", "Three-message queued refinement", "27cm round for restaurant service", (reply) => {
+  if (reply.selectedProduct && !(/\bblack\b/i.test(reply.selectedProduct.name) && /27/.test(reply.selectedProduct.name))) {
+    return `The refinement silently selected the wrong item: ${reply.selectedProduct.name}`;
+  }
+  const products = reply.products ?? [];
+  if (products.length === 0) {
+    return /10/.test(reply.message)
+      ? null
+      : "The no-match response lost the remembered quantity of 10";
+  }
+  const invalid = products.find((product) =>
+    !/\bblack\b/i.test(product.name)
+    || !/27/.test(product.name)
+    || !/(?:\bround\b|\brd\b|ø)/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 10,
+  );
+  return invalid ? `The queued refinement returned the wrong plate: ${invalid.name}` : null;
+}, [
+  { role: "user", content: "I need 10 dinner plates" },
+  { role: "assistant", content: "Here are dinner plate options with at least 10 available." },
+  { role: "user", content: "black" },
+  { role: "assistant", content: "Here are black dinner plate options with at least 10 available." },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 10,
+  displayedProducts: [],
+});
+await check("CTX-021", "Multi-item category switch", "What about the 6 wine glasses?", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected wine-glass options after switching from the knife line";
+  const invalid = products.find((product) =>
+    !/\b(?:wine|glass|stemglass)\b/i.test(product.name)
+    || /\bknife\b/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 6,
+  );
+  return invalid ? `The wine-glass follow-up kept the knife context: ${invalid.name}` : null;
+}, [
+  { role: "user", content: "I need 4 chef knives and 6 wine glasses" },
+  { role: "assistant", content: "Here are chef knives with at least 4 available." },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 4,
   displayedProducts: [],
 });
 await checkMalformedJson();

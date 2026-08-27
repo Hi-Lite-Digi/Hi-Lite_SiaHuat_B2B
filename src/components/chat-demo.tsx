@@ -16,6 +16,7 @@ import {
   confirmsDisplayedProduct,
   confirmsOrderRequest,
   isGenericAddAnotherItem,
+  isProductRefinementOnly,
   parseRequestedQuantity,
   referencesSingleDisplayedProduct,
   requestedDisplayedProductIndex,
@@ -24,6 +25,7 @@ import {
   requestsAnotherOption,
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
+import { productCategory } from "@/lib/chat-intent";
 
 type QuoteSummary = {
   item: string;
@@ -718,20 +720,32 @@ export function ChatDemo() {
     }
 
     let messageForApi = clean;
+    let newlyQueuedRequests: string[] = [];
     const multiProductRequests = orderLinesRef.current.length === 0
       && pendingOrderRequestsRef.current.length === 0
       ? splitMultipleProductRequest(clean)
       : [];
     if (multiProductRequests.length > 1) {
       messageForApi = multiProductRequests[0];
-      pendingOrderRequestsRef.current = multiProductRequests.slice(1);
+      newlyQueuedRequests = multiProductRequests.slice(1);
+      pendingOrderRequestsRef.current = newlyQueuedRequests;
     }
 
+    const queuedRequestNotice = newlyQueuedRequests.length > 0
+      ? replyLanguage === "zh"
+        ? `\n\n我也记住了下一项：${newlyQueuedRequests.join("；")}。完成当前商品后会继续处理。`
+        : `\n\nI’ve also kept your next request: ${newlyQueuedRequests.join("; ")}. We’ll handle it after this item.`
+      : "";
+
+    const cleanCategory = productCategory(clean);
+    const canMatchQueuedCategory = newlyQueuedRequests.length === 0;
     const queuedRequestIndex = pendingOrderRequestsRef.current.findIndex(
-      (request) => request.toLocaleLowerCase() === clean.toLocaleLowerCase(),
+      (request) => request.toLocaleLowerCase() === clean.toLocaleLowerCase()
+        || (canMatchQueuedCategory && cleanCategory !== null && productCategory(request) === cleanCategory),
     );
-    const startingAdditionalProduct = (pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
-      && (queuedRequestIndex >= 0 || requestsAdditionalProduct(clean));
+    const startingAdditionalProduct = queuedRequestIndex >= 0
+      || ((pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
+        && requestsAdditionalProduct(clean));
     if (startingAdditionalProduct) {
       if (queuedRequestIndex >= 0) {
         pendingOrderRequestsRef.current = pendingOrderRequestsRef.current.filter((_, index) => index !== queuedRequestIndex);
@@ -841,7 +855,7 @@ export function ChatDemo() {
       chooseProduct(recommended, clean);
       return;
     }
-    const requestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean)
+    const requestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean) && !isProductRefinementOnly(clean)
       ? requestedDisplayedProductIndex(clean, lastProducts)
       : null;
     if (!pendingProduct && requestedIndex !== null) {
@@ -1072,20 +1086,20 @@ export function ChatDemo() {
         setLastProducts((current) => current.some((item) => item.stock_id === product.stock_id) ? current : [product, ...current]);
         setMessages((current) => [...current, {
           id: nextId.current++, role: "assistant", needsConfirmation: true, selectedProduct: product,
-          text: replyLanguage === "zh"
+          text: `${replyLanguage === "zh"
             ? quantity
               ? `请确认这是您要的商品。\n\n您需要的数量：${quantity} ${product.uom_id}。`
               : "我在目录中找到了这件商品。请确认是否是您要的商品。"
             : quantity
               ? `Please confirm this is the correct item.\n\nQuantity requested: ${quantity} ${product.uom_id}.`
-              : "I found this item in the catalogue. Is this the exact item you want?",
+              : "I found this item in the catalogue. Is this the exact item you want?"}${queuedRequestNotice}`,
         }]);
         return;
       }
 
       setStage(reply.stage);
       setSuggestions(products.length > 0 ? productOptionSuggestions(products) : reply.suggestions ?? []);
-      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: reply.message, products }]);
+      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: `${reply.message}${queuedRequestNotice}`, products }]);
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
       const timedOut = reason instanceof DOMException && reason.name === "TimeoutError";
