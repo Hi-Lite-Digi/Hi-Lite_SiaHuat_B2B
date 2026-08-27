@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 import type { ConversationContext } from "../src/lib/chat-contract";
+import { catalogueMessageWithContext } from "../src/lib/chat-intent";
 import {
   asksForRecommendation,
   confirmsDisplayedProduct,
@@ -280,6 +281,7 @@ for (const [id, prompt] of [
   ["INTENT-ORDER-CONFIRM-001", "ok confirm"],
   ["INTENT-ORDER-CONFIRM-002", "okay, confirm the order"],
   ["INTENT-ORDER-CONFIRM-003", "确认订单询价"],
+  ["INTENT-ORDER-CONFIRM-004", "Submit enquiry now"],
 ] as const) {
   const pass = confirmsOrderRequest(prompt);
   results.push({
@@ -326,6 +328,22 @@ for (const [id, prompt, expected] of [
     reason: pass ? "Matched expected behaviour" : `Expected two retained product requests, received: ${clauses.join(" | ")}`,
     durationMs: 0,
     response: "",
+    products: [],
+  });
+}
+
+{
+  const prompt = "I need 3 bread knives";
+  const query = catalogueMessageWithContext(prompt, []);
+  const pass = query === "bread knife";
+  results.push({
+    id: "INTENT-KNIFE-TYPE-001",
+    area: "Natural knife-type wording",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Expected bread knife, received: ${query}`,
+    durationMs: 0,
+    response: query,
     products: [],
   });
 }
@@ -1496,6 +1514,12 @@ await check("CASE-007", "Case-study constrained ladder sourcing", "I need a 3-st
   noProducts(reply) ?? (/human colleague/i.test(reply.message) && /source/i.test(reply.message) && !/smaller quantity/i.test(reply.message)
     ? null
     : "A 3-step material specification should be sourced by a human, not treated as quantity 3"));
+await check("CASE-008", "Human-friendly queued product wording", "I need 3 bread knives", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "A normal bread-knives request should return selectable products";
+  const invalid = products.find((product) => !/bread.*knife|knife.*bread/i.test(product.name));
+  return invalid ? `Returned a different knife type: ${invalid.name}` : null;
+}, [], 20_000);
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));

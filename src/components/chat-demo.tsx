@@ -120,7 +120,7 @@ function whatsAppQuoteMessage(order: QuoteSummary | QuoteSummary[], confirmed = 
   if (quotes.length > 1) lines.push("", `*GRAND TOTAL:* $${grandTotal.toFixed(2)} (ex GST)`);
   lines.push("", confirmed
     ? "No purchase has been placed yet. The sales team will confirm the final order with you."
-    : "No purchase has been placed yet. You can add another item or confirm the order request.");
+    : "No purchase has been placed yet. Use the buttons below to add another item or submit this enquiry.");
   return lines.join("\n");
 }
 
@@ -636,6 +636,10 @@ export function ChatDemo() {
     };
   }
 
+  function queuedRequestLabel(request: string) {
+    return request.replace(/^I need\s+/i, "").replace(/[.!]\s*$/, "").trim();
+  }
+
   function showOrderReview(quantity: number, product: Product, userText?: string) {
     const quote = quoteFor(quantity, product);
     const nextOrder = [
@@ -644,6 +648,7 @@ export function ChatDemo() {
     ];
     orderLinesRef.current = nextOrder;
     const nextQueuedRequest = pendingOrderRequestsRef.current[0] ?? null;
+    const nextQueuedLabel = nextQueuedRequest ? queuedRequestLabel(nextQueuedRequest) : null;
     setMessages((current) => [...current,
       ...(userText ? [{ id: nextId.current++, role: "user" as const, text: userText }] : []),
       {
@@ -651,7 +656,7 @@ export function ChatDemo() {
         text: `${whatsAppQuoteMessage(nextOrder, false, conversationLanguage)}${nextQueuedRequest
           ? conversationLanguage === "zh"
             ? `\n\n接下来：${nextQueuedRequest}`
-            : `\n\nNext requested item: ${nextQueuedRequest}`
+            : `\n\nNext up: ${nextQueuedLabel}. Tap Continue below—you don’t need to type it again.`
           : ""}`,
         quoteSummary: quote,
         quoteSummaries: nextOrder,
@@ -662,10 +667,10 @@ export function ChatDemo() {
     setQuery("");
     setStage("clarify");
     setSuggestions(nextQueuedRequest
-      ? [nextQueuedRequest, conversationLanguage === "zh" ? "确认订单询价" : "Confirm order request"]
+      ? [conversationLanguage === "zh" ? nextQueuedRequest : `Continue: ${nextQueuedLabel}`, conversationLanguage === "zh" ? "确认订单询价" : "Submit enquiry now"]
       : conversationLanguage === "zh"
         ? ["确认订单询价", "再加一件商品", "更改数量"]
-        : ["Confirm order request", "Add another item", "Change quantity"]);
+        : ["Submit enquiry", "Add another item", "Change quantity"]);
   }
 
   function showQuantityLimit(userText: string, quantity: number, product: Product, limit: number) {
@@ -748,6 +753,7 @@ export function ChatDemo() {
         && requestsAdditionalProduct(clean));
     if (startingAdditionalProduct) {
       if (queuedRequestIndex >= 0) {
+        messageForApi = pendingOrderRequestsRef.current[queuedRequestIndex];
         pendingOrderRequestsRef.current = pendingOrderRequestsRef.current.filter((_, index) => index !== queuedRequestIndex);
       }
       setPendingProduct(null);
@@ -1028,10 +1034,10 @@ export function ChatDemo() {
     if (pendingQuote && !startingAdditionalProduct) {
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
-        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "这份询价尚未提交。请选择“确认订单询价”、“更改数量”或“选择其他商品”。" : "I haven’t submitted this enquiry yet. Please choose Confirm order request, Change quantity, or Choose another item." },
+        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "这份询价尚未提交。请选择“确认订单询价”、“更改数量”或“选择其他商品”。" : "This enquiry is still open. Use a button below, or type the name of the next product you need." },
       ]);
       setQuery("");
-      setSuggestions(replyLanguage === "zh" ? ["确认订单询价", "更改数量", "选择其他商品"] : ["Confirm order request", "Change quantity", "Choose another item"]);
+      setSuggestions(replyLanguage === "zh" ? ["确认订单询价", "更改数量", "选择其他商品"] : ["Submit enquiry", "Change quantity", "Add another item"]);
       return;
     }
 

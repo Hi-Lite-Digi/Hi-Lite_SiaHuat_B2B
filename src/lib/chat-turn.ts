@@ -124,7 +124,7 @@ export function confirmsDisplayedProduct(message: string) {
 
 export function confirmsOrderRequest(message: string) {
   const normalized = message.trim();
-  return /^(?:(?:ok(?:ay|ie)?|yes|yup|yeah|sure)[,\s-]*)?(?:confirm(?:ed)?(?:\s+(?:the\s+)?(?:order|order request|enquiry))?|place the enquiry|submit for review)(?:[.!\s]*)$/i.test(normalized)
+  return /^(?:(?:ok(?:ay|ie)?|yes|yup|yeah|sure)[,\s-]*)?(?:confirm(?:ed)?(?:\s+(?:the\s+)?(?:order|order request|enquiry))?|place the enquiry|submit(?:\s+the)?\s+enquiry(?:\s+now)?|send the enquiry|submit for review)(?:[.!\s]*)$/i.test(normalized)
     || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核)[。.！!\s]*$/u.test(normalized);
 }
 

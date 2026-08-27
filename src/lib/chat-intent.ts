@@ -267,10 +267,13 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     const damascus = latestDamascusIndex >= 0 && latestDamascusIndex >= latestOriginIndex
       ? "damascus"
       : null;
-    const latestCleaverIndex = customerMessages.findLastIndex((content) => /\bcleavers?\b/i.test(content) || /砍骨刀|中式[^。,.!?]*刀/u.test(content));
-    const latestChefIndex = customerMessages.findLastIndex((content) => /\bchef(?:'s)?\s+knif|chef\s+knives\b/i.test(content));
-    const cleaver = latestCleaverIndex >= 0 && latestCleaverIndex >= latestChefIndex ? "cleaver" : null;
-    const chef = latestChefIndex >= 0 && latestChefIndex >= latestCleaverIndex ? "chef" : null;
+    const latestKnifeType = [
+      { index: customerMessages.findLastIndex((content) => /\bcleavers?\b/i.test(content) || /砍骨刀|中式[^。,.!?]*刀/u.test(content)), label: "cleaver" },
+      { index: customerMessages.findLastIndex((content) => /\bchef(?:'s)?\s+knif|chef\s+knives\b/i.test(content)), label: "chef knife" },
+      { index: customerMessages.findLastIndex((content) => /\bbread\s+kn(?:ife|ives)\b/i.test(content)), label: "bread knife" },
+      { index: customerMessages.findLastIndex((content) => /\bboning\s+kn(?:ife|ives)\b/i.test(content)), label: "boning knife" },
+      { index: customerMessages.findLastIndex((content) => /\bparing\s+kn(?:ife|ives)\b/i.test(content)), label: "paring knife" },
+    ].filter((candidate) => candidate.index >= 0).sort((left, right) => right.index - left.index)[0]?.label ?? "knife";
     const originSource = latestOriginIndex >= 0 ? customerMessages[latestOriginIndex] : "";
     const origin = /\b(?:japan|japanese)\b/i.test(originSource)
       ? "japanese"
@@ -280,7 +283,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     const size = [...customerMessages].reverse()
       .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
       .find(Boolean) ?? null;
-    return [damascus, origin, cleaver ?? chef, cleaver ? null : "knife", size].filter(Boolean).join(" ");
+    return [damascus, origin, latestKnifeType, size].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "wok") {

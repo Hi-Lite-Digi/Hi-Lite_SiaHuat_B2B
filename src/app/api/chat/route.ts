@@ -360,6 +360,11 @@ function matchesExplicitProductCategory(message: string, product: Product) {
       && !/\b(?:microfibre|microfiber|cloth|fabric|warmer|holder|rack)\b/i.test(productName);
   }
   if (/\bgloves?\b/i.test(message)) return /\bgloves?\b/i.test(productName);
+  if (/\bbread\s+kn(?:ife|ives)\b/i.test(message)) return /\bbread\b[\s\S]*\bknife\b|\bknife\b[\s\S]*\bbread\b/i.test(productText);
+  if (/\bboning\s+kn(?:ife|ives)\b/i.test(message)) return /\bboning\s+knife\b/i.test(productText);
+  if (/\bparing\s+kn(?:ife|ives)\b/i.test(message)) return /\bparing\s+knife\b/i.test(productText);
+  if (/\bchef(?:'s)?\s+kn(?:ife|ives)\b/i.test(message)) return /\bchef(?:'s|s)?\s+knife\b/i.test(productText);
+  if (/\bcleavers?\b/i.test(message)) return /\bcleavers?\b/i.test(productText);
   if (/\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message)
     && !/\b(?:lid|cover)\b/i.test(message)) {
     return /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(productText)
