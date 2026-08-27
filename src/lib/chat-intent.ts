@@ -200,15 +200,22 @@ export function catalogueMessageWithContext(message: string, userHistory: string
       if (/\b(?:sorry|actually|make\s+that|change(?:\s+it)?\s+to|no[,.\s]+wait|forget|instead|switch|never\s*mind)\b/i.test(message)) {
         const colour = [...message.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0] ?? null;
         const size = [...message.matchAll(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/gi)].at(-1)?.[0] ?? null;
-        return [colour, size, "plate tableware"].filter(Boolean).join(" ");
+        const shape = [...message.matchAll(/\b(round|square|rectangular|rectangle|oval)\b/gi)].at(-1)?.[0] ?? null;
+        const purpose = /\bdinner\b/i.test(message) ? "dinner" : null;
+        return [colour, size, shape, purpose, "plate tableware"].filter(Boolean).join(" ");
       }
-      return message;
     }
     const fineDining = /\b(fine\s+dining)\b/i.test(joinedMessages) ? "fine dining" : null;
     const commercial = /\b(commercial|restaurant)\b/i.test(joinedMessages) ? "commercial" : null;
-    const colour = joinedMessages.match(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/i)?.[0] ?? null;
+    const colour = [...customerMessages].reverse()
+      .map((content) => [...content.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0])
+      .find(Boolean) ?? null;
     const size = [...customerMessages].reverse().map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0]).find(Boolean) ?? null;
-    return [fineDining, commercial, colour, size, "plate tableware"].filter(Boolean).join(" ");
+    const shape = [...customerMessages].reverse()
+      .map((content) => [...content.matchAll(/\b(round|square|rectangular|rectangle|oval)\b/gi)].at(-1)?.[0])
+      .find(Boolean) ?? null;
+    const purpose = /\bdinner\b/i.test(joinedMessages) ? "dinner" : null;
+    return [fineDining, commercial, colour, size, shape, purpose, "plate tableware"].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "knife") {

@@ -342,6 +342,25 @@ function broadProductTypePattern(product: Product) {
   return patterns.find((pattern) => pattern.test(text)) ?? null;
 }
 
+function strictAlternativeTypePattern(product: Product) {
+  const text = searchableProductText(product);
+  const patterns = [
+    /\bcutlery\s+set\b/i,
+    /\bchef(?:'s|s)?\s+knife\b/i,
+    /\bboning\s+knife\b/i,
+    /\bbread\s+knife\b/i,
+    /\bparing\s+knife\b/i,
+    /\bcleaver\b/i,
+    /\b(?:coffee|spice)\s+grinder\b/i,
+    /\bfry(?:ing)?\s+pan\b|\bfrypan\b|\bskillet\b/i,
+    /\bsauce\s*pan\b/i,
+    /\bgrill\s+pan\b/i,
+    /\bwok\s+(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/i,
+    /\bstock\s*pot\b/i,
+  ];
+  return patterns.find((pattern) => pattern.test(text)) ?? null;
+}
+
 function broadProductTypeSearch(product: Product) {
   const text = searchableProductText(product);
   if (/\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(text)) return "coffee grinder";
@@ -366,7 +385,8 @@ export async function findAvailableCatalogueAlternatives(
   const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
 
-  const typePattern = broadProductTypePattern(source);
+  const typePattern = strictAlternativeTypePattern(source) ?? broadProductTypePattern(source);
+  const sourceUom = source.uom_id.trim().toLowerCase();
   const scopes = [
     ["third_category", source.third_category],
     ["subcategory", source.subcategory],
@@ -391,6 +411,7 @@ export async function findAvailableCatalogueAlternatives(
     if (!response.ok) throw new Error(`SUPABASE_ALTERNATIVES_${response.status}`);
     for (const product of catalogueProductSchema.array().parse(await response.json())) {
       if (product.stock_id === source.stock_id
+        || product.uom_id.trim().toLowerCase() !== sourceUom
         || product.available_quantity === null
         || product.available_quantity === undefined
         || product.available_quantity < minimumQuantity) continue;
@@ -404,6 +425,7 @@ export async function findAvailableCatalogueAlternatives(
     const broadMatches = await searchCatalogue(broadSearch, { resultLimit: 80, outputLimit: 80 });
     for (const product of broadMatches) {
       if (product.stock_id === source.stock_id
+        || product.uom_id.trim().toLowerCase() !== sourceUom
         || product.stock_status !== "in_stock"
         || product.available_quantity === null
         || product.available_quantity === undefined

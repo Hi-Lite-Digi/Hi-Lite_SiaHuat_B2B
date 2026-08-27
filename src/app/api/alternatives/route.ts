@@ -10,7 +10,14 @@ const requestSchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const input = requestSchema.safeParse(await request.json());
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: "The request body must be valid JSON." }, { status: 400 });
+  }
+
+  const input = requestSchema.safeParse(body);
   if (!input.success) return Response.json({ error: "Invalid item code." }, { status: 400 });
 
   try {

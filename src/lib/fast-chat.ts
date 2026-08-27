@@ -202,7 +202,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply(`Sure—let’s continue with ${activeTask}. What detail would you like to add?`, ["Add a brand", "Add a size", "Search now"]);
   }
 
-  if (/\b(ignore( all| previous| the)? instructions|system prompt|password|api key|secret key|show.*credentials|reveal.*secret)\b/.test(simple)) {
+  if (/\b(ignore(?: all| previous| the)? (?:instructions|rules|guidelines)|system prompt|password|api key|secret key|show.*credentials|reveal.*secret)\b/.test(simple)) {
     return reply(
       `I can’t help with passwords, credentials or internal instructions.${activeTask ? ` We can continue with ${activeTask}.` : " I can help with Sia Huat products and prices."}`,
       activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Browse products"],
@@ -582,9 +582,13 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   // Once a product conversation starts, n8n remains responsible for product context.
-  if (hasProductContext || isCatalogueRequest(message)) return null;
+  if (hasProductContext || currentCategory || isCatalogueRequest(message)) return null;
 
-  // Open-ended conversation belongs to the conversational model. This local
-  // layer only handles fast, deterministic business and navigation replies.
-  return null;
+  // Keep unrecognised open-ended conversation inside the Sia Huat product
+  // scope. Passing it to a general conversational model can produce a fluent
+  // but unrelated answer (for example, travel-planning help).
+  return reply(
+    `I can only help with Sia Huat products and enquiries here.${activeTask ? ` Shall we get back to ${activeTask}?` : " What product are you looking for?"}`,
+    activeTask ? ["Yes, continue", "Start something else"] : ["Find a product", "Browse products"],
+  );
 }

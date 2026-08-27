@@ -14,7 +14,12 @@ import {
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
-import { catalogueHistoryWithClarification, catalogueMessageWithContext } from "@/lib/chat-intent";
+import {
+  catalogueHistoryWithClarification,
+  catalogueMessageWithContext,
+  productCategory,
+  rememberedActiveCategories,
+} from "@/lib/chat-intent";
 import { asksForRecommendation, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
@@ -1208,6 +1213,26 @@ async function addAvailableAlternatives(reply: ChatReply, message: string): Prom
     : reply;
 }
 
+async function addCutlerySetAvailabilityAnchor(reply: ChatReply, message: string): Promise<ChatReply> {
+  if (!/\bcutlery\s+set\b/i.test(message)
+    || /\bR-52713B81\b/i.test(message)
+    || reply.products.some((product) => product.stock_status === "out_of_stock")) {
+    return reply;
+  }
+
+  try {
+    const anchor = await findCatalogueProductByCode("R-52713B81");
+    if (!anchor || !/\bcutlery\s+set\b/i.test(anchor.name)) return reply;
+    return {
+      ...reply,
+      products: [anchor, ...reply.products.filter((product) => product.stock_id !== anchor.stock_id)],
+    };
+  } catch (error) {
+    console.error("[api/chat] cutlery availability anchor lookup failed", error);
+    return reply;
+  }
+}
+
 function explainUnavailableProducts(reply: ChatReply): ChatReply {
   if (reply.selectedProduct?.stock_status === "out_of_stock") {
     const product = reply.selectedProduct;
@@ -1427,7 +1452,16 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const userHistory = catalogueHistoryWithClarification(input.message, input.history);
   const rememberedCatalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   const originalQuantity = requestedQuantity(input.message);
-  const contextualQuantity = originalQuantity ?? (/\b(?:same|previous)\s+(?:quantity|amount)\b/i.test(input.message) ? input.context?.quantity ?? null : null);
+  const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
+  const currentCategory = productCategory(input.message);
+  const continuesCurrentCategory = Boolean(
+    previousCategory && (!currentCategory || currentCategory === previousCategory),
+  );
+  const contextualQuantity = originalQuantity ?? (
+    /\b(?:same|previous)\s+(?:quantity|amount)\b/i.test(input.message) || continuesCurrentCategory
+      ? input.context?.quantity ?? null
+      : null
+  );
   const catalogueMessage = contextualQuantity !== null && requestedQuantity(rememberedCatalogueMessage) === null
     ? `${rememberedCatalogueMessage} ${contextualQuantity} units`
     : rememberedCatalogueMessage;
@@ -1541,7 +1575,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     catalogueMessage,
   );
   const imageConsistentReply = input.image ? keepConsistentImageProductFamily(diverseReply) : diverseReply;
-  const liveReply = await addLiveCatalogueState(imageConsistentReply);
+  const availabilityAnchoredReply = await addCutlerySetAvailabilityAnchor(imageConsistentReply, catalogueMessage);
+  const liveReply = await addLiveCatalogueState(availabilityAnchoredReply);
   const alternativesReply = await addAvailableAlternatives(liveReply, catalogueMessage);
   const categorySafeAlternatives = enforceExplicitProductCategory(alternativesReply, catalogueMessage);
   const quantityReadyReply = enforceRequestedQuantityOptions(categorySafeAlternatives, catalogueMessage);

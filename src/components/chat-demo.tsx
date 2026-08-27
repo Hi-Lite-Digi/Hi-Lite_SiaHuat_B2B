@@ -47,15 +47,25 @@ function languageForMessage(value: string, current: ChatLanguage): ChatLanguage 
   return current;
 }
 
-function safeChatFailureMessage(language: ChatLanguage, timedOut = false) {
+function safeChatFailureMessage(language: ChatLanguage, timedOut = false, hasProductContext = false) {
   if (language === "zh") {
+    if (hasProductContext) {
+      return timedOut
+        ? "刚才的查询超时了，不过我还记得目前的商品要求。请再发送最后一个要求，我会继续。"
+        : "刚才的查询没有完成，不过目前的商品要求仍然保留。请再发送最后一个要求。";
+    }
     return timedOut
-      ? "刚才的查询超时了，不过我还记得目前的商品要求。请再发送最后一个要求，我会继续。"
-      : "刚才的查询没有完成，不过目前的商品要求仍然保留。请再发送最后一个要求。";
+      ? "刚才的查询超时了。请再试一次，或发送商品名称。"
+      : "刚才的查询没有完成。请再试一次，或发送商品名称。";
+  }
+  if (hasProductContext) {
+    return timedOut
+      ? "That lookup took too long, but I still have the current product details. Send the last requirement once more and I’ll continue."
+      : "That lookup didn’t finish, but I still have the current product details. Send the last requirement once more and I’ll continue.";
   }
   return timedOut
-    ? "That lookup took too long, but I still have the current product details. Send the last requirement once more and I’ll continue."
-    : "That lookup didn’t finish, but I still have the current product details. Send the last requirement once more and I’ll continue.";
+    ? "That lookup took too long. Please try again, or send the product name."
+    : "That lookup didn’t finish. Please try again, or send the product name.";
 }
 
 function whatsAppQuoteMessage(order: QuoteSummary | QuoteSummary[], confirmed = false, language: ChatLanguage = "en") {
@@ -258,13 +268,14 @@ function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: str
   </p>;
 }
 
-const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send me the item name, brand or a photo.", time: singaporeTime() };
-const initialSuggestions = ["Chef knives", "Glassware", "Coffee beans"];
+const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send me the item name, brand or a photo." };
+const initialSuggestions = ["Chef knives", "Glassware", "Black dinner plates"];
 
 export function ChatDemo() {
-  const [messages, setMessageState] = useState<ChatMessage[]>([welcome]);
+  const [messages, setMessageState] = useState<ChatMessage[]>(() => [{ ...welcome, time: singaporeTime() }]);
   const [conversationLanguage, setConversationLanguage] = useState<ChatLanguage>("en");
   const [query, setQuery] = useState("");
+  const [queryError, setQueryError] = useState("");
   const [stage, setStage] = useState<ChatReply["stage"]>("discover");
   const [suggestions, setSuggestions] = useState(initialSuggestions);
   const [loading, setLoading] = useState(false);
@@ -289,7 +300,8 @@ export function ChatDemo() {
   const sessionId = useRef(crypto.randomUUID());
   const conversationEnd = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
-  const queuedMessages = useRef<string[]>([]);
+  const [queuedMessages, setQueuedMessages] = useState<Array<{ value: string; voiceNote?: VoiceNote }>>([]);
+  const submitRef = useRef<((value: string, voiceNote?: VoiceNote) => Promise<void>) | null>(null);
   const orderLinesRef = useRef<QuoteSummary[]>([]);
   const pendingOrderRequestsRef = useRef<string[]>([]);
   const messagesRef = useRef(messages);
@@ -576,6 +588,17 @@ export function ChatDemo() {
   }
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const time = singaporeTime();
+      setMessageState((current) => current.map((message, index) =>
+        index === 0 ? { ...message, time } : message,
+      ));
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     messagesRef.current = messages;
     conversationEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, loading, suggestions]);
@@ -677,12 +700,19 @@ export function ChatDemo() {
     if (!clean) return;
     const replyLanguage = languageForMessage(clean, conversationLanguage);
     if (replyLanguage !== conversationLanguage) setConversationLanguage(replyLanguage);
+    if (clean.length > 500) {
+      setQueryError(replyLanguage === "zh"
+        ? "消息不能超过 500 个字符。请缩短后再发送。"
+        : "Please keep your message to 500 characters or fewer.");
+      return;
+    }
+    setQueryError("");
     if (/^\/\/reset sia huat$/i.test(clean)) {
       resetByCommand();
       return;
     }
     if (loadingRef.current) {
-      queuedMessages.current.push(clean);
+      setQueuedMessages((current) => [...current, { value: clean, voiceNote }]);
       setQuery("");
       return;
     }
@@ -879,19 +909,23 @@ export function ChatDemo() {
 
       if (alternatives.length > 0) setLastProducts(alternatives);
       setPendingQuantity(minimumQuantity);
+      const alternativeUom = alternatives.length > 0
+        && alternatives.every((product) => product.uom_id === alternatives[0].uom_id)
+        ? alternatives[0].uom_id
+        : replyLanguage === "zh" ? "件" : "units";
       setMessages((current) => [...current, {
         id: nextId.current++, role: "assistant",
         text: replyLanguage === "zh"
           ? alternatives.length > 0
             ? minimumQuantity !== null
-              ? `好的，这里有 ${alternatives.length} 个相关选择，每个都有至少 ${minimumQuantity} ${alternatives[0]?.uom_id ?? "件"} 库存。您想要哪一个？`
+              ? `好的，这里有 ${alternatives.length} 个相关选择，每个都有至少 ${minimumQuantity} ${alternativeUom} 库存。您想要哪一个？`
               : `好的，这里有 ${alternatives.length} 个有货的替代选择。您想要哪一个？`
             : minimumQuantity !== null
               ? `抱歉，我找不到同类商品能满足 ${minimumQuantity} 件的实时库存。您要减少数量吗？`
               : "抱歉，目前无法确认其他有货的选择。请告诉我您偏好的尺寸、款式或品牌，我会扩大查询范围。"
           : alternatives.length > 0
             ? minimumQuantity !== null
-              ? `Here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} relevant option${alternatives.length === 1 ? "" : "s"} with at least ${minimumQuantity} ${alternatives[0]?.uom_id ?? "units"} available. Which one would you like?`
+              ? `Here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} relevant option${alternatives.length === 1 ? "" : "s"} with at least ${minimumQuantity} ${alternativeUom} available. Which one would you like?`
               : `Sure—here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} available alternative${alternatives.length === 1 ? "" : "s"}. Which one would you like?`
             : minimumQuantity !== null
               ? `Sorry, I couldn’t confirm another matching item with at least ${minimumQuantity} units available. Would you like a smaller quantity?`
@@ -1013,7 +1047,17 @@ export function ChatDemo() {
       });
       const reply = await response.json() as ChatReply & { error?: string };
       if (sessionId.current !== requestSession) return;
-      if (!response.ok) throw new Error(reply.error ?? "The assistant could not answer right now.");
+      if (!response.ok) {
+        if (response.status === 400) {
+          setMessages((current) => [...current, {
+            id: nextId.current++,
+            role: "assistant",
+            text: reply.error ?? (replyLanguage === "zh" ? "请求内容无效。请检查后再试。" : "That request is not valid. Please check it and try again."),
+          }]);
+          return;
+        }
+        throw new Error(reply.error ?? "The assistant could not answer right now.");
+      }
       const products = reply.products ?? [];
       // Product cards remain the active choices until Claire displays a new
       // list. A clarification-only reply must not erase option memory.
@@ -1045,17 +1089,33 @@ export function ChatDemo() {
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
       const timedOut = reason instanceof DOMException && reason.name === "TimeoutError";
-      setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: safeChatFailureMessage(replyLanguage, timedOut) }]);
+      const hasProductContext = Boolean(confirmedProduct || pendingProduct || pendingQuantity !== null || lastProducts.length > 0);
+      setMessages((current) => [...current, {
+        id: nextId.current++,
+        role: "assistant",
+        text: safeChatFailureMessage(replyLanguage, timedOut, hasProductContext),
+      }]);
     } finally {
       if (sessionId.current !== requestSession) return;
       loadingRef.current = false;
       setLoading(false);
-      const queued = queuedMessages.current.shift();
-      if (queued) {
-        setTimeout(() => void submit(queued), 0);
-      }
     }
   }
+
+  useEffect(() => {
+    submitRef.current = submit;
+  });
+
+  useEffect(() => {
+    if (loading || loadingRef.current) return;
+    const queued = queuedMessages[0];
+    if (!queued) return;
+    const timer = window.setTimeout(() => {
+      setQueuedMessages((current) => current.slice(1));
+      void submitRef.current?.(queued.value, queued.voiceNote);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loading, queuedMessages]);
 
   function chooseProduct(product: Product, userText = conversationLanguage === "zh" ? `我要这个：${product.name}` : `This one: ${product.name}`) {
     if (loading) return;
@@ -1171,6 +1231,7 @@ export function ChatDemo() {
     if (!pendingProduct) return;
     const alternatives = lastProducts.filter((product) => product.stock_id !== pendingProduct.stock_id);
     setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setStage("clarify");
+    setLastProducts(alternatives);
     setMessages((current) => [...current,
       { id: nextId.current++, role: "user", text: userText },
       { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
@@ -1189,7 +1250,7 @@ export function ChatDemo() {
     nextId.current = 2;
     sessionId.current = crypto.randomUUID();
     loadingRef.current = false;
-    queuedMessages.current = [];
+    setQueuedMessages([]);
     orderLinesRef.current = [];
     pendingOrderRequestsRef.current = [];
     setMessages([firstMessage]);
@@ -1197,6 +1258,7 @@ export function ChatDemo() {
     setStage("discover");
     setSuggestions(initialSuggestions);
     setQuery("");
+    setQueryError("");
     setAttachment(null);
     setAttachmentError("");
     setLoading(false);
@@ -1299,7 +1361,7 @@ export function ChatDemo() {
 
           pdf.setFillColor(message.role === "user" ? 223 : 247, message.role === "user" ? 243 : 247, message.role === "user" ? 233 : 245);
           pdf.setDrawColor(210, 220, 216);
-          pdf.roundedRect(margin, y, boxWidth, boxHeight, 3, 3, "FD");
+          pdf.rect(margin, y, boxWidth, boxHeight, "FD");
           pdf.setFont("helvetica", "bold");
           pdf.setFontSize(9);
           pdf.setTextColor(23, 104, 83);
@@ -1326,7 +1388,18 @@ export function ChatDemo() {
 
       const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Singapore" }).format(new Date());
       const filename = `sia-huat-conversation-${date}.pdf`;
-      await pdf.save(filename, { returnPromise: true });
+      const blob = pdf.output("blob");
+      if (blob.size === 0) throw new Error("Generated PDF was empty.");
+
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
     } catch (error) {
       console.error("[chat] PDF download failed", error);
       setExportError("The PDF could not be downloaded. Please try again.");
@@ -1339,7 +1412,7 @@ export function ChatDemo() {
 
   return <div onPaste={handleImagePaste} className="conversation-export min-w-0 w-full max-w-[490px] rounded-[2.5rem] bg-[#112f29] p-2 shadow-[0_35px_90px_rgba(21,54,47,.24)] sm:rounded-[3.3rem] sm:p-3">
     <div className="chat-phone flex h-[70dvh] min-h-[540px] min-w-0 flex-col overflow-hidden rounded-[2rem] bg-[#f8f5ee] sm:rounded-[2.55rem] lg:h-[min(720px,calc(100dvh-3rem))] lg:min-h-[560px]">
-      <header className="chat-screen-header flex min-w-0 items-center gap-2 bg-[#176853] px-3 py-4 text-white sm:gap-3 sm:px-5 sm:py-5"><div className="grid size-10 shrink-0 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f] sm:size-11">C</div><div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold sm:text-base">Claire · Sia Huat</h2><p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#5be08f]" /> online</p></div><div className="print-hide flex shrink-0 items-center gap-0.5 sm:gap-1"><Button aria-label="Download conversation PDF" title="Download conversation PDF" disabled={exportingPdf} variant="ghost" className="h-9 rounded-full px-2 text-white hover:bg-white/10 hover:text-white sm:px-2.5" onClick={() => void saveConversationAsPdf()}>{exportingPdf ? <LoaderCircle className="size-4 animate-spin" /> : <FileDown className="size-4" />}<span className="hidden text-[11px] font-semibold min-[350px]:inline">PDF</span></Button><Button aria-label="Reset conversation" size="icon" variant="ghost" className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button></div></header>
+      <header className="chat-screen-header flex min-w-0 items-center gap-2 bg-[#176853] px-3 py-4 text-white sm:gap-3 sm:px-5 sm:py-5"><div className="grid size-10 shrink-0 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f] sm:size-11">C</div><div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold sm:text-base">Claire · Sia Huat</h2><p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#efad3f]" /> demo assistant</p></div><div className="print-hide flex shrink-0 items-center gap-0.5 sm:gap-1"><Button aria-label="Download conversation PDF" title="Download conversation PDF" disabled={exportingPdf} variant="ghost" className="h-9 rounded-full px-2 text-white hover:bg-white/10 hover:text-white sm:px-2.5" onClick={() => void saveConversationAsPdf()}>{exportingPdf ? <LoaderCircle className="size-4 animate-spin" /> : <FileDown className="size-4" />}<span className="hidden text-[11px] font-semibold min-[350px]:inline">PDF</span></Button><Button aria-label="Reset conversation" size="icon" variant="ghost" className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button></div></header>
       <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
         {messages.map((message) => <div key={message.id} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
@@ -1347,7 +1420,7 @@ export function ChatDemo() {
           {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product, index) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" onClick={() => chooseProduct(product, String(index + 1))} className="block w-full text-left"><p className="break-words font-semibold leading-5"><span className="mr-1 text-[#176853]">{index + 1}.</span>{product.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product, conversationLanguage)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}<p className="pt-1 text-xs font-medium text-[#176853]">{productOptionPrompt(message.products.length, conversationLanguage)}</p></div>}
           {message.selectedProduct && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
            {message.needsConfirmation && pendingProduct?.stock_id === message.selectedProduct?.stock_id && <div className="mt-3 grid grid-cols-2 gap-2"><Button type="button" disabled={checkingStock} onClick={() => void confirmProduct()} className="rounded-full bg-[#176853] hover:bg-[#125441]">{checkingStock ? <LoaderCircle className="size-4 animate-spin" /> : conversationLanguage === "zh" ? "是的，就是这个" : "Yes, this is it"}</Button><Button type="button" disabled={checkingStock} onClick={() => rejectProduct()} variant="outline" className="rounded-full border-[#176853]/25 text-[#176853]">{conversationLanguage === "zh" ? "不是，查看其他" : "No, show others"}</Button></div>}
-          <MessageTimestamp role={message.role} time={message.time ?? ""} />
+          {message.time && <MessageTimestamp role={message.role} time={message.time} />}
         </div>)}
         {loading && <div aria-label="Sia Huat is typing" aria-live="polite" className="flex w-fit items-center gap-1.5 rounded-2xl bg-white px-4 py-3 shadow-sm"><i className="typing-dot" /><i className="typing-dot" /><i className="typing-dot" /></div>}
         {!loading && suggestions.length > 0 && <div className="chat-suggestions flex flex-wrap gap-2">{suggestions.map((item) => <button key={item} onClick={() => void submit(item)} className="rounded-full border border-[#176853]/20 bg-white/90 px-3 py-2 text-xs font-medium text-[#176853] hover:bg-white">{item}</button>)}</div>}
@@ -1365,6 +1438,7 @@ export function ChatDemo() {
         </button>)}
         {attachmentError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{attachmentError}</p>}
         {voiceError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{voiceError}</p>}
+        {queryError && <p role="alert" className="mb-2 px-2 text-xs text-red-600">{queryError}</p>}
         {recordingVoice && <div className="flex min-w-0 items-center gap-2 rounded-full bg-[#f3f3f0] p-1.5 pl-2">
           <Button type="button" aria-label="Cancel voice recording" title="Cancel" onClick={() => stopVoiceRecording(true)} size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-[#a94732]"><Trash2 className="size-4" /></Button>
           <div className="flex min-w-0 flex-1 items-center gap-2"><span className="size-2 shrink-0 animate-pulse rounded-full bg-red-500" /><div className="min-w-0"><p className="truncate text-xs font-semibold text-[#334b44]">Recording {voiceTime(recordingSeconds)}</p><p className="truncate text-[10px] text-[#667a74]">{voiceTranscript || "Speak now…"}</p></div></div>
@@ -1375,7 +1449,7 @@ export function ChatDemo() {
           <div className="flex min-w-0 items-center gap-2"><div className="min-w-0 flex-1"><VoiceNotePlayer note={voiceDraft} /></div><Button type="button" aria-label="Delete voice note" title="Delete voice note" disabled={transcribingVoice} onClick={discardVoiceDraft} size="icon" variant="ghost" className="size-9 shrink-0 rounded-full text-[#a94732]"><Trash2 className="size-4" /></Button><Button type="button" aria-label="Send voice note" title="Send voice note" disabled={loading || transcribingVoice} onClick={() => void sendVoiceDraft()} size="icon" className="size-10 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]">{transcribingVoice ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}</Button></div>
           {transcribingVoice && <p role="status" className="mt-2 px-2 text-xs font-medium text-[#176853]">Understanding voice message…</p>}
         </div>}
-        {!recordingVoice && !voiceDraft && !transcribingVoice && <form onSubmit={handleSubmit} className="flex min-w-0 gap-2"><Input aria-label="Product question" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(query); } }} placeholder={stage === "quantity" ? `Enter quantity in ${confirmedProduct?.uom_id ?? "units"}…` : attachment ? "Add a note, or send the photo…" : "Ask about a product…"} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4 sm:px-5" />{query.trim() || attachment ? <Button type="submit" aria-label="Send question" disabled={loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button> : <Button type="button" aria-label="Record voice note" title="Record voice note" disabled={loading} onClick={() => void startVoiceRecording()} size="icon" className="size-12 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]"><Mic className="size-5" /></Button>}</form>}
+        {!recordingVoice && !voiceDraft && !transcribingVoice && <form onSubmit={handleSubmit} className="flex min-w-0 gap-2"><Input aria-label="Product question" value={query} maxLength={500} onChange={(event) => { setQuery(event.target.value); if (queryError) setQueryError(""); }} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(query); } }} placeholder={stage === "quantity" ? `Enter quantity in ${confirmedProduct?.uom_id ?? "units"}…` : attachment ? "Add a note, or send the photo…" : "Ask about a product…"} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4 sm:px-5" />{query.trim() || attachment ? <Button type="submit" aria-label="Send question" disabled={loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button> : <Button type="button" aria-label="Record voice note" title="Record voice note" disabled={loading} onClick={() => void startVoiceRecording()} size="icon" className="size-12 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]"><Mic className="size-5" /></Button>}</form>}
       </div>
     </div>
   </div>;
