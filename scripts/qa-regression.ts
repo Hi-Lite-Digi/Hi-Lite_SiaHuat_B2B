@@ -159,6 +159,24 @@ for (const [id, prompt, expectedCount] of [
   });
 }
 
+{
+  const prompts = [
+    "I need a 3-step folding stool similar to this",
+    "3 step folding stool ladder",
+  ];
+  const pass = prompts.every((prompt) => requestedQuantity(prompt) === null);
+  results.push({
+    id: "INTENT-QTY-CASE-002",
+    area: "Case-study product-spec parsing",
+    prompt: prompts.join(" | "),
+    pass,
+    reason: pass ? "Matched expected behaviour" : "The 3-step stool specification was misclassified as order quantity 3",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
 async function checkMalformedJsonEndpoint(id: string, path: string) {
   const started = performance.now();
   const response = await fetch(`${qaBaseUrl}${path}`, {
@@ -1474,6 +1492,10 @@ await check("CASE-004", "Case-study direct order", "I would like to order 2 cart
 }, [], 20_000);
 await check("CASE-005", "Case-study quote follow-up", "The quotation email has not arrived. Can you check the status?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Quote/email status checks must hand off to a human"));
 await check("CASE-006", "Case-study payment and delivery follow-up", "My payment has been approved. When will delivery be arranged?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Payment/delivery status checks must hand off to a human"));
+await check("CASE-007", "Case-study constrained ladder sourcing", "I need a 3-step folding stool similar to this: 300 lb capacity, grey, and it must not be all aluminium.", (reply) =>
+  noProducts(reply) ?? (/human colleague/i.test(reply.message) && /source/i.test(reply.message) && !/smaller quantity/i.test(reply.message)
+    ? null
+    : "A 3-step material specification should be sourced by a human, not treated as quantity 3"));
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));

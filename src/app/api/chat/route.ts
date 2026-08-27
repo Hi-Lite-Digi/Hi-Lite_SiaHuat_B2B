@@ -1528,6 +1528,10 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const catalogueMessage = contextualQuantity !== null && requestedQuantity(rememberedCatalogueMessage) === null
     ? `${rememberedCatalogueMessage} ${contextualQuantity} units`
     : rememberedCatalogueMessage;
+  const recentConversation = [...userHistory.slice(-3), input.message].join(" ");
+  const rejectsAllAluminiumLadder = (currentCategory === "ladder" || previousCategory === "ladder")
+    && /\b(?:not|no|do\s+not|don['’]?t|must\s+not|mustn['’]?t)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum)\b/i.test(recentConversation);
+  if (rejectsAllAluminiumLadder) return unavailableCatalogueReply(catalogueMessage);
   let n8nError: unknown = null;
   const workflowMessage = prefersChinese(input)
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
@@ -1548,6 +1552,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   }
   const mustGroundCatalogueAnswer = isDirectCatalogueAvailabilityRequest(input.message)
     || (isConcreteCatalogueRequest(catalogueMessage) && /\b(?:quote|quotation|order|buy|purchase)\b/i.test(input.message))
+    || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?)\b/i.test(catalogueMessage)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
   const authoritativeGroundedReply = !input.image && mustGroundCatalogueAnswer
     ? await groundedCatalogueReply(catalogueMessage, { authoritative: true, excludedStockIds }).catch((error) => {

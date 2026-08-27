@@ -258,6 +258,7 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
     const index = (match.index ?? 0) + match[0].lastIndexOf(raw);
     if (/\/\s*$/.test(message.slice(0, index))) continue;
     const suffix = message.slice(index + raw.length);
+    if (/^\s*-?\s*steps?\b/i.test(suffix)) continue;
     if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|ml|kg|g)\b/i.test(suffix)) continue;
     if (/^\s*[x×]\s*\d/i.test(suffix)) continue;
     candidates.push({ index, raw });
