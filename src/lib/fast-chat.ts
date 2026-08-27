@@ -21,7 +21,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const simple = simplifyMessage(message);
   const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
   const hasAssistantClarificationContext = catalogueHistoryWithClarification(message, input.history).length > userHistory.length;
-  const hasProductContext = userHistory.slice(-6).some((content) => productWords.test(content));
+  const hasProductContext = Boolean(input.context?.activeProduct)
+    || userHistory.slice(-6).some((content) => productWords.test(content));
   const mentionedCategories = userHistory.flatMap((content) => productCategories.filter((category) => category.pattern.test(content)).map((category) => category.label));
   const previousCategories = rememberedActiveCategories(userHistory);
   const lastCategory = previousCategories.at(-1) ?? null;
@@ -29,7 +30,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const currentCategory = productCategory(message);
   const correctsPreviousCategory = /\b(?:i\s+)?(?:was\s+)?thinking\s+(?:more\s+)?of\b|\b(?:i\s+)?meant\b|\bmore\s+like\b/i.test(message);
   let currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
-  if (currentCategories[0] === "knife sharpener" || currentCategories[0] === "wok lid") {
+  if (["knife sharpener", "wok lid", "shot glass", "stockpot", "rice dispenser", "trolley"].includes(currentCategories[0] ?? "")) {
     currentCategories = [currentCategories[0]];
   } else if (currentCategories.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(message)) {
     currentCategories = [currentCategories.at(-1)!];
@@ -60,9 +61,18 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     /\b(get|bring|find|send|give|connect|transfer|alert|call)\b.{0,30}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
     || /\b(speak|talk|chat)\b.{0,20}\b(to|with)\b.{0,12}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
     || /\b(real person|human agent|customer service)\b/i.test(message);
+  const asksOperationalFollowup = /\b(?:quote|quotation|invoice|email|e-mail|payment|bank\s+transfer|payment\s+advice|delivery|order)\b/i.test(message)
+    && /\b(?:status|update|check|follow\s*up|not\s+(?:received|arrived)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
 
   if (requestsHuman && !asksAboutIdentity) {
     return reply("I’ve alerted a human colleague. They’ll be here in about 5–10 minutes.", []);
+  }
+
+  if (asksOperationalFollowup) {
+    return reply(
+      "I’ve alerted a human colleague to check this. They’ll be here in about 5–10 minutes. Please share the quotation, invoice or order number if you have it.",
+      ["Share reference number", "Continue product enquiry"],
+    );
   }
 
   const asksClaireForProductPhoto = /\b(can|could|will|would)\s+(?:you|u)\s+(?:please\s+)?(?:send|show|share|post)\b.{0,40}\b(pic|photo|image|picture)s?\b/i.test(message)
@@ -562,11 +572,20 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply("All good 😄 Take your time—I’m here when you’re ready.", ["Tell you what I need", "Search for a product"]);
   }
 
-  if (/\b(a few things|few things|need your help|need some help|can you help me)\b/.test(simple)) {
+  if (!currentCategory && !isCatalogueRequest(message)
+    && /\b(a few things|few things|need your help|need some help|can you help me)\b/.test(simple)) {
     return reply("Of course—tell me the first thing you need help with, and we’ll take it one step at a time.", ["Search for a product", "Get a quote"]);
   }
 
-  if (/\b(can|could|will|would).*help( me)?\b/.test(simple)) {
+  if (hasProductContext && /^(?:asdf|qwer|zxcv)[a-z0-9]*$/i.test(message)) {
+    return reply(
+      `I didn’t understand that. I still have ${activeTask ?? "your product enquiry"}. Try a product name, size, colour, material or option number.`,
+      ["Show the options again", "Change a detail"],
+    );
+  }
+
+  if (!currentCategory && !isCatalogueRequest(message)
+    && /\b(can|could|will|would).*help( me)?\b/.test(simple)) {
     return reply("Can. What do you need help with?", ["Find a product", "Get a quote"]);
   }
 
@@ -582,7 +601,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   // Once a product conversation starts, n8n remains responsible for product context.
-  if (hasProductContext || currentCategory || isCatalogueRequest(message)) return null;
+  if (hasProductContext || hasAssistantClarificationContext || currentCategory || isCatalogueRequest(message)) return null;
 
   // Keep unrecognised open-ended conversation inside the Sia Huat product
   // scope. Passing it to a general conversational model can produce a fluent

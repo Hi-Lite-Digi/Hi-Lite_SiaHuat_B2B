@@ -5,6 +5,7 @@ export type FastChatInput = {
   sessionId: string;
   message: string;
   history: HistoryItem[];
+  context?: { activeProduct?: { name: string } | null };
 };
 
 export type FastReply = {
@@ -15,7 +16,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -26,18 +27,27 @@ export const productCategories = [
   { pattern: /\b(?:kitchen\s+)?utensils?\b|\b(?:spatulas?|turners?|whisks?|peelers?|tongs?)\b/i, label: "utensil" },
   { pattern: /\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/i, label: "wok lid" },
   { pattern: /\b(wok|woks)\b/i, label: "wok" },
+  { pattern: /\b(?:tray|rack|gn|gastronorm|multi[ -]?level)[ -]*trolleys?\b|\btrolleys?\b/i, label: "trolley" },
   { pattern: /\b(pan|pans|skillet)\b/i, label: "pan" },
   { pattern: /\b(stockpot|stockpots|stock\s+pot|stock\s+pots)\b/i, label: "stockpot" },
   { pattern: /\b(pot|pots)\b/i, label: "pot" },
+  { pattern: /\bshot\s+glass(?:es)?\b/i, label: "shot glass" },
   { pattern: /\b(glass|glasses|glassware|tumbler|tumblers)\b/i, label: "glassware" },
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
   { pattern: /\b(strainers?|strainners?|straners?|skimmers?|colanders?)\b/i, label: "strainer" },
   { pattern: /\b(blender|blenders|blending machine)\b/i, label: "blender" },
+  { pattern: /\btoasters?\b/i, label: "toaster" },
+  { pattern: /\b(?:step\s+)?(?:ladders?|stools?)\b/i, label: "ladder" },
+  { pattern: /\b(?:butane\s+|gas\s+)?cartridges?\b/i, label: "gas cartridge" },
+  { pattern: /\b(?:scrub\s+)?sponges?\b/i, label: "cleaning sponge" },
+  { pattern: /\b(?:kitchen\s+|paper\s+)?towels?\b/i, label: "paper towel" },
+  { pattern: /\bgloves?\b/i, label: "glove" },
   { pattern: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i, label: "coffee grinder" },
   { pattern: /\bcoffee(?:\s+beans?)?\b(?!\s*grinders?)/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
   { pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/i, label: "chef pants" },
-  { pattern: /\b(?:water\s+)?(?:dispenser|urn|boiler|airpot)\b/i, label: "water dispenser" },
+  { pattern: /\brice\s+dispensers?\b/i, label: "rice dispenser" },
+  { pattern: /\b(?:water\s+(?:dispenser|urn|boiler)|(?:electric|thermal)\s+airpot|drinking\s+fountain)\b/i, label: "water dispenser" },
 ] as const;
 
 export function simplifyMessage(message: string) {
@@ -57,9 +67,11 @@ export function isCatalogueRequest(message: string) {
 
   return productWords.test(message)
     || /\b(?:strainners?|straners?|noodal|noodel)\b/i.test(message)
+    || /\b(?:che+f+f?|knfie|kinife|knive)\b/i.test(message)
     || /[刀锅鍋盘盤碗杯勺叉]/u.test(message)
     || skuPattern.test(message)
-    || /^(i want|i need|i'm looking for|im looking for|looking for|do you sell|do u sell|do you have|do u have|can i get|got any|find me|show me)\b/.test(simple);
+    || /^\d{4,}$/.test(simple)
+    || /^(i want|i need|i'm looking for|im looking for|looking for|do you sell|do u sell|do you guys sell|do u guys sell|do you have|do u have|can i get|got any|find me|show me)\b/.test(simple);
 }
 
 export function productCategory(message: string) {
@@ -196,6 +208,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   }
 
   if (activeCategory === "tableware") {
+    if (/\bbanana\s+leaf\s+plates?\b/i.test(joinedMessages)) return "banana leaf plate";
     if (productCategory(message) === "tableware" && /\b(?:plate|plates|platter|platters)\b/i.test(message)) {
       if (/\b(?:sorry|actually|make\s+that|change(?:\s+it)?\s+to|no[,.\s]+wait|forget|instead|switch|never\s*mind)\b/i.test(message)) {
         const colour = [...message.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0] ?? null;
@@ -217,6 +230,33 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     const purpose = /\bdinner\b/i.test(joinedMessages) ? "dinner" : null;
     return [fineDining, commercial, colour, size, shape, purpose, "plate tableware"].filter(Boolean).join(" ");
   }
+
+  if (activeCategory === "trolley") {
+    return /\b(?:gn|gastronorm|1\/2\s*gn|tray)\b/i.test(joinedMessages)
+      ? "GN tray trolley"
+      : "commercial trolley";
+  }
+
+  if (activeCategory === "toaster") {
+    return /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|ya\s+kun|pop[ -]?up)\b/i.test(joinedMessages)
+      ? "commercial pop-up toaster"
+      : "commercial toaster";
+  }
+
+  if (activeCategory === "ladder") {
+    const steps = joinedMessages.match(/\b(\d+)\s*[ -]?steps?\b/i)?.[1] ?? null;
+    return [steps ? `${steps} step` : null, "folding stool ladder"].filter(Boolean).join(" ");
+  }
+
+  if (activeCategory === "shot glass") {
+    return [/\bpolycarbonate\b/i.test(joinedMessages) ? "polycarbonate" : null, "shot glass"].filter(Boolean).join(" ");
+  }
+
+  if (activeCategory === "gas cartridge") return "gas cartridge";
+  if (activeCategory === "cleaning sponge") return "scrub sponge";
+  if (activeCategory === "paper towel") return "kitchen paper towel";
+  if (activeCategory === "glove") return "glove";
+  if (activeCategory === "rice dispenser") return "rice dispenser";
 
   if (activeCategory === "knife") {
     const latestDamascusIndex = customerMessages.findLastIndex((content) => /\bdamascus\b/i.test(content));
@@ -348,6 +388,14 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return ["water dispenser", capacity, placement, temperature].filter(Boolean).join(" ");
   }
 
+  if (activeCategory === "pot" && /\b\d+(?:\.\d+)?\s*(?:qt|quarts?)\b/i.test(joinedMessages)) {
+    const capacity = [...customerMessages].reverse()
+      .map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:qt|quarts?)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    const material = /\bstainless(?:\s+steel)?\b/i.test(joinedMessages) ? "stainless steel" : null;
+    return [material, capacity, "stockpot"].filter(Boolean).join(" ");
+  }
+
   if (activeCategory === "coffee grinder") {
     const quantity = customerMessages
       .map((content) => content.match(/\b(\d+)\s*(?:pieces?|pcs?|units?)?\s*(?:coffee\s+)?grinders?\b/i)?.[1])
@@ -398,7 +446,7 @@ export function rememberedActiveCategories(messages: string[]) {
     let categories = productCategories
       .filter((category) => category.pattern.test(content))
       .map((category) => category.label);
-    if (categories[0] === "knife sharpener" || categories[0] === "wok lid") {
+    if (["knife sharpener", "wok lid", "shot glass", "stockpot", "rice dispenser", "trolley"].includes(categories[0] ?? "")) {
       categories = [categories[0]];
     }
 

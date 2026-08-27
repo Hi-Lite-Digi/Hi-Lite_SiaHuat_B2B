@@ -128,7 +128,7 @@ export function confirmsOrderRequest(message: string) {
     || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核)[。.！!\s]*$/u.test(normalized);
 }
 
-const PRODUCT_NOUN = /\b(?:apron|bowl|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|glass|glasses|glassware|grinder|knife|knives|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|spoon|stove|strainer|table|tableware|tray|trolley|uniform|wok)\b/i;
+const PRODUCT_NOUN = /\b(?:apron|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;
 const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-]+)+\b/i;
 
 /**
@@ -138,7 +138,7 @@ const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-
  */
 export function requestsAdditionalProduct(message: string) {
   const normalized = message.trim();
-  if (/^(?:add another item|new item|next item|添加其他商品|再加一件商品)$/iu.test(normalized)) return true;
+  if (/^(?:add another item|start another enquiry|new item|next item|添加其他商品|再加一件商品|开始新的询价)$/iu.test(normalized)) return true;
   if (!PRODUCT_NOUN.test(normalized) && !PRODUCT_CODE_REFERENCE.test(normalized)) return false;
   if (/\b(?:this|that|it|same one)\b/i.test(normalized) && !/\b(?:also|too|another|add)\b/i.test(normalized)) return false;
   return /\b(?:add|also|another|too|as well|i (?:also )?(?:want|need)|we (?:also )?(?:want|need)|get me|give me)\b/i.test(normalized)
@@ -146,7 +146,7 @@ export function requestsAdditionalProduct(message: string) {
 }
 
 export function isGenericAddAnotherItem(message: string) {
-  return /^(?:add another item|new item|next item|添加其他商品|再加一件商品)$/iu.test(message.trim());
+  return /^(?:add another item|start another enquiry|new item|next item|添加其他商品|再加一件商品|开始新的询价)$/iu.test(message.trim());
 }
 
 /**
@@ -154,13 +154,26 @@ export function isGenericAddAnotherItem(message: string) {
  * can continue with them after the first line has been live-stock checked.
  */
 export function splitMultipleProductRequest(message: string) {
-  const clauses = message
-    .split(/\s+(?:and|plus|as well as)\s+|\s*[;,]\s*(?=(?:i\s+)?(?:need|want|add|\d+))/i)
-    .map((clause) => clause.trim())
+  const compact = message.replace(/\s+/g, " ").trim();
+  const numberedMarkers = [...compact.matchAll(/(?:^|[,;]\s*|\s+)(\d{1,2})\s*[).:-]\s*/g)];
+  const numberedClauses = numberedMarkers.length >= 2
+    ? numberedMarkers.map((marker, index) => {
+        const start = (marker.index ?? 0) + marker[0].length;
+        const end = numberedMarkers[index + 1]?.index ?? compact.length;
+        return compact.slice(start, end);
+      })
+    : [];
+  const clauses = (numberedClauses.length > 0
+    ? numberedClauses
+    : compact.split(/\s+(?:and|plus|as well as)\s+|\s*[;,]\s*(?=(?:i\s+)?(?:need|want|add|\d+\s*(?:packets?|packs?|cartons?|ctns?|pieces?|pcs?|units?|sets?|pairs?)))/i))
+    .map((clause) => clause
+      .replace(/^(?:and|plus|as well as)\s+/i, "")
+      .replace(/^[,;:\s]+|[,;:\s]+$/g, "")
+      .trim())
     .filter(Boolean);
   const productClauses = clauses.filter((clause) => PRODUCT_NOUN.test(clause) || PRODUCT_CODE_REFERENCE.test(clause));
   return productClauses.length >= 2
-    ? productClauses.map((clause, index) => index > 0 && /^\d+\b/.test(clause) ? `I need ${clause}` : clause)
+    ? productClauses.map((clause) => /^i\s+(?:need|want)\b/i.test(clause) ? clause : `I need ${clause}`)
     : [];
 }
 
@@ -243,8 +256,10 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
     const raw = match[group];
     if (!raw) continue;
     const index = (match.index ?? 0) + match[0].lastIndexOf(raw);
+    if (/\/\s*$/.test(message.slice(0, index))) continue;
     const suffix = message.slice(index + raw.length);
     if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|ml|kg|g)\b/i.test(suffix)) continue;
+    if (/^\s*[x×]\s*\d/i.test(suffix)) continue;
     candidates.push({ index, raw });
   }
   return candidates;
@@ -258,9 +273,9 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
     ),
     ...collectQuantityCandidates(
       message,
-      /\b(-?\d+(?:\.\d+)?)\s+(?:(?:\w[\w'-]*)\s+){0,3}(?:knives?|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?)\b/gi,
+      /(?<![\w.])(-?\d+(?:\.\d+)?)\s+(?:(?:\w[\w'-]*)\s+){0,3}(?:knives?|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\b/gi,
     ),
-    ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?|sets?|pairs?)\w*\b/gi),
+    ...collectQuantityCandidates(message, /(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?|sets?|pairs?|packets?|packs?|cartons?|ctns?)\w*\b/gi),
     ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:个|件|只|套|把|双|份)/gu),
     ...collectQuantityCandidates(message, /\b(-?\d+(?:\.\d+)?)\s+(?:of\s+)?(?:this|that|it|these|those|them)\b/gi),
     ...collectQuantityCandidates(
@@ -286,7 +301,8 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
   }
 
   for (const match of message.matchAll(/\bnegative\s+(\d+(?:\.\d+)?)/gi)) {
-    candidates.push({ index: match.index ?? 0, raw: `-${match[1]}` });
+    const index = (match.index ?? 0) + match[0].lastIndexOf(match[1]);
+    candidates.push({ index, raw: `-${match[1]}` });
   }
 
   if (candidates.length === 0) return { kind: "none" };

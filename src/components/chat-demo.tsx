@@ -784,7 +784,7 @@ export function ChatDemo() {
       pendingOrderRequestsRef.current = [];
       orderLinesRef.current = [];
       setStage("submitted");
-      setSuggestions(replyLanguage === "zh" ? ["再加一件商品"] : ["Add another item"]);
+      setSuggestions(replyLanguage === "zh" ? ["开始新的询价"] : ["Start another enquiry"]);
       setQuery("");
       return;
     }

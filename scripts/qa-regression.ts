@@ -126,6 +126,39 @@ for (const [id, prompt, expected] of [
   });
 }
 
+for (const [id, prompt, expectedCount] of [
+  ["INTENT-MULTI-CASE-001", "2 packets scrub sponges, 2 packets kitchen paper towels, and a bar blender machine", 3],
+  ["INTENT-MULTI-CASE-002", "Quote these: 1) Stainless Steel Pot 12QT, 2) Stainless Steel Strainer for the 12QT Pot, 3) Stainless Steel Ladle 4oz, 6oz, 8oz, 4) 1/2 Stainless Steel Pan 6 inch Deep, 5) 1/4 Stainless Steel Pan 6 inch Deep, 6) Lid for 1/2 S/S Pan with notch for ladle, 7) Lid for 1/4 S/S Pan with notch for ladle, 8) Oyster Knife with Plastic Handle", 8],
+] as const) {
+  const requests = splitMultipleProductRequest(prompt);
+  const pass = requests.length === expectedCount && requests.every((request) => !/[,;]\s*$/.test(request));
+  results.push({
+    id,
+    area: "Case-study multi-item parsing",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Expected ${expectedCount} clean order lines, received ${requests.length}: ${requests.join(" | ")}`,
+    durationMs: 0,
+    response: requests.join(" | "),
+    products: [],
+  });
+}
+
+{
+  const prompt = "Do you have a multi level tray trolley that can fit 2 x 1/2 GN pans per level?";
+  const pass = requestedQuantity(prompt) === null;
+  results.push({
+    id: "INTENT-QTY-CASE-001",
+    area: "Case-study dimension parsing",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "The 2 x 1/2 GN fit specification was misclassified as order quantity 2",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
 async function checkMalformedJsonEndpoint(id: string, path: string) {
   const started = performance.now();
   const response = await fetch(`${qaBaseUrl}${path}`, {
@@ -1416,6 +1449,31 @@ await check("FLOW-MULTI-002", "Multi-item order memory", "any size, just show me
 });
 
 const standardHandoff = /alerted a human colleague.*5.{0,3}10 minutes/i;
+await check("CASE-001", "Case-study urgent quotation", "Can you help me do a 100 pcs quotation for polycarbonate shot glasses? I need it ASAP.", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected grounded polycarbonate shot-glass options";
+  const invalid = products.find((product) => !/polycarbonate.*shot glass|shot glass.*polycarbonate/i.test(product.name));
+  return invalid ? `Returned an unrelated quotation item: ${invalid.name}` : null;
+}, [], 20_000);
+await check("CASE-002", "Case-study compatible equipment", "Do you have a multi level tray trolley that can fit 2 x 1/2 GN pans per level?", (reply) => {
+  const invalid = (reply.products ?? []).find((product) => /cover|accessor|gn pan/i.test(product.name) || !/trolley/i.test(product.name));
+  if (invalid) return `Returned a trolley accessory or different product: ${invalid.name}`;
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague/i.test(reply.message)
+    ? null
+    : "A missing exact trolley should be disclosed and handed off for sourcing";
+}, [], 20_000);
+await check("CASE-003", "Case-study product-family safety", "Do you have a rice dispenser like a restaurant uses? Please compare 10kg and 30kg models.", (reply) => {
+  const invalid = (reply.products ?? []).find((product) => !/rice dispenser/i.test(product.name) || /beverage|water/i.test(product.name));
+  return invalid ? `Returned a beverage/water dispenser instead of a rice dispenser: ${invalid.name}` : null;
+}, [], 20_000);
+await check("CASE-004", "Case-study direct order", "I would like to order 2 cartons of gas cartridges directly here, for delivery after 12pm. We will pay by bank transfer.", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected the gas-cartridge request to stay grounded in the catalogue";
+  const invalid = products.find((product) => !/gas cartridge/i.test(product.name));
+  return invalid ? `Returned an unrelated gas appliance: ${invalid.name}` : null;
+}, [], 20_000);
+await check("CASE-005", "Case-study quote follow-up", "The quotation email has not arrived. Can you check the status?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Quote/email status checks must hand off to a human"));
+await check("CASE-006", "Case-study payment and delivery follow-up", "My payment has been approved. When will delivery be arranged?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Payment/delivery status checks must hand off to a human"));
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));
