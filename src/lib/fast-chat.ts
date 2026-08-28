@@ -363,8 +363,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  const requestsPairedPotAndStrainer = (currentCategories.includes("stockpot") || currentCategories.includes("pot"))
-    && currentCategories.includes("strainer")
+  const requestsPairedPotAndStrainer = /\b(?:stock\s*pots?|pots?)\b/i.test(message)
+    && /\b(?:strainers?|strainners?|straners?|skimmers?|colanders?)\b/i.test(message)
     && /\b(?:both|matching|fit|inside|same)\b/i.test(message);
   if (requestsPairedPotAndStrainer) {
     const pairQuantity = /\b(?:two|2)\b/i.test(message) ? 2 : input.context?.quantity ?? null;

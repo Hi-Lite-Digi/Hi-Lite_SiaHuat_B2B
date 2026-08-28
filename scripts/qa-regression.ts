@@ -1907,6 +1907,19 @@ await check("CASE-027", "Operational follow-up with supplied reference", "The qu
     ? null
     : "The supplied quotation reference should be acknowledged before handoff";
 }, [], 5_000);
+await check("CASE-028", "First-turn paired stockpot and strainer", "I need two 12QT stainless steel stockpots and matching strainers that fit inside them.", (reply) => {
+  if ((reply.products?.length ?? 0) > 0) return "The first turn showed stockpots without confirming a compatible strainer pair";
+  return /both items/i.test(reply.message) && /quantity 2 each/i.test(reply.message) && /12QT stainless steel/i.test(reply.message) && /fit/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "The first turn should preserve the complete paired request and route fit verification to sourcing";
+}, [], 5_000);
+await check("CASE-029", "First-turn singular ladder sourcing copy", "I need a 3-step folding ladder, 1 unit per outlet, but not all aluminium.", (reply) => {
+  if (/\b1 units\b/i.test(reply.message)) return "The first-turn ladder reply used incorrect singular grammar";
+  if ((reply.message.match(/3[ -]step folding/gi) ?? []).length > 1) return "The first-turn ladder request was repeated unnecessarily";
+  return /1 unit/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "The ladder response should be concise, singular and source the constrained item";
+}, [], 20_000);
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));

@@ -1688,7 +1688,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     && /\b(?:not|no|do\s+not|don['’]?t|must\s+not|mustn['’]?t)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum)\b/i.test(recentConversation);
   if (rejectsAllAluminiumLadder) {
     const currentDetails = input.message.trim();
-    const sourcingRequest = catalogueMessage.toLowerCase().includes(currentDetails.toLowerCase())
+    const sourcingRequest = currentCategory === "ladder"
+      || catalogueMessage.toLowerCase().includes(currentDetails.toLowerCase())
       ? catalogueMessage
       : `${catalogueMessage}; ${currentDetails}`;
     return unavailableCatalogueReply(sourcingRequest);

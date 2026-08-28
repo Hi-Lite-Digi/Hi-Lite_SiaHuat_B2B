@@ -189,15 +189,21 @@ function quantitySuggestions(limit: number | null) {
 }
 
 function productOptionSuggestions(products: Product[]) {
-  return products.map((_, index) => String(index + 1));
+  return products.flatMap((product, index) =>
+    product.stock_status === "out_of_stock" ? [] : [String(index + 1)],
+  );
 }
 
-function productOptionPrompt(productCount: number, language: ChatLanguage = "en") {
-  const options = Array.from({ length: productCount }, (_, index) => String(index + 1));
+function productOptionPrompt(products: Product[], language: ChatLanguage = "en") {
+  const options = products.flatMap((product, index) =>
+    product.stock_status === "out_of_stock" ? [] : [String(index + 1)],
+  );
   if (language === "zh") {
+    if (options.length === 0) return "这些缺货商品仅供参考；Claire 正在协助寻找替代货源。";
     if (options.length < 2) return "回复 1 即可选择这件商品。";
     return `请回复 ${options.join("、")} 选择商品。`;
   }
+  if (options.length === 0) return "These out-of-stock matches are shown for reference only while Claire helps source an option.";
   if (options.length < 2) return "Reply with 1 to choose this item.";
   return `Reply with ${options.slice(0, -1).join(", ")} or ${options.at(-1)}.`;
 }
@@ -1439,7 +1445,7 @@ export function ChatDemo() {
         {messages.map((message) => <div key={message.id} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
           {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <WhatsAppText text={message.text} />}
-          {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product, index) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" onClick={() => chooseProduct(product, String(index + 1))} className="block w-full text-left"><p className="break-words font-semibold leading-5"><span className="mr-1 text-[#176853]">{index + 1}.</span>{product.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product, conversationLanguage)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}<p className="pt-1 text-xs font-medium text-[#176853]">{productOptionPrompt(message.products.length, conversationLanguage)}</p></div>}
+          {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product, index) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" disabled={product.stock_status === "out_of_stock"} onClick={() => chooseProduct(product, String(index + 1))} className={`block w-full text-left ${product.stock_status === "out_of_stock" ? "cursor-not-allowed opacity-80" : ""}`}><p className="break-words font-semibold leading-5"><span className="mr-1 text-[#176853]">{index + 1}.</span>{product.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product, conversationLanguage)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}<p className="pt-1 text-xs font-medium text-[#176853]">{productOptionPrompt(message.products, conversationLanguage)}</p></div>}
           {message.selectedProduct && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
            {message.needsConfirmation && pendingProduct?.stock_id === message.selectedProduct?.stock_id && <div className="mt-3 grid grid-cols-2 gap-2"><Button type="button" disabled={checkingStock} onClick={() => void confirmProduct()} className="rounded-full bg-[#176853] hover:bg-[#125441]">{checkingStock ? <LoaderCircle className="size-4 animate-spin" /> : conversationLanguage === "zh" ? "是的，就是这个" : "Yes, this is it"}</Button><Button type="button" disabled={checkingStock} onClick={() => rejectProduct()} variant="outline" className="rounded-full border-[#176853]/25 text-[#176853]">{conversationLanguage === "zh" ? "不是，查看其他" : "No, show others"}</Button></div>}
           {message.time && <MessageTimestamp role={message.role} time={message.time} />}
