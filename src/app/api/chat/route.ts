@@ -20,13 +20,13 @@ import {
   productCategory,
   rememberedActiveCategories,
 } from "@/lib/chat-intent";
-import { asksForRecommendation, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
+import { asksForRecommendation, isProductRefinementOnly, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
 
 const sessionQueues = new Map<string, Promise<void>>();
-const CUSTOMER_REPLY_DEADLINE_MS = 27_000;
+const CUSTOMER_REPLY_DEADLINE_MS = 26_000;
 const EARLY_LIVE_CHECK_TIMEOUT_MS = 5_000;
 
 function prefersChinese(input: Pick<ChatRequest, "message" | "history">) {
@@ -301,6 +301,7 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:spoon|spoons|serving\s+spoon|ladle|ladles|fork|forks|cutlery)\b/i.test(message)
     || /\b(?:kitchen\s+)?utensils?\b|\b(?:spatulas?|turners?|whisks?|peelers?|tongs?)\b/i.test(message)
     || /\b(?:plate|plates|platter|platters|tableware)\b/i.test(message)
+    || /\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?\b/i.test(message)
     || /\b(?:strainer|strainers|skimmer|skimmers|colander|colanders)\b/i.test(message)
     || /\b(?:commercial\s+)?blenders?\b/i.test(message)
     || /\bshot\s+glass(?:es)?\b/i.test(message)
@@ -347,9 +348,26 @@ function matchesExplicitProductCategory(message: string, product: Product) {
       && !/\b(?:cover|accessor(?:y|ies)|replacement|spare\s+part)\b/i.test(productName);
   }
   if (/\btoasters?\b/i.test(message)) {
-    if (/\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor)\b/i.test(message)
+    if (/\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(message)
       && /\bconveyor\b/i.test(productText)) return false;
     return /\btoasters?\b/i.test(productText);
+  }
+  const requestsPoweredWhisk = /\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\bwhisks?\b[\s\S]*\b(?:electric|cordless|powered)\b|\bnot\s+manual\b/i.test(message);
+  if (requestsPoweredWhisk) {
+    if (/\b(?:accessor(?:y|ies)|accs|attachment|manual)\b/i.test(productName)) return false;
+    return /\b(?:electric|cordless|powered|mixer|blender)\b/i.test(productText)
+      && /\b(?:whisks?|blenders?|mixer|3[ -]?in[ -]?1|three[ -]?in[ -]?one)\b/i.test(productText);
+  }
+  if (/\bsteak\s+tongs?\b/i.test(message)) return /\bsteak\s+tongs?\b/i.test(productText);
+  if (/\bcooking\s+tongs?\b/i.test(message)) {
+    return /\b(?:cooking|kitchen|steak)\s+tongs?\b|\btongs?\b[\s\S]*\b(?:cooking|kitchen|steak)\b/i.test(productText)
+      && !/\b(?:serving|snail|sugar|ice)\s+tongs?\b/i.test(productName);
+  }
+  if (/\bserving\s+tongs?\b/i.test(message)) return /\bserving\s+tongs?\b/i.test(productText);
+  if (/\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?\b/i.test(message)) {
+    return /\bsets?\b/i.test(productName)
+      && /\b(?:dining|dinnerware|tableware|plates?|bowls?)\b/i.test(productText)
+      && (!/\bramekins?\b/i.test(productName) || /\b(?:plates?|bowls?)\b/i.test(productName));
   }
   if (/\b(?:ladders?|step\s+stools?)\b/i.test(message)) return /\b(?:ladders?|step\s+stools?|folding\s+stools?)\b/i.test(productName);
   if (/\b(?:gas|butane)\s+cartridges?\b/i.test(message)) return /\b(?:gas|butane)\b[\s\S]*\bcartridges?\b|\bcartridges?\b[\s\S]*\b(?:gas|butane)\b/i.test(productName);
@@ -658,7 +676,7 @@ function relatedUseCase(message: string) {
 async function unavailableCatalogueReply(message: string): Promise<ChatReply> {
   const requestedItem = requestedCatalogueItem(message);
   const useCase = relatedUseCase(message);
-  if (/\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?)\b/i.test(message)) {
+  if (/\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?|(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|(?:electric|cordless|powered)\b[\s\S]{0,40}\bwhisks?|cooking\s+tongs?|steak\s+tongs?)\b/i.test(message)) {
     return {
       message: `I couldn’t find a matching ${requestedItem} in the current online catalogue, so I won’t show an accessory or unrelated item. I’ve alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
       stage: "clarify",
@@ -1392,7 +1410,7 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
 
   if (input.image) {
     return {
-      message: "Can help 👍 What item is this? Just tell me roughly, like shoe or pan.",
+      message: "I couldn’t identify that photo reliably. Tell me roughly what it is (for example, toaster, tong or drink dispenser), or send another photo.",
       stage: "clarify",
       products: [],
       selectedProduct: null,
@@ -1558,6 +1576,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const mustGroundCatalogueAnswer = isDirectCatalogueAvailabilityRequest(input.message)
     || (isConcreteCatalogueRequest(catalogueMessage) && /\b(?:quote|quotation|order|buy|purchase)\b/i.test(input.message))
     || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?)\b/i.test(catalogueMessage)
+    || /\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\b(?:cooking|steak)\s+tongs?\b/i.test(catalogueMessage)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
   const authoritativeGroundedReply = !input.image && mustGroundCatalogueAnswer
     ? await groundedCatalogueReply(catalogueMessage, { authoritative: true, excludedStockIds }).catch((error) => {
@@ -1732,7 +1751,7 @@ async function processChat(input: ChatRequest) {
     };
     return NextResponse.json(customerReply(reply, input));
   }
-  const displayedProductIndex = requestsAnotherOption(input.message)
+  const displayedProductIndex = requestsAnotherOption(input.message) || isProductRefinementOnly(input.message)
     ? null
     : requestedDisplayedProductIndex(input.message, displayedProducts);
   if (displayedProductIndex !== null) {

@@ -142,6 +142,26 @@ function matchesExplicitConstraints(query: string, product: Product) {
   const productName = product.name.toLowerCase();
   const requestsUtensils = /\b(?:kitchen\s+)?utensils?\b/.test(requested);
   const requestsUtensilAccessory = /\b(?:storage|stand|organizer|hanger|holder|rack)\b/.test(requested);
+  const requestsPoweredWhisk = /\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\bwhisks?\b[\s\S]*\b(?:electric|cordless|powered)\b|\bnot\s+manual\b/.test(requested);
+  if (requestsPoweredWhisk) {
+    if (/\b(?:accessor(?:y|ies)|accs|attachment|manual)\b/.test(productName)) return false;
+    if (!/\b(?:electric|cordless|powered|mixer|blender)\b/.test(candidate)) return false;
+    if (!/\b(?:whisks?|blenders?|mixer|3[ -]?in[ -]?1|three[ -]?in[ -]?one)\b/.test(candidate)) return false;
+  }
+  if (/\bsteak\s+tongs?\b/.test(requested) && !/\bsteak\s+tongs?\b/.test(candidate)) return false;
+  if (/\bcooking\s+tongs?\b/.test(requested)) {
+    if (!/\b(?:cooking|kitchen|steak)\s+tongs?\b|\btongs?\b[\s\S]*\b(?:cooking|kitchen|steak)\b/.test(candidate)) return false;
+    if (/\b(?:serving|snail|sugar|ice)\s+tongs?\b/.test(productName)) return false;
+  }
+  if (/\bserving\s+tongs?\b/.test(requested) && !/\bserving\s+tongs?\b/.test(candidate)) return false;
+  if (/\b(?:complete\s+)?dining\s+sets?\b/.test(requested)) {
+    if (!/\bsets?\b/.test(productName) || !/\b(?:dining|dinnerware|tableware|plates?|bowls?)\b/.test(candidate)) return false;
+    if (/\bramekins?\b/.test(productName) && !/\b(?:plates?|bowls?)\b/.test(productName)) return false;
+  }
+  if (/\btoasters?\b/.test(requested)) {
+    const rejectsConveyor = /\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor|\d+(?:\s+or\s+\d+)?\s*slots?)\b/.test(requested);
+    if (rejectsConveyor && /\bconveyor\b/.test(candidate)) return false;
+  }
   if (requestsUtensils) {
     if (!/\b(?:utensils?|spatulas?|turners?|whisks?|peelers?|tongs?|ladles?|spoons?|forks?)\b/.test(candidate)) return false;
     if (!requestsUtensilAccessory && /\b(?:storage\s+stand|counter\s+organizer|wall\s+hanger|utensil\s+(?:holder|rack)|(?:holder|rack)\s+for\s+utensils?)\b/.test(productName)) return false;

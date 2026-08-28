@@ -184,6 +184,9 @@ export function splitMultipleProductRequest(message: string) {
  * the displayed-product resolver.
  */
 export function isProductRefinementOnly(message: string) {
+  const strictConstraint = /\b(?:no|not|without|don['’]?t|do\s+not)\b[\s\S]{0,30}\b(?:manual|conveyor|convertor|serving)\b|\b(?:electric|cordless|powered|cooking|steak|serving|pop[ -]?up|non[ -]?conveyor|full\s+sets?|dining\s+sets?)\b|\b\d+(?:\s+or\s+\d+)?\s*slots?\b/i.test(message);
+  if (strictConstraint) return true;
+
   const refinement = /\b(?:actually|instead|make\s+that|change(?:\s+it)?\s+to|red|yellow|blue|black|white|green|silver|grey|gray|brown|round|square|rectangular|rectangle|oval|dinner|side|salad|dessert|ceramic|porcelain|melamine|plastic|stainless|commercial|restaurant|fine\s+dining)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(message);
   if (!refinement) return false;
 
@@ -256,9 +259,13 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
     const raw = match[group];
     if (!raw) continue;
     const index = (match.index ?? 0) + match[0].lastIndexOf(raw);
-    if (/\/\s*$/.test(message.slice(0, index))) continue;
+    const prefix = message.slice(0, index);
+    if (/\/\s*$/.test(prefix)) continue;
+    if (/\b\d+\s*[- ]\s*in\s*[- ]\s*$/i.test(prefix)) continue;
     const suffix = message.slice(index + raw.length);
     if (/^\s*-?\s*steps?\b/i.test(suffix)) continue;
+    if (/^\s*(?:or\s+\d+\s+)?slots?\b/i.test(suffix)) continue;
+    if (/^\s*(?:pax|persons?|people)\b/i.test(suffix)) continue;
     if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|ml|kg|g)\b/i.test(suffix)) continue;
     if (/^\s*[x×]\s*\d/i.test(suffix)) continue;
     candidates.push({ index, raw });

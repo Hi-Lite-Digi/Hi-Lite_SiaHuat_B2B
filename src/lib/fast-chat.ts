@@ -30,7 +30,10 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const currentCategory = productCategory(message);
   const correctsPreviousCategory = /\b(?:i\s+)?(?:was\s+)?thinking\s+(?:more\s+)?of\b|\b(?:i\s+)?meant\b|\bmore\s+like\b/i.test(message);
   let currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
-  if (["knife sharpener", "wok lid", "shot glass", "stockpot", "rice dispenser", "trolley"].includes(currentCategories[0] ?? "")) {
+  if (currentCategories.includes("utensil") && currentCategories.includes("blender")
+    && /\b(?:3[ -]?in[ -]?1|three[ -]?in[ -]?one|blender[\s,/-]+whisk|whisk[\s,/-]+blender)\b/i.test(message)) {
+    currentCategories = ["utensil"];
+  } else if (["knife sharpener", "wok lid", "shot glass", "stockpot", "rice dispenser", "trolley"].includes(currentCategories[0] ?? "")) {
     currentCategories = [currentCategories[0]];
   } else if (currentCategories.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(message)) {
     currentCategories = [currentCategories.at(-1)!];
@@ -63,6 +66,13 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     || /\b(real person|human agent|customer service)\b/i.test(message);
   const asksOperationalFollowup = /\b(?:quote|quotation|invoice|email|e-mail|payment|bank\s+transfer|payment\s+advice|delivery|order)\b/i.test(message)
     && /\b(?:status|update|check|follow\s*up|not\s+(?:received|arrived)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
+
+  if (/\b(?:call(?:ing)?|contact|get)\s+(?:the\s+)?police\b|\bhello\s+police\b/i.test(message)) {
+    return reply(
+      "I’m sorry we kept showing the wrong items. I’ll stop the product suggestions and hand this to a human colleague for review. They’ll be here in about 5–10 minutes.",
+      ["Speak to a human"],
+    );
+  }
 
   if (requestsHuman && !asksAboutIdentity) {
     return reply("I’ve alerted a human colleague. They’ll be here in about 5–10 minutes.", []);

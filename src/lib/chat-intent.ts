@@ -16,7 +16,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -24,6 +24,7 @@ export const productCategories = [
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b|砍骨刀|菜刀|刀/u, label: "knife" },
   { pattern: /\bserving\s+spoons?\b/i, label: "serving spoon" },
   { pattern: /\b(cutlery|flatware)(?:\s+sets?)?\b|\bspoons?\b[\s\S]*\bforks?\b|\bforks?\b[\s\S]*\bspoons?\b/i, label: "cutlery set" },
+  { pattern: /\b(?:full|complete)\s+(?:home\s+)?(?:dining|dinnerware|tableware)?\s*sets?\b|\b(?:dining|dinnerware|tableware)\s+sets?\b|\bsets?\s+for\s+dining\b/i, label: "dining set" },
   { pattern: /\b(?:kitchen\s+)?utensils?\b|\b(?:spatulas?|turners?|whisks?|peelers?|tongs?)\b/i, label: "utensil" },
   { pattern: /\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/i, label: "wok lid" },
   { pattern: /\b(wok|woks)\b/i, label: "wok" },
@@ -167,10 +168,35 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return [material, "cutlery set"].filter(Boolean).join(" ");
   }
 
+  if (activeCategory === "dining set") {
+    const pax = [...customerMessages].reverse()
+      .map((content) => content.match(/\b(\d+)\s*(?:pax|persons?|people)\b/i)?.[1])
+      .find(Boolean) ?? null;
+    return [pax ? `${pax} person` : null, "complete dining set"].filter(Boolean).join(" ");
+  }
+
   if (activeCategory === "utensil") {
-    const specificType = [...customerMessages].reverse()
-      .map((content) => content.match(/\b(?:spatula|turner|whisk|peeler|tongs?|ladle)s?\b/i)?.[0])
-      .find(Boolean);
+    const latestUtensilMessage = [...customerMessages].reverse()
+      .find((content) => /\b(?:spatula|turner|whisk|peeler|tongs?|ladle)s?\b/i.test(content)) ?? joinedMessages;
+    if (/\btongs?\b/i.test(latestUtensilMessage)) {
+      const tongType = /\bsteak\b/i.test(latestUtensilMessage)
+        ? "steak tong"
+        : /\bcooking\b/i.test(latestUtensilMessage)
+          ? "cooking tongs"
+          : /\bserving\b/i.test(latestUtensilMessage)
+            ? "serving tongs"
+            : "tongs";
+      const material = /\bstainless(?:\s+steel)?\b/i.test(joinedMessages) ? "stainless steel" : null;
+      const size = latestUtensilMessage.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in|\")/i)?.[0] ?? null;
+      return [material, size, tongType].filter(Boolean).join(" ");
+    }
+    if (/\bwhisks?\b/i.test(latestUtensilMessage)) {
+      const powered = /\b(?:electric|cordless|powered|not\s+manual)\b/i.test(latestUtensilMessage);
+      const threeInOne = /\b(?:3[ -]?in[ -]?1|three[ -]?in[ -]?one)\b/i.test(latestUtensilMessage);
+      const blender = /\bblenders?\b/i.test(latestUtensilMessage);
+      return [powered ? (/\bcordless\b/i.test(latestUtensilMessage) ? "cordless" : "electric") : null, threeInOne ? "3-in-1" : null, blender ? "blender" : null, "whisk"].filter(Boolean).join(" ");
+    }
+    const specificType = latestUtensilMessage.match(/\b(?:spatula|turner|peeler|ladle)s?\b/i)?.[0];
     return specificType ?? "kitchen utensil";
   }
 
@@ -238,7 +264,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   }
 
   if (activeCategory === "toaster") {
-    return /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|ya\s+kun|pop[ -]?up)\b/i.test(joinedMessages)
+    return /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|ya\s+kun|pop[ -]?up|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(joinedMessages)
       ? "commercial pop-up toaster"
       : "commercial toaster";
   }

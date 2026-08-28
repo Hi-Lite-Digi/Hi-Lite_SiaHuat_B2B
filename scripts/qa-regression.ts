@@ -113,6 +113,10 @@ for (const [id, prompt, expected] of [
   ["INTENT-REFINE-002", "Actually black instead", true],
   ["INTENT-REFINE-003", "27cm round for restaurant service", true],
   ["INTENT-REFINE-004", "I’ll take the black one", false],
+  ["INTENT-REFINE-CASE-001", "No conveyor type. I need a 4 or 6 slot toaster.", true],
+  ["INTENT-REFINE-CASE-002", "i dont want serving tongs. i want cooking tongs", true],
+  ["INTENT-REFINE-CASE-003", "give me recommendations for electric whisk, not manual", true],
+  ["INTENT-REFINE-CASE-004", "how about cordless 3-in-1 blender, whisk product", true],
 ] as const) {
   const pass = isProductRefinementOnly(prompt) === expected;
   results.push({
@@ -123,6 +127,48 @@ for (const [id, prompt, expected] of [
     reason: pass ? "Matched expected behaviour" : `Expected refinement-only intent to be ${expected}`,
     durationMs: 0,
     response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt] of [
+  ["INTENT-QTY-CASE-003", "No conveyor type. I need a 4 or 6 slot toaster."],
+  ["INTENT-QTY-CASE-004", "Home dining set for 4 pax"],
+  ["INTENT-QTY-CASE-005", "how about cordless 3-in-1 blender, whisk product"],
+] as const) {
+  const pass = requestedQuantity(prompt) === null;
+  results.push({
+    id,
+    area: "Case-study specification parsing",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "A slot or pax specification was misclassified as an order quantity",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt, history, expectedTerms, rejectedTerms] of [
+  ["INTENT-CONTEXT-CASE-001", "No conveyor type. I need a 4 or 6 slot toaster.", ["Slots toaster"], ["pop-up", "toaster"], ["conveyor"]],
+  ["INTENT-CONTEXT-CASE-002", "i dont want serving tongs. i want cooking tongs", ["show me stainless steel tongs"], ["stainless steel", "cooking tongs"], ["serving tongs"]],
+  ["INTENT-CONTEXT-CASE-003", "Stainless Steel Steak Tong 15\"", [], ["stainless steel", "15\"", "steak tong"], ["serving"]],
+  ["INTENT-CONTEXT-CASE-004", "give me recommendations for electric whisk, not manual", [], ["electric", "whisk"], ["manual"]],
+  ["INTENT-CONTEXT-CASE-005", "how about cordless 3-in-1 blender, whisk product", [], ["cordless", "3-in-1", "blender", "whisk"], ["accessory"]],
+  ["INTENT-CONTEXT-CASE-006", "Home got a new house need some sets for dining maybe 4 pax household", [], ["4 person", "complete dining set"], []],
+] as const) {
+  const query = catalogueMessageWithContext(prompt, [...history]);
+  const lower = query.toLowerCase();
+  const pass = expectedTerms.every((term) => lower.includes(term.toLowerCase()))
+    && rejectedTerms.every((term) => !lower.includes(term.toLowerCase()));
+  results.push({
+    id,
+    area: "Case-study catalogue context",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : `Unexpected catalogue query: ${query}`,
+    durationMs: 0,
+    response: query,
     products: [],
   });
 }
@@ -1520,6 +1566,86 @@ await check("CASE-008", "Human-friendly queued product wording", "I need 3 bread
   const invalid = products.find((product) => !/bread.*knife|knife.*bread/i.test(product.name));
   return invalid ? `Returned a different knife type: ${invalid.name}` : null;
 }, [], 20_000);
+await check("CASE-009", "Case-study slot-toaster correction", "No conveyor type. I need a 4 or 6 slot toaster.", (reply) => {
+  if (/at least\s+4/i.test(reply.message)) return "The 4-slot specification was treated as order quantity 4";
+  const invalid = (reply.products ?? []).find((product) => /conveyor/i.test(product.name));
+  if (invalid) return `Returned a conveyor toaster after it was rejected: ${invalid.name}`;
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague|source/i.test(reply.message)
+    ? null
+    : "A missing pop-up toaster should be disclosed and handed off for sourcing";
+}, [
+  { role: "user", content: "Slots toaster" },
+  { role: "assistant", content: "Here are conveyor toaster options." },
+], 20_000);
+await check("CASE-010", "Case-study tong correction", "i dont want serving tongs. i want cooking tongs", (reply) => {
+  const invalid = (reply.products ?? []).find((product) => /serving|snail|sugar|ice/i.test(product.name));
+  if (invalid) return `Returned the rejected tong family: ${invalid.name}`;
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague|source/i.test(reply.message)
+    ? null
+    : "A missing cooking tong should be disclosed without substituting serving tongs";
+}, [
+  { role: "user", content: "show me stainless steel tongs" },
+  { role: "assistant", content: "Here are serving tong options." },
+], 20_000);
+await check("CASE-011", "Case-study exact steak tong", "Stainless Steel Steak Tong 15\"", (reply) => {
+  const invalid = (reply.products ?? []).find((product) => /serving|snail|sugar|ice/i.test(product.name) || !/steak.*tong|tong.*steak/i.test(product.name));
+  if (invalid) return `Returned an unrelated tong: ${invalid.name}`;
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague|source/i.test(reply.message)
+    ? null
+    : "An exact steak-tong request should return the correct item or a sourcing handoff";
+}, [], 20_000);
+await check("CASE-012", "Case-study complete dining set", "Home got a new house need some sets for dining maybe 4 pax household", (reply) => {
+  const invalid = (reply.products ?? []).find((product) => !/set/i.test(product.name) || !/dining|dinnerware|tableware|plate|bowl/i.test(product.name));
+  if (invalid) return `Returned an individual or unrelated item instead of a dining set: ${invalid.name}`;
+  if (/only help with Sia Huat products/i.test(reply.message)) return "A dining-set request was incorrectly treated as off-topic";
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague|source/i.test(reply.message)
+    ? null
+    : "A missing complete dining set should be disclosed and handed off for sourcing";
+}, [], 20_000);
+const staleWhiskProduct = contextProducts([{
+  stock_id: "201-13",
+  name: "ACCS WHISK",
+  list_price: 1,
+  uom_id: "PC",
+}]);
+await check("CASE-013", "Case-study powered whisk", "give me recommendations for electric whisk, not manual", (reply) => {
+  if (reply.selectedProduct?.stock_id === "201-13") return "Confirmed the stale manual whisk accessory";
+  const invalid = (reply.products ?? []).find((product) => /\b(?:accs|accessor|attachment|manual)\b/i.test(product.name));
+  if (invalid) return `Returned a manual whisk or accessory: ${invalid.name}`;
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague|source/i.test(reply.message)
+    ? null
+    : "A missing electric whisk should be disclosed and handed off for sourcing";
+}, [], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: staleWhiskProduct,
+});
+await check("CASE-014", "Case-study powered-product switch", "how about cordless 3-in-1 blender, whisk product", (reply) => {
+  if (reply.selectedProduct?.stock_id === "201-13" || (reply.products ?? []).some((product) => product.stock_id === "201-13")) {
+    return "The cordless blender request revived the stale whisk accessory";
+  }
+  return (reply.products?.length ?? 0) > 0 || /current online catalogue|human colleague|source|don.?t carry/i.test(reply.message)
+    ? null
+    : "A missing cordless blender/whisk should be disclosed without stale confirmation";
+}, [
+  { role: "user", content: "electric whisk" },
+  { role: "assistant", content: "Just to confirm, do you want ACCS WHISK?" },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: staleWhiskProduct[0],
+  quantity: null,
+  displayedProducts: staleWhiskProduct,
+});
+await check("CASE-015", "Case-study escalation", "Hello police?", (reply) => {
+  if ((reply.products?.length ?? 0) > 0) return "An escalation complaint must stop product suggestions";
+  return /sorry/i.test(reply.message) && /human colleague|review/i.test(reply.message)
+    ? null
+    : "The complaint should apologise and hand off for human review";
+}, [
+  { role: "user", content: "Full sets for home dining" },
+  { role: "assistant", content: "Here are individual plates." },
+], 5_000);
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));
