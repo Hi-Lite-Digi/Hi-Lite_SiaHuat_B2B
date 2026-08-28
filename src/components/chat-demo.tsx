@@ -1148,17 +1148,18 @@ export function ChatDemo() {
   function chooseProduct(product: Product, userText = conversationLanguage === "zh" ? `我要这个：${product.name}` : `This one: ${product.name}`) {
     if (loading) return;
     if (product.stock_status === "out_of_stock") {
-      setPendingProduct(null); setPendingQuantity(null); setConfirmedProduct(product); setStage("clarify");
+      const quantity = requestedQuantity(userText) ?? pendingQuantity;
+      setPendingProduct(null); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify");
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: userText },
         {
-          id: nextId.current++, role: "assistant", selectedProduct: product,
+          id: nextId.current++, role: "assistant",
           text: conversationLanguage === "zh"
-            ? `这件商品目前缺货。Sia Huat 网站实时库存显示为 0 ${product.uom_id}。\n\n要我为您显示其他选择吗？`
-            : `This item is currently out of stock. The live Sia Huat Add to cart check shows Available: 0 ${product.uom_id}.\n\nWould you like me to show you another option instead?`,
+            ? `这件商品无法选择，因为 Sia Huat 网站显示完全缺货。${quantity ? `我已保留您需要的数量 ${quantity}，` : ""}人工采购协助仍在进行中。您可以选择其他有库存的商品，或告诉我不同的规格。`
+            : `That result cannot be selected because the Sia Huat website shows it is completely out of stock. ${quantity ? `I’ve kept your requested quantity of ${quantity}, and ` : ""}human sourcing is already in progress. Choose another available item or tell me a different specification.`,
         },
       ]);
-      setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "不用了，谢谢"] : ["Choose another item", "No, thank you"]); return;
+      setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "联系人工"] : ["Choose another item", "Speak to a human"]); return;
     }
     const quantity = requestedQuantity(userText) ?? pendingQuantity;
     setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);

@@ -1897,9 +1897,20 @@ async function processChat(input: ChatRequest) {
     }
   }
   if (displayedProducts.length > 0 && asksForRecommendation(input.message)) {
-    const selectedProduct = displayedProducts[0];
+    const selectedProduct = displayedProducts.find((product) => product.stock_status !== "out_of_stock") ?? null;
+    if (!selectedProduct) {
+      const quantityCopy = input.context?.quantity ? ` I’ve kept your requested quantity of ${input.context.quantity}.` : "";
+      const reply: ChatReply = {
+        message: `None of the displayed results can be selected because they are completely out of stock.${quantityCopy} Human sourcing is already in progress. You can ask for a different specification or another item.`,
+        stage: "clarify",
+        products: displayedProducts,
+        selectedProduct: null,
+        suggestions: ["Choose another item", "Speak to a human"],
+      };
+      return NextResponse.json(customerReply(reply, input));
+    }
     const reply: ChatReply = {
-      message: `I’d pick option 1, ${selectedProduct.name}. It is the strongest match from the options shown. Would you like this one?`,
+      message: `I’d pick ${selectedProduct.name}. It is the strongest available match from the options shown. Would you like this one?`,
       stage: "clarify",
       products: [selectedProduct],
       selectedProduct,
@@ -1912,6 +1923,18 @@ async function processChat(input: ChatRequest) {
     : requestedDisplayedProductIndex(input.message, displayedProducts);
   if (displayedProductIndex !== null) {
     const selectedProduct = displayedProducts[displayedProductIndex];
+    if (selectedProduct.stock_status === "out_of_stock") {
+      const requested = quantity.kind === "valid" ? quantity.value : input.context?.quantity;
+      const quantityCopy = requested ? ` I’ve kept your requested quantity of ${requested}.` : "";
+      const reply: ChatReply = {
+        message: `That result cannot be selected because the Sia Huat website shows it is completely out of stock.${quantityCopy} Human sourcing is already in progress. Choose another available item or tell me a different specification.`,
+        stage: "clarify",
+        products: displayedProducts,
+        selectedProduct: null,
+        suggestions: ["Choose another item", "Speak to a human"],
+      };
+      return NextResponse.json(customerReply(reply, input));
+    }
     const reply: ChatReply = {
       message: quantity.kind === "valid"
         ? `Just to confirm—do you want ${quantity.value} ${selectedProduct.uom_id} of ${selectedProduct.name}?`

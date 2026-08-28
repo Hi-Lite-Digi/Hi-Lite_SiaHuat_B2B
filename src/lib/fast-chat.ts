@@ -64,8 +64,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     /\b(get|bring|find|send|give|connect|transfer|alert|call)\b.{0,30}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
     || /\b(speak|talk|chat)\b.{0,20}\b(to|with)\b.{0,12}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
     || /\b(real person|human agent|customer service)\b/i.test(message);
-  const asksOperationalFollowup = /\b(?:quote|quotation|invoice|email|e-mail|payment|bank\s+transfer|payment\s+advice|delivery|order)\b/i.test(message)
-    && /\b(?:status|update|check|follow\s*up|not\s+(?:received|arrived)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
+  const asksOperationalFollowup = /\b(?:quote|qoute|quotation|invoice|email|e-mail|payment|bank\s+transfer|payment\s+advice|delivery|order)\b/i.test(message)
+    && /\b(?:status|update|check|chk|chek|follow\s*up|not\s+(?:received|arrived|here)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
 
   if (/\b(?:call(?:ing)?|contact|get)\s+(?:the\s+)?police\b|\bhello\s+police\b/i.test(message)) {
     return reply(
@@ -79,7 +79,10 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (asksOperationalFollowup) {
-    const suppliedReference = message.match(/\b(?:SQ|SO|INV|PO)(?:-[A-Z0-9]+)+\b/i)?.[0] ?? null;
+    const suppliedReferenceMatch = message.match(/\b(SQ|SO|INV|PO)\s*[-:/\s]?\s*([A-Z]{1,4})?\s*[-:/\s]*\s*(\d{5,})\b/i);
+    const suppliedReference = suppliedReferenceMatch
+      ? `${suppliedReferenceMatch[1]}-${suppliedReferenceMatch[2] ?? ""}${suppliedReferenceMatch[3]}`.toUpperCase()
+      : null;
     return reply(
       suppliedReference
         ? `I’ve recorded reference ${suppliedReference} and alerted a human colleague to check it. They’ll be here in about 5–10 minutes.`
@@ -417,6 +420,18 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   const rememberedCategorySet = [...new Set(previousCategories)];
+  const keepsPairedStockpotAndStrainer = (rememberedCategorySet.includes("stockpot") || rememberedCategorySet.includes("pot"))
+    && rememberedCategorySet.includes("strainer")
+    && /\bboth\b/.test(simple);
+  if (keepsPairedStockpotAndStrainer) {
+    const eachQuantity = simple.match(/\b(\d+)\s*(?:ea(?:ch)?|pcs?|pieces?|units?)\b/)?.[1]
+      ?? (input.context?.quantity ? String(input.context.quantity) : null);
+    const quantityCopy = eachQuantity ? ` Quantity ${eachQuantity} each.` : "";
+    return reply(
+      `Got it—I’ve kept both items: stockpots and matching strainers that fit those exact pots.${quantityCopy} A human colleague is sourcing and confirming the compatible pair. They’ll be here in about 5–10 minutes.`,
+      ["Share pot dimensions", "Continue product enquiry"],
+    );
+  }
   if (/^(show both|both items|both|both start with (knife|pan)|start with (knife|pan))$/.test(simple) && rememberedCategorySet.length > 1) {
     if (/knife$/.test(simple)) return reply("Okay—let’s start with the knife. What will you use it for?", ["Cutting chicken", "General food prep", "Bread"]);
     if (/pan$/.test(simple)) return reply("Okay—let’s start with the pan. What kind do you need?", ["Frying pan", "Non-stick pan", "Sauce pan"]);

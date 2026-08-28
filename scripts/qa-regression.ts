@@ -1920,6 +1920,50 @@ await check("CASE-029", "First-turn singular ladder sourcing copy", "I need a 3-
     ? null
     : "The ladder response should be concise, singular and source the constrained item";
 }, [], 20_000);
+await check("CASE-030", "Messy operational reference", "quote not here yet ref sq sh26081716 can chk", (reply) => {
+  if (/don.?t carry/i.test(reply.message)) return "A messy quotation follow-up was treated as a product request";
+  if (/please share the .*number|share reference number/i.test(`${reply.message} ${(reply.suggestions ?? []).join(" ")}`)) {
+    return "The bot asked for the quotation reference that was already supplied";
+  }
+  return /recorded reference SQ-SH26081716/i.test(reply.message) && /human colleague/i.test(reply.message)
+    ? null
+    : "The human-formatted quotation reference should be normalized, acknowledged and handed off";
+}, [], 5_000);
+await check("CASE-031", "Imperfect paired-item follow-up", "both pls 2 ea", (reply) => {
+  const unrelated = (reply.products ?? []).find((product) => /cocktail|julep|bar.*strainer/i.test(product.name));
+  if (unrelated) return `Returned an unrelated bar strainer: ${unrelated.name}`;
+  return /stockpots and matching strainers/i.test(reply.message) && /quantity 2 each/i.test(reply.message) && /fit/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "The short human follow-up should retain the paired stockpot, fitted strainer and quantity";
+}, [
+  { role: "user", content: "need pot n strainer same size" },
+  { role: "assistant", content: "I’ve kept both items: stockpots and strainers that fit those exact pots. A human colleague will source the compatible pair." },
+], 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: [],
+});
+const unavailableRiceDispenser = contextProducts([{
+  stock_id: "EK9108S",
+  name: "STAINLESS STEEL FOOD GRADE RICE DISPENSER",
+  list_price: 80.64,
+  uom_id: "PC",
+  stock_status: "out_of_stock",
+  available_quantity: 0,
+}]);
+await check("CASE-032", "Reject typed out-of-stock selection", "1", (reply) => {
+  if (reply.selectedProduct) return "The completely out-of-stock result was still selectable";
+  if (/smaller quantity/i.test(reply.message)) return "The bot suggested a smaller quantity for a completely out-of-stock item";
+  return /cannot be selected/i.test(reply.message) && /quantity of 2/i.test(reply.message) && /human sourcing/i.test(reply.message)
+    ? null
+    : "The unavailable selection should be refused while preserving quantity and sourcing help";
+}, [], 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 2,
+  displayedProducts: unavailableRiceDispenser,
+});
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));
