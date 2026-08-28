@@ -1671,7 +1671,16 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     rememberGrounded(imagePurchaseClarification);
     return imagePurchaseClarification;
   }
-  const authoritativeGroundedReply = !input.image && mustGroundCatalogueAnswer
+  // When the customer names the product alongside a photo, their text is the
+  // authoritative buying request. Ground it immediately instead of waiting for
+  // vision; an uncertain image result must not ask them to identify an item
+  // they already named (for example, "stainless steel stockpot, around 12QT").
+  const hasExplicitImageCatalogueRequest = Boolean(
+    input.image
+    && productCategory(catalogueMessage)
+    && isConcreteCatalogueRequest(catalogueMessage),
+  );
+  const authoritativeGroundedReply = ((!input.image && mustGroundCatalogueAnswer) || hasExplicitImageCatalogueRequest)
     ? await groundedCatalogueReply(catalogueMessage, { authoritative: true, excludedStockIds }).catch((error) => {
         console.error("[api/chat] authoritative catalogue check failed", { message: catalogueMessage, error });
         return null;

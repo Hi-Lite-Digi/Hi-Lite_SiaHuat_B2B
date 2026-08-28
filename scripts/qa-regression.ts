@@ -120,6 +120,35 @@ async function checkImageBuyingFlow() {
     response: body.message ?? "",
     products: products.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
+
+  const explicitPrompt = "I need a stainless steel stockpot like this, around 12QT.";
+  const explicitResult = await postChat({
+    message: explicitPrompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "stockpot-reference.png",
+    },
+  });
+  const explicitProducts = explicitResult.body.products ?? [];
+  const explicitFailure = explicitResult.status !== 200
+    ? `HTTP ${explicitResult.status}: ${explicitResult.body.error ?? "unknown error"}`
+    : /couldn.t identify|tell me roughly what it is/i.test(explicitResult.body.message ?? "")
+      ? "Uncertain image recognition overrode the product explicitly named by the customer"
+      : !/stockpot|stock pot|\bpot\b/i.test(explicitResult.body.message ?? "")
+        && !explicitProducts.some((product) => /stockpot|stock pot|\bpot\b/i.test(product.name))
+        ? "The response did not stay focused on the explicitly requested stockpot"
+        : null;
+  results.push({
+    id: "CASE-019",
+    area: "Explicit text with image",
+    prompt: explicitPrompt,
+    pass: !explicitFailure,
+    reason: explicitFailure ?? "Explicit customer text took precedence over uncertain image recognition",
+    durationMs: explicitResult.durationMs,
+    response: explicitResult.body.message ?? "",
+    products: explicitProducts.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
 }
 
 async function checkMalformedJson() {
