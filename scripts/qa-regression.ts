@@ -82,6 +82,46 @@ async function checkAlternatives(
   });
 }
 
+async function checkImageBuyingFlow() {
+  const prompt = "Do you have a toaster that looks like this?";
+  const { status, body, durationMs } = await postChat({
+    message: prompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "toaster-reference.png",
+    },
+  });
+  const products = body.products ?? [];
+  const invalidProduct = products.find((product) => !/toaster/i.test(product.name));
+  const responseFailure = status !== 200
+    ? `HTTP ${status}: ${body.error ?? "unknown error"}`
+    : invalidProduct
+      ? `Returned a non-toaster product: ${invalidProduct.name}`
+      : /utility\s+(?:box|boxes)|cambox/i.test(body.message ?? "")
+        ? "The reply switched the customer's toaster request to utility boxes"
+        : !/toaster/i.test(body.message ?? "")
+          ? "The customer-facing reply did not stay focused on the toaster"
+          : !/availability|price|buy|purchase|catalogue/i.test(body.message ?? "")
+            ? "The reply did not guide the customer toward a purchasable option"
+            : !(body.suggestions ?? []).some((suggestion) => /slot|conveyor/i.test(suggestion))
+              ? "Expected actionable toaster-style choices"
+              : null;
+  const failure = responseFailure ?? (durationMs >= 5_000
+    ? `Reply took ${durationMs}ms; expected under 5000ms`
+    : null);
+  results.push({
+    id: "CASE-016",
+    area: "Image-led buying assistance",
+    prompt,
+    pass: !failure,
+    reason: failure ?? "Stayed on the customer's product and advanced the buying decision",
+    durationMs,
+    response: body.message ?? "",
+    products: products.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
+}
+
 async function checkMalformedJson() {
   const started = performance.now();
   const response = await fetch(`${qaBaseUrl}/api/chat`, {
@@ -1646,6 +1686,7 @@ await check("CASE-015", "Case-study escalation", "Hello police?", (reply) => {
   { role: "user", content: "Full sets for home dining" },
   { role: "assistant", content: "Here are individual plates." },
 ], 5_000);
+await checkImageBuyingFlow();
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));

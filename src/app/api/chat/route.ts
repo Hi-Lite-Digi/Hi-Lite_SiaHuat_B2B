@@ -1436,6 +1436,29 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
   };
 }
 
+function imageBuyingClarification(input: ChatRequest, catalogueMessage: string): ChatReply | null {
+  if (!input.image || !/\btoasters?\b/i.test(catalogueMessage)) return null;
+
+  const refersToPhoto = /\b(?:look(?:s|ing)?\s+like|similar\s+to|photo|picture|image|this)\b/i.test(input.message);
+  const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conveyor|slots?|conveyor)\b/i.test(input.message);
+  if (!refersToPhoto || specifiesToasterStyle) return null;
+
+  return {
+    message: "I can help you find a toaster like the photo. To show something you can actually buy, choose the style below and tell me how many units you need. If it is the pictured pop-up/slot style, choose 4 or 6 slots. I’ll then check the closest catalogue option, availability and price.",
+    stage: "clarify",
+    products: [],
+    selectedProduct: null,
+    suggestions: ["4-slot pop-up toaster", "6-slot pop-up toaster", "Conveyor toaster"],
+  };
+}
+
+function imageCatalogueMatchMessage(catalogueMessage: string, productCount: number) {
+  const requestedItem = requestedCatalogueItem(catalogueMessage);
+  return productCount === 1
+    ? `This is the closest catalogue match for your ${requestedItem}. Pick it and I’ll check availability and price.`
+    : `These are the closest catalogue matches for your ${requestedItem}. Choose one and I’ll check availability and price.`;
+}
+
 function conciseImageCatalogueQuery(message: string): string {
   const normalized = message.toLowerCase();
   if (/\b(?:camtainer|insulated beverage (?:dispenser|server)|(?:beverage|drink|tea) (?:dispenser|server))\b/.test(normalized)) {
@@ -1451,8 +1474,21 @@ function conciseImageCatalogueQuery(message: string): string {
   return message;
 }
 
-async function groundImageNarrativeReply(reply: ChatReply): Promise<ChatReply | null> {
-  if (reply.products.length > 0 || reply.selectedProduct) return reply;
+async function groundImageNarrativeReply(reply: ChatReply, catalogueMessage: string): Promise<ChatReply | null> {
+  const explicitCategory = productCategory(catalogueMessage);
+  if (reply.products.length > 0 || reply.selectedProduct) {
+    if (!explicitCategory) return reply;
+    const safeReply = enforceExplicitProductCategory(reply, catalogueMessage);
+    const safeCount = safeReply.products.length + (safeReply.selectedProduct ? 1 : 0);
+    if (safeCount > 0) {
+      return {
+        ...safeReply,
+        message: imageCatalogueMatchMessage(catalogueMessage, safeCount),
+        stage: "clarify",
+        suggestions: [],
+      };
+    }
+  }
 
   // Vision replies often contain several candidate item codes. Resolve them
   // concurrently so a slow lookup cannot consume the remaining customer reply
@@ -1470,14 +1506,38 @@ async function groundImageNarrativeReply(reply: ChatReply): Promise<ChatReply | 
     if (exactProducts.length >= 3) break;
   }
 
-  if (exactProducts.length > 0) {
+  const categorySafeExactProducts = explicitCategory
+    ? exactProducts.filter((product) => matchesExplicitProductCategory(catalogueMessage, product))
+    : exactProducts;
+  if (categorySafeExactProducts.length > 0) {
     return {
       ...reply,
+      message: explicitCategory
+        ? imageCatalogueMatchMessage(catalogueMessage, categorySafeExactProducts.length)
+        : reply.message,
       stage: "clarify",
-      products: exactProducts,
+      products: categorySafeExactProducts,
       selectedProduct: null,
       suggestions: [],
     };
+  }
+
+  // A clearly named product in the customer's message is authoritative. Image
+  // analysis can refine the style or attributes, but it must never switch the
+  // customer to another catalogue family (for example, toaster -> utility box).
+  if (explicitCategory) {
+    const grounded = await groundedCatalogueReply(catalogueMessage)
+      ?? await groundedCatalogueReply(catalogueMessage, { authoritative: true });
+    if (!grounded) return null;
+    const safeGrounded = enforceExplicitProductCategory(grounded, catalogueMessage);
+    return safeGrounded.products.length > 0
+      ? {
+          ...safeGrounded,
+          message: imageCatalogueMatchMessage(catalogueMessage, safeGrounded.products.length),
+          stage: "clarify",
+          suggestions: [],
+        }
+      : safeGrounded;
   }
 
   // n8n can correctly identify a family but occasionally describe it in prose
@@ -1578,6 +1638,11 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?)\b/i.test(catalogueMessage)
     || /\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\b(?:cooking|steak)\s+tongs?\b/i.test(catalogueMessage)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
+  const imagePurchaseClarification = imageBuyingClarification(input, catalogueMessage);
+  if (imagePurchaseClarification) {
+    rememberGrounded(imagePurchaseClarification);
+    return imagePurchaseClarification;
+  }
   const authoritativeGroundedReply = !input.image && mustGroundCatalogueAnswer
     ? await groundedCatalogueReply(catalogueMessage, { authoritative: true, excludedStockIds }).catch((error) => {
         console.error("[api/chat] authoritative catalogue check failed", { message: catalogueMessage, error });
@@ -1650,7 +1715,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   }
 
   const groundedImageReply = input.image && n8nReply
-    ? await groundImageNarrativeReply(n8nReply).catch((error) => {
+    ? await groundImageNarrativeReply(n8nReply, catalogueMessage).catch((error) => {
         console.error("[api/chat] image narrative grounding failed", { error });
         return null;
       })
