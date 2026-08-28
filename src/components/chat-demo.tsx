@@ -739,7 +739,9 @@ export function ChatDemo() {
     const queuedRequestNotice = newlyQueuedRequests.length > 0
       ? replyLanguage === "zh"
         ? `\n\n我也记住了下一项：${newlyQueuedRequests.join("；")}。完成当前商品后会继续处理。`
-        : `\n\nI’ve also kept your next request: ${newlyQueuedRequests.join("; ")}. We’ll handle it after this item.`
+        : `\n\nI’ve also kept your next request: ${newlyQueuedRequests
+            .map((request) => request.replace(/[.!?]+$/g, ""))
+            .join("; ")}. We’ll handle it after this item.`
       : "";
 
     const cleanCategory = productCategory(clean);

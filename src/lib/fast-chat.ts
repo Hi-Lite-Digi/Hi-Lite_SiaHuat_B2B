@@ -79,9 +79,12 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (asksOperationalFollowup) {
+    const suppliedReference = message.match(/\b(?:SQ|SO|INV|PO)(?:-[A-Z0-9]+)+\b/i)?.[0] ?? null;
     return reply(
-      "I’ve alerted a human colleague to check this. They’ll be here in about 5–10 minutes. Please share the quotation, invoice or order number if you have it.",
-      ["Share reference number", "Continue product enquiry"],
+      suppliedReference
+        ? `I’ve recorded reference ${suppliedReference} and alerted a human colleague to check it. They’ll be here in about 5–10 minutes.`
+        : "I’ve alerted a human colleague to check this. They’ll be here in about 5–10 minutes. Please share the quotation, invoice or order number if you have it.",
+      suppliedReference ? ["Continue product enquiry"] : ["Share reference number", "Continue product enquiry"],
     );
   }
 
@@ -357,6 +360,22 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply(
       "Are you looking for a knife to cut the chicken? If yes, will you be cutting through bones or trimming the meat?",
       ["Cutting through bones", "Trimming meat or joints", "No, I need something else"],
+    );
+  }
+
+  const requestsPairedPotAndStrainer = (currentCategories.includes("stockpot") || currentCategories.includes("pot"))
+    && currentCategories.includes("strainer")
+    && /\b(?:both|matching|fit|inside|same)\b/i.test(message);
+  if (requestsPairedPotAndStrainer) {
+    const pairQuantity = /\b(?:two|2)\b/i.test(message) ? 2 : input.context?.quantity ?? null;
+    const requestedSize = message.match(/\b\d+(?:\.\d+)?\s*QT\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
+    const specification = [
+      requestedSize,
+      /\bstainless(?:\s+steel)?\b/i.test(message) ? "stainless steel" : null,
+    ].filter(Boolean).join(" ");
+    return reply(
+      `I’ve kept both items${pairQuantity ? ` at quantity ${pairQuantity} each` : ""}: ${specification ? `${specification} ` : ""}stockpots and strainers that fit those exact pots. I can’t verify the fit safely from the catalogue alone, so I’ve alerted a human colleague to source and confirm the compatible pair. They’ll be here in about 5–10 minutes.`,
+      ["Share pot dimensions", "Continue product enquiry"],
     );
   }
 

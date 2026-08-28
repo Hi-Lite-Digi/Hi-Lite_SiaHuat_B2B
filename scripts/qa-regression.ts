@@ -1862,6 +1862,51 @@ await check("CASE-018", "Unavailable constrained product with quantity", "I need
     ? null
     : "The unavailable plate specification should preserve quantity and hand off for sourcing";
 }, [], 20_000);
+await check("CASE-024", "Ladder sourcing refinement acknowledgement", "Steel frame, around 300 lb capacity.", (reply) => {
+  if (/\b1 units\b/i.test(reply.message)) return "The sourcing reply used incorrect singular quantity grammar";
+  return /steel/i.test(reply.message) && /300\s*lb/i.test(reply.message) && /1 unit/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "The ladder sourcing reply should acknowledge the refined material, capacity and singular quantity";
+}, [
+  { role: "user", content: "I need a 3-step folding ladder, 1 unit per outlet, but not all aluminium." },
+  { role: "assistant", content: "I’ve kept the ladder request and alerted a human colleague to source it." },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 1,
+  displayedProducts: [],
+});
+await check("CASE-025", "Paired stockpot and fitted strainer", "Both—start with the pot, then show a matching strainer. Quantity 2 each.", (reply) => {
+  if (/both a .* or only one|both.*or only one/i.test(reply.message)) return "The explicit both-items answer repeated the same clarification question";
+  return /both items|stockpots and strainers/i.test(reply.message) && /quantity 2 each/i.test(reply.message) && /fit/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "The paired request should preserve both items, fit requirement and per-item quantity";
+}, [
+  { role: "user", content: "I need two 12QT stainless steel stockpots and matching strainers that fit inside them." },
+  { role: "assistant", content: "Are you looking for both a pot and a strainer, or only one?" },
+], 5_000, {
+  stage: "discover",
+  activeProduct: null,
+  quantity: 2,
+  displayedProducts: [],
+});
+await check("CASE-026", "Fully out-of-stock requested quantity", "I need 2 restaurant rice dispensers.", (reply) => {
+  if (/smaller quantity/i.test(reply.message)) return "A fully out-of-stock item should not suggest a smaller quantity";
+  const enoughStock = (reply.products ?? []).some((product) =>
+    product.stock_status === "in_stock" && (product.available_quantity ?? 0) >= 2,
+  );
+  return enoughStock || (/out of stock/i.test(reply.message) && /quantity of 2/i.test(reply.message) && /human colleague|source/i.test(reply.message))
+    ? null
+    : "The reply should provide sufficient live stock or preserve quantity and source the unavailable item";
+}, [], 20_000);
+await check("CASE-027", "Operational follow-up with supplied reference", "The quotation still has not arrived. Can you check? Reference SQ-SH26081716.", (reply) => {
+  if (/please share the .*number|share reference number/i.test(`${reply.message} ${(reply.suggestions ?? []).join(" ")}`)) {
+    return "The bot asked for a reference number that the customer already supplied";
+  }
+  return /recorded reference SQ-SH26081716/i.test(reply.message) && /human colleague/i.test(reply.message)
+    ? null
+    : "The supplied quotation reference should be acknowledged before handoff";
+}, [], 5_000);
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));

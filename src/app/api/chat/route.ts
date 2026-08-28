@@ -549,6 +549,7 @@ function requestedCatalogueItem(message: string) {
     .replace(/\b(?:bananna|bannana)\b/gi, "banana")
     .replace(/[?.!,]+/g, " ")
     .replace(/\s+/g, " ")
+    .replace(/\b1\s+units\b/gi, "1 unit")
     .trim();
   return cleaned || "that item";
 }
@@ -1009,6 +1010,20 @@ async function groundedCatalogueReply(
       };
     }
     if (minimumQuantity !== null && relevantProducts.length > 0) {
+      const allMatchingItemsOutOfStock = relevantProducts.every((product) =>
+        product.stock_status === "out_of_stock"
+        || product.in_stock === false
+        || product.available_quantity === 0,
+      );
+      if (allMatchingItemsOutOfStock) {
+        return {
+          message: `I found a matching ${requestedCatalogueItem(message)}, but the matching catalogue item is out of stock. I’ve kept your requested quantity of ${minimumQuantity} and alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
+          stage: "clarify",
+          products: relevantProducts.slice(0, 3),
+          selectedProduct: null,
+          suggestions: ["Speak to a human", "Choose another item"],
+        };
+      }
       const unitLabel = minimumQuantity === 1 ? "unit" : "units";
       return {
         message: minimumQuantity === 1
@@ -1167,6 +1182,26 @@ function enforceRequestedQuantityOptions(reply: ChatReply, message: string): Cha
   // product at all. Preserve its honest no-match/sourcing response instead.
   const hadMatchingCatalogueCandidate = reply.products.length > 0 || Boolean(reply.selectedProduct);
   if (!hadMatchingCatalogueCandidate) return reply;
+
+  const catalogueCandidates = [
+    ...reply.products,
+    ...(reply.selectedProduct ? [reply.selectedProduct] : []),
+  ];
+  const allCandidatesOutOfStock = catalogueCandidates.every((product) =>
+    product.stock_status === "out_of_stock"
+    || product.in_stock === false
+    || product.available_quantity === 0,
+  );
+  if (allCandidatesOutOfStock) {
+    return {
+      ...reply,
+      message: `The matching catalogue ${catalogueCandidates.length === 1 ? "item is" : "items are"} out of stock. I’ve kept your requested quantity of ${quantity} and alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
+      stage: "clarify",
+      products: catalogueCandidates.slice(0, 3),
+      selectedProduct: null,
+      suggestions: ["Speak to a human", "Choose another item"],
+    };
+  }
 
   const products = reply.products.filter((product) => meetsRequestedQuantity(product, quantity)).slice(0, 3);
   const selectedProduct = reply.selectedProduct && meetsRequestedQuantity(reply.selectedProduct, quantity)
@@ -1345,6 +1380,10 @@ async function addCutlerySetAvailabilityAnchor(reply: ChatReply, message: string
 }
 
 function explainUnavailableProducts(reply: ChatReply): ChatReply {
+  if (/alerted a human colleague/i.test(reply.message) && /out of stock/i.test(reply.message)) {
+    return reply;
+  }
+
   if (reply.selectedProduct?.stock_status === "out_of_stock") {
     const product = reply.selectedProduct;
     const available = reply.products.filter(
@@ -1647,7 +1686,13 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const recentConversation = [...userHistory.slice(-3), input.message].join(" ");
   const rejectsAllAluminiumLadder = (currentCategory === "ladder" || previousCategory === "ladder")
     && /\b(?:not|no|do\s+not|don['’]?t|must\s+not|mustn['’]?t)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum)\b/i.test(recentConversation);
-  if (rejectsAllAluminiumLadder) return unavailableCatalogueReply(catalogueMessage);
+  if (rejectsAllAluminiumLadder) {
+    const currentDetails = input.message.trim();
+    const sourcingRequest = catalogueMessage.toLowerCase().includes(currentDetails.toLowerCase())
+      ? catalogueMessage
+      : `${catalogueMessage}; ${currentDetails}`;
+    return unavailableCatalogueReply(sourcingRequest);
+  }
   let n8nError: unknown = null;
   const workflowMessage = prefersChinese(input)
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
