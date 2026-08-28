@@ -180,6 +180,39 @@ async function checkImageBuyingFlow() {
     response: recommendationResult.body.message ?? "",
     products: recommendationProducts.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
+
+  const photoOnlyPrompt = "Do you have this item? I want 2 units.";
+  const photoOnlyResult = await postChat({
+    message: photoOnlyPrompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "unknown-reference.png",
+    },
+  });
+  const photoOnlyMessage = photoOnlyResult.body.message ?? "";
+  const photoOnlyFailure = photoOnlyResult.status !== 200
+    ? `HTTP ${photoOnlyResult.status}: ${photoOnlyResult.body.error ?? "unknown error"}`
+    : /which item would you like\s+2\s+of/i.test(photoOnlyMessage)
+      ? "The attached photo was ignored as the referent for 'this item'"
+      : (photoOnlyResult.body.products?.length ?? 0) > 0
+        ? "An ambiguous photo-only request returned unconfirmed product matches"
+        : !/received the photo/i.test(photoOnlyMessage)
+          || !/saved quantity 2/i.test(photoOnlyMessage)
+          || !/item name|clearer product-only photo/i.test(photoOnlyMessage)
+          || !/stock and price/i.test(photoOnlyMessage)
+          ? "The ambiguous photo reply did not preserve quantity and guide the customer toward a safe catalogue search"
+          : null;
+  results.push({
+    id: "CASE-021",
+    area: "Photo-only item reference with quantity",
+    prompt: photoOnlyPrompt,
+    pass: !photoOnlyFailure,
+    reason: photoOnlyFailure ?? "The attachment was accepted as the referenced item",
+    durationMs: photoOnlyResult.durationMs,
+    response: photoOnlyResult.body.message ?? "",
+    products: (photoOnlyResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
 }
 
 async function checkMalformedJson() {

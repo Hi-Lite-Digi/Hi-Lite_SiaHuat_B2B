@@ -1873,6 +1873,7 @@ async function processChat(input: ChatRequest) {
   const hasUnresolvedReference = quantity.kind === "valid"
     && /\b(?:this|that|these|those|them|it)\b/i.test(input.message)
     && !isConcreteCatalogueRequest(input.message)
+    && !input.image
     && !input.context?.activeProduct;
   if (hasUnresolvedReference) {
     const reply: ChatReply = {
@@ -1881,6 +1882,23 @@ async function processChat(input: ChatRequest) {
       products: [],
       selectedProduct: null,
       suggestions: ["Find a product", "Browse products"],
+    };
+    return NextResponse.json(customerReply(reply, input));
+  }
+
+  const hasAmbiguousPhotoOnlyReference = Boolean(
+    input.image
+    && !productCategory(input.message)
+    && /\b(?:this|that|these|those|item|one|it|photo|picture|image)\b/i.test(input.message),
+  );
+  if (hasAmbiguousPhotoOnlyReference) {
+    const savedQuantity = quantity.kind === "valid" ? ` and saved quantity ${quantity.value}` : "";
+    const reply: ChatReply = {
+      message: `I received the photo${savedQuantity}, but I can’t identify the item confidently enough to recommend the right product. Tell me the item name (for example, toaster), or send a clearer product-only photo. Then I’ll check matching options, stock and price.`,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: ["Tell me the item name", "Send a clearer photo", "Speak to a human"],
     };
     return NextResponse.json(customerReply(reply, input));
   }
