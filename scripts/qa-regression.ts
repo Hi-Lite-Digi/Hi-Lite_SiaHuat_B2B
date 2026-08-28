@@ -213,6 +213,68 @@ async function checkImageBuyingFlow() {
     response: photoOnlyResult.body.message ?? "",
     products: (photoOnlyResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
+
+  const toasterClarificationResult = await postChat({
+    message: "toaster",
+    history: [
+      { role: "user", content: photoOnlyPrompt },
+      { role: "assistant", content: photoOnlyMessage },
+    ],
+    context: { stage: "clarify", activeProduct: null, quantity: 2, displayedProducts: [] },
+  });
+  const toasterClarificationMessage = toasterClarificationResult.body.message ?? "";
+  const toasterClarificationFailure = toasterClarificationResult.status !== 200
+    ? `HTTP ${toasterClarificationResult.status}: ${toasterClarificationResult.body.error ?? "unknown error"}`
+    : (toasterClarificationResult.body.products?.length ?? 0) > 0
+      ? "A generic toaster reply skipped the necessary style clarification"
+      : !/kept quantity 2/i.test(toasterClarificationMessage)
+        || !(toasterClarificationResult.body.suggestions ?? []).some((suggestion) => /4-slot/i.test(suggestion))
+        || !(toasterClarificationResult.body.suggestions ?? []).some((suggestion) => /6-slot/i.test(suggestion))
+        || !(toasterClarificationResult.body.suggestions ?? []).some((suggestion) => /conveyor/i.test(suggestion))
+        ? "The photo continuation did not preserve quantity and ask for toaster style"
+        : null;
+  results.push({
+    id: "CASE-022",
+    area: "Photo clarification continuation",
+    prompt: "toaster",
+    pass: !toasterClarificationFailure,
+    reason: toasterClarificationFailure ?? "The toaster continuation preserved quantity and requested the buying-critical style",
+    durationMs: toasterClarificationResult.durationMs,
+    response: toasterClarificationMessage,
+    products: (toasterClarificationResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
+
+  const toasterStyleResult = await postChat({
+    message: "4-slot pop-up toaster",
+    history: [
+      { role: "user", content: photoOnlyPrompt },
+      { role: "assistant", content: photoOnlyMessage },
+      { role: "user", content: "toaster" },
+      { role: "assistant", content: toasterClarificationMessage },
+    ],
+    context: { stage: "discover", activeProduct: null, quantity: 2, displayedProducts: [] },
+  });
+  const toasterStyleMessage = toasterStyleResult.body.message ?? "";
+  const unrelatedToasterStyleProduct = (toasterStyleResult.body.products ?? []).find((product) => /conveyor|utility\s+box|cambox/i.test(product.name));
+  const toasterStyleFailure = toasterStyleResult.status !== 200
+    ? `HTTP ${toasterStyleResult.status}: ${toasterStyleResult.body.error ?? "unknown error"}`
+    : /smaller quantity/i.test(toasterStyleMessage)
+      ? "The chosen toaster style re-entered the smaller-quantity loop"
+      : unrelatedToasterStyleProduct
+        ? `Returned an unrelated product after the toaster style choice: ${unrelatedToasterStyleProduct.name}`
+        : !/2/i.test(toasterStyleMessage) || !/source|human colleague/i.test(toasterStyleMessage)
+          ? "The style choice did not carry the saved quantity into sourcing"
+          : null;
+  results.push({
+    id: "CASE-023",
+    area: "Photo clarification style selection",
+    prompt: "4-slot pop-up toaster",
+    pass: !toasterStyleFailure,
+    reason: toasterStyleFailure ?? "The selected toaster style retained quantity through the sourcing handoff",
+    durationMs: toasterStyleResult.durationMs,
+    response: toasterStyleMessage,
+    products: (toasterStyleResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
 }
 
 async function checkMalformedJson() {

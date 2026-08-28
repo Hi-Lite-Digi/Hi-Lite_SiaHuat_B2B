@@ -1628,8 +1628,16 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const continuesCurrentCategory = Boolean(
     previousCategory && (!currentCategory || currentCategory === previousCategory),
   );
+  const carriesSavedPhotoQuantity = Boolean(
+    input.context?.quantity
+    && input.history.slice(-6).some((item) =>
+      item.role === "assistant" && /(?:saved|kept) quantity\s+\d+/i.test(item.content),
+    ),
+  );
   const contextualQuantity = originalQuantity ?? (
-    /\b(?:same|previous)\s+(?:quantity|amount)\b/i.test(input.message) || continuesCurrentCategory
+    /\b(?:same|previous)\s+(?:quantity|amount)\b/i.test(input.message)
+      || continuesCurrentCategory
+      || carriesSavedPhotoQuantity
       ? input.context?.quantity ?? null
       : null
   );
@@ -1894,7 +1902,7 @@ async function processChat(input: ChatRequest) {
   if (hasAmbiguousPhotoOnlyReference) {
     const savedQuantity = quantity.kind === "valid" ? ` and saved quantity ${quantity.value}` : "";
     const reply: ChatReply = {
-      message: `I received the photo${savedQuantity}, but I can’t identify the item confidently enough to recommend the right product. Tell me the item name (for example, toaster), or send a clearer product-only photo. Then I’ll check matching options, stock and price.`,
+      message: `I received the photo${savedQuantity}, but I can’t identify the item confidently enough to recommend the right product. Tell me the item name and one key detail (for example, “4-slot pop-up toaster”), or send a clearer product-only photo. Then I’ll check matching options, stock and price.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,

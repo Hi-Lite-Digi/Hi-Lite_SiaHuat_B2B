@@ -85,6 +85,22 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
+  const followsAmbiguousPhotoClarification = input.history.slice(-4).some((item) =>
+    item.role === "assistant"
+    && /received the photo/i.test(item.content)
+    && /identify the item confidently/i.test(item.content),
+  );
+  const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conveyor|slots?|conveyor)\b/i.test(message);
+  if (followsAmbiguousPhotoClarification && currentCategory === "toaster" && !specifiesToasterStyle) {
+    const savedQuantity = input.context?.quantity
+      ? ` I’ve kept quantity ${input.context.quantity}.`
+      : "";
+    return reply(
+      `Thanks—that’s a toaster.${savedQuantity} Which style do you need? For the pictured pop-up type, choose 4 or 6 slots. I’ll then check the closest catalogue option, availability and price.`,
+      ["4-slot pop-up toaster", "6-slot pop-up toaster", "Conveyor toaster"],
+    );
+  }
+
   // If the customer attached an image, references to "this picture" describe
   // their buying request; they are not asking Claire to send another photo.
   const asksClaireForProductPhoto = !input.image && (

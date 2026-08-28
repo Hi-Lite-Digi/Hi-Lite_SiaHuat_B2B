@@ -6,7 +6,10 @@ export type FastChatInput = {
   message: string;
   history: HistoryItem[];
   image?: ImageAttachment;
-  context?: { activeProduct?: { name: string } | null };
+  context?: {
+    activeProduct?: { name: string } | null;
+    quantity?: number | null;
+  };
 };
 
 export type FastReply = {
