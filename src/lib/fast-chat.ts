@@ -85,10 +85,14 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  const asksClaireForProductPhoto = /\b(can|could|will|would)\s+(?:you|u)\s+(?:please\s+)?(?:send|show|share|post)\b.{0,40}\b(pic|photo|image|picture)s?\b/i.test(message)
+  // If the customer attached an image, references to "this picture" describe
+  // their buying request; they are not asking Claire to send another photo.
+  const asksClaireForProductPhoto = !input.image && (
+    /\b(can|could|will|would)\s+(?:you|u)\s+(?:please\s+)?(?:send|show|share|post)\b.{0,40}\b(pic|photo|image|picture)s?\b/i.test(message)
     || /\b(pic|photo|image|picture)s?\b.{0,30}\b(send|show|share|post)\b/i.test(message)
     || /\b(?:got|have|show|share|see|view)\b.{0,25}\b(?:sample\s+)?(?:pic|photo|image|picture)s?\b/i.test(message)
-    || /\b(?:sample\s+)?(?:pic|photo|image|picture)s?\b/i.test(message);
+    || /\b(?:sample\s+)?(?:pic|photo|image|picture)s?\b/i.test(message)
+  );
 
   if (asksClaireForProductPhoto) {
     return reply(

@@ -1,10 +1,11 @@
-import type { HistoryItem } from "@/lib/chat-contract";
+import type { HistoryItem, ImageAttachment } from "@/lib/chat-contract";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 
 export type FastChatInput = {
   sessionId: string;
   message: string;
   history: HistoryItem[];
+  image?: ImageAttachment;
   context?: { activeProduct?: { name: string } | null };
 };
 

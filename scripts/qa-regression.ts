@@ -149,6 +149,37 @@ async function checkImageBuyingFlow() {
     response: explicitResult.body.message ?? "",
     products: explicitProducts.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
+
+  const recommendationPrompt = "Can you recommend a restaurant rice dispenser like item 1 in this picture?";
+  const recommendationResult = await postChat({
+    message: recommendationPrompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "rice-dispenser-reference.png",
+    },
+  });
+  const recommendationProducts = recommendationResult.body.products ?? [];
+  const unrelatedRecommendation = recommendationProducts.find((product) => !/rice/i.test(product.name));
+  const recommendationFailure = recommendationResult.status !== 200
+    ? `HTTP ${recommendationResult.status}: ${recommendationResult.body.error ?? "unknown error"}`
+    : /can.t send product photos|tell me the item first/i.test(recommendationResult.body.message ?? "")
+      ? "The attached picture was misclassified as a request for Claire to send a photo"
+      : unrelatedRecommendation
+        ? `Returned an unrelated product for the rice-dispenser picture: ${unrelatedRecommendation.name}`
+        : !/rice dispenser|human colleague|source/i.test(recommendationResult.body.message ?? "")
+          ? "The response did not advance the rice-dispenser buying request"
+          : null;
+  results.push({
+    id: "CASE-020",
+    area: "Product recommendation with image",
+    prompt: recommendationPrompt,
+    pass: !recommendationFailure,
+    reason: recommendationFailure ?? "The attached picture advanced the named product enquiry",
+    durationMs: recommendationResult.durationMs,
+    response: recommendationResult.body.message ?? "",
+    products: recommendationProducts.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
 }
 
 async function checkMalformedJson() {
