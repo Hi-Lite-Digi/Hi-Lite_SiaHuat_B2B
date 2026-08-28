@@ -541,6 +541,7 @@ async function groundedPantsSizingReply(input: ChatRequest): Promise<ChatReply |
 function requestedCatalogueItem(message: string) {
   const cleaned = message
     .replace(/\b(?:hi|hello|hey)\b[,.!\s]*/gi, " ")
+    .replace(/\b(?:i\s+)?(?:need|want|am\s+looking\s+for|looking\s+for)\b/gi, " ")
     .replace(/\b(?:do|does)\s+(?:you|u|sia\s+huat|you\s+guys)\s+(?:sell|have|carry|stock)\b/gi, " ")
     .replace(/\b(?:can|could)\s+i\s+(?:get|buy|order)\b/gi, " ")
     .replace(/\b(?:have|got)\s+any\b/gi, " ")
@@ -676,9 +677,11 @@ function relatedUseCase(message: string) {
 async function unavailableCatalogueReply(message: string): Promise<ChatReply> {
   const requestedItem = requestedCatalogueItem(message);
   const useCase = relatedUseCase(message);
-  if (/\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?|(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|(?:electric|cordless|powered)\b[\s\S]{0,40}\bwhisks?|cooking\s+tongs?|steak\s+tongs?)\b/i.test(message)) {
+  const sourceableCatalogueRequest = isConcreteCatalogueRequest(message) && productCategory(message) !== null;
+  if (sourceableCatalogueRequest
+    || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?|(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|(?:electric|cordless|powered)\b[\s\S]{0,40}\bwhisks?|cooking\s+tongs?|steak\s+tongs?)\b/i.test(message)) {
     return {
-      message: `I couldn’t find a matching ${requestedItem} in the current online catalogue, so I won’t show an accessory or unrelated item. I’ve alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
+      message: `I couldn’t find ${requestedItem} in the current online catalogue, so I won’t show an accessory or unrelated item. I’ve kept your requested specification and quantity, and alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,
@@ -1006,12 +1009,17 @@ async function groundedCatalogueReply(
       };
     }
     if (minimumQuantity !== null && relevantProducts.length > 0) {
+      const unitLabel = minimumQuantity === 1 ? "unit" : "units";
       return {
-        message: `I found matching items, but I couldn't confirm one with at least ${minimumQuantity} units available. Would you like a smaller quantity or another option?`,
+        message: minimumQuantity === 1
+          ? "I found matching items, but I couldn't confirm one available right now. Would you like another option or human help?"
+          : `I found matching items, but I couldn't confirm one with at least ${minimumQuantity} ${unitLabel} available. Would you like a smaller quantity or another option?`,
         stage: "clarify",
         products: [],
         selectedProduct: null,
-        suggestions: ["Try a smaller quantity", "Choose another item"],
+        suggestions: minimumQuantity === 1
+          ? ["Choose another item", "Speak to a human"]
+          : ["Try a smaller quantity", "Choose another item"],
       };
     }
     if (maximumPrice !== null && relevantProducts.length > 0) {
@@ -1155,23 +1163,40 @@ function enforceRequestedQuantityOptions(reply: ChatReply, message: string): Cha
   const quantity = requestedQuantity(message);
   if (quantity === null || isExactCodeRequest(message, reply.products)) return reply;
 
+  // Do not invent a stock problem when catalogue grounding found no matching
+  // product at all. Preserve its honest no-match/sourcing response instead.
+  const hadMatchingCatalogueCandidate = reply.products.length > 0 || Boolean(reply.selectedProduct);
+  if (!hadMatchingCatalogueCandidate) return reply;
+
   const products = reply.products.filter((product) => meetsRequestedQuantity(product, quantity)).slice(0, 3);
   const selectedProduct = reply.selectedProduct && meetsRequestedQuantity(reply.selectedProduct, quantity)
     ? reply.selectedProduct
     : null;
-  const uom = products[0]?.uom_id ?? selectedProduct?.uom_id ?? "units";
+  const candidateUom = products[0]?.uom_id
+    ?? selectedProduct?.uom_id
+    ?? reply.products[0]?.uom_id
+    ?? reply.selectedProduct?.uom_id
+    ?? "units";
+  const uom = quantity === 1 && /^units$/i.test(candidateUom) ? "unit" : candidateUom;
   const alreadyDisclosesAlternative = /\bnon-Damascus\b/i.test(reply.message);
+  const foundAvailableMatch = products.length > 0 || Boolean(selectedProduct);
   return {
     ...reply,
-    message: products.length > 0 || selectedProduct
+    message: foundAvailableMatch
       ? alreadyDisclosesAlternative
         ? reply.message
         : `These matching options have at least ${quantity} ${uom} available:`
-      : `I couldn't confirm a matching item with at least ${quantity} ${uom} available. Would you like a smaller quantity?`,
+      : quantity === 1
+        ? "I found matching items, but I couldn't confirm one available right now. Would you like another option or human help?"
+        : `I found matching items, but I couldn't confirm one with at least ${quantity} ${uom} available. Would you like a smaller quantity?`,
     stage: "clarify",
     products,
     selectedProduct,
-    suggestions: products.length > 0 || selectedProduct ? [] : ["Try a smaller quantity", "Choose another item"],
+    suggestions: foundAvailableMatch
+      ? []
+      : quantity === 1
+        ? ["Choose another item", "Speak to a human"]
+        : ["Try a smaller quantity", "Choose another item"],
   };
 }
 
@@ -1635,6 +1660,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   }
   const mustGroundCatalogueAnswer = isDirectCatalogueAvailabilityRequest(input.message)
     || (isConcreteCatalogueRequest(catalogueMessage) && /\b(?:quote|quotation|order|buy|purchase)\b/i.test(input.message))
+    || (requestedQuantity(catalogueMessage) !== null
+      && (/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(catalogueMessage)
+        || /\b(?:pop[ -]?up|non[ -]?conveyor|slots?)\s+toasters?\b|\btoasters?\b[\s\S]{0,30}\b(?:pop[ -]?up|non[ -]?conveyor|slots?)\b/i.test(catalogueMessage)))
     || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?)\b/i.test(catalogueMessage)
     || /\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\b(?:cooking|steak)\s+tongs?\b/i.test(catalogueMessage)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);

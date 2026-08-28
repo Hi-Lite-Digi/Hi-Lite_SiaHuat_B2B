@@ -1687,6 +1687,26 @@ await check("CASE-015", "Case-study escalation", "Hello police?", (reply) => {
   { role: "assistant", content: "Here are individual plates." },
 ], 5_000);
 await checkImageBuyingFlow();
+await check("CASE-017", "Unavailable image follow-up with quantity", "4-slot pop-up toaster, 2 units", (reply) => {
+  if (/smaller quantity/i.test(reply.message)) return "A missing pop-up toaster was misreported as a quantity shortage";
+  if (/\b1 units\b/i.test(reply.message)) return "The unavailable response used incorrect singular grammar";
+  const invalid = (reply.products ?? []).find((product) => /conveyor|utility\s+box|cambox/i.test(product.name));
+  if (invalid) return `Returned an unrelated substitute after the image follow-up: ${invalid.name}`;
+  return /human colleague/i.test(reply.message) && /source/i.test(reply.message) && /2/i.test(reply.message)
+    ? null
+    : "The unavailable toaster should preserve quantity and hand off for sourcing";
+}, [
+  { role: "user", content: "Do you have a toaster that looks like this?" },
+  { role: "assistant", content: "Choose a 4-slot pop-up toaster, 6-slot pop-up toaster, or conveyor toaster, and tell me how many units you need." },
+], 20_000);
+await check("CASE-018", "Unavailable constrained product with quantity", "I need 10 black round 27cm dinner plates", (reply) => {
+  if (/smaller quantity/i.test(reply.message)) return "A missing plate specification was misreported as a quantity shortage";
+  const invalid = (reply.products ?? []).find((product) => !/plate/i.test(product.name) || !/black/i.test(product.name));
+  if (invalid) return `Returned an unrelated plate substitute: ${invalid.name}`;
+  return /human colleague/i.test(reply.message) && /source/i.test(reply.message) && /10/i.test(reply.message)
+    ? null
+    : "The unavailable plate specification should preserve quantity and hand off for sourcing";
+}, [], 20_000);
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a common human typo"));
