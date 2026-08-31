@@ -639,6 +639,21 @@ for (const [id, prompt, expected] of [
 }
 
 {
+  const prompt = "got more items? different ones pls, any brand can, still need 3";
+  const pass = requestsAnotherOption(prompt);
+  results.push({
+    id: "INTENT-MORE-003",
+    area: "Imperfect alternative intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "Casual request for more items was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+{
   const prompt = "I need 4 chef knives and 6 wine glasses";
   const clauses = splitMultipleProductRequest(prompt);
   const pass = clauses.length === 2
@@ -1917,12 +1932,32 @@ await check("CASE-007", "Case-study constrained ladder sourcing", "I need a 3-st
   noProducts(reply) ?? (/human colleague/i.test(reply.message) && /source/i.test(reply.message) && !/smaller quantity/i.test(reply.message)
     ? null
     : "A 3-step material specification should be sourced by a human, not treated as quantity 3"));
-await check("CASE-008", "Human-friendly queued product wording", "I need 3 bread knives", (reply) => {
+const breadKnifeReply = await check("CASE-008", "Human-friendly queued product wording", "I need 3 bread knives", (reply) => {
   const products = reply.products ?? [];
   if (products.length === 0) return "A normal bread-knives request should return selectable products";
   const invalid = products.find((product) => !/bread.*knife|knife.*bread/i.test(product.name));
   return invalid ? `Returned a different knife type: ${invalid.name}` : null;
 }, [], 20_000);
+const breadKnifeProducts = breadKnifeReply.products ?? [];
+await check("CASE-008B", "Imperfect more-items wording", "got more items? different ones pls, any brand can, still need 3", (reply) => {
+  const products = reply.products ?? [];
+  const repeated = products.find((product) => breadKnifeProducts.some((shown) => shown.stock_id === product.stock_id));
+  if (repeated) return `Repeated an already displayed bread knife: ${repeated.name}`;
+  const unrelated = products.find((product) => !/bread.*knife|knife.*bread/i.test(product.name));
+  if (unrelated) return `More-items request returned a different product family: ${unrelated.name}`;
+  if (products.length === 0 && !/another|source|relax|human/i.test(reply.message)) {
+    return "No-more-options reply did not provide a useful next step";
+  }
+  return null;
+}, [
+  { role: "user", content: "I need 3 bread knives" },
+  { role: "assistant", content: breadKnifeReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: contextProducts(breadKnifeProducts),
+});
 await check("CASE-009", "Case-study slot-toaster correction", "No conveyor type. I need a 4 or 6 slot toaster.", (reply) => {
   if (/at least\s+4/i.test(reply.message)) return "The 4-slot specification was treated as order quantity 4";
   const invalid = (reply.products ?? []).find((product) => /conveyor/i.test(product.name));

@@ -196,7 +196,7 @@ export function isProductRefinementOnly(message: string) {
 
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
-  return /\b(?:another|different|other)\s+(?:similar\s+)?(?:item|option|product|one)\b/i.test(normalized)
+  return /\b(?:another|different|other|more)\s+(?:similar\s+)?(?:items?|options?|products?|ones?)\b/i.test(normalized)
     || /\b(?:another|different)\s+(?:(?:dark|light)\s+)?(?:brand|colou?r|size|style|material)\b/i.test(normalized)
     || /\b(?:show|share|give|find)\b[\s\S]{0,40}\b(?:more|different|other)\b(?:[\s\S]{0,20}\b(?:options?|ones?|items?|products?)\b)?/i.test(normalized)
     || /^(?:(?:i don'?t know[, ]*)?(?:(?:can|could|would) you\s+)?)?(?:recommend|recommend something|share (?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:some )?(?:more )?options?|are there (?:any )?(?:more |other )?(?:options?|items?|products?|ones?)|got (?:any )?(?:more |other )?(?:options?|items?|products?|ones?))\??$/i.test(normalized)
