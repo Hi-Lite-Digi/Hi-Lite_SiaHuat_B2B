@@ -146,17 +146,39 @@ export function extractShoeStyle(messages: string[]) {
 }
 
 function excludedBrandConstraint(messages: string[]) {
-  for (const content of [...messages].reverse()) {
+  let excludedBrand: string | null = null;
+
+  for (const content of messages) {
     const labelled = content.match(/\b(?:not|except|excluding|exclude|avoid|anything\s+but)\s+(?:the\s+)?([a-z0-9&'-]+(?:\s+[a-z0-9&'-]+){0,3})\s+brand\b/i)?.[1];
-    if (labelled) return labelled.trim();
+    if (labelled) {
+      excludedBrand = labelled.trim();
+      continue;
+    }
 
     // Unlabelled brand exclusions are common in chat ("not Atlantic Chef").
     // Limit this form to title-cased multi-word names so phrases such as
     // "not conveyor" or "not red handle" are never mistaken for brands.
     const titleCased = content.match(/\b(?:not|except|excluding|exclude|avoid|anything\s+but)\s+(?:the\s+)?([A-Z][A-Za-z0-9&'-]+(?:\s+[A-Z][A-Za-z0-9&'-]+)+)/)?.[1];
-    if (titleCased) return titleCased.trim();
+    if (titleCased) {
+      excludedBrand = titleCased.trim();
+      continue;
+    }
+
+    // A customer can explicitly change their mind after excluding a brand.
+    // Keep the exclusion for vague follow-ups, but clear it when they name the
+    // same brand again with an affirmative buying cue (for example, "I need
+    // that exact Atlantic Chef knife").
+    if (excludedBrand) {
+      const normalizedContent = content.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const normalizedBrand = excludedBrand.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const reinstatesBrand = /\b(?:exact|same|want|need|show|choose|buy|use|include|allow|okay|ok|fine|go\s+with|back\s+to)\b/i.test(content);
+      if (normalizedBrand && normalizedContent.includes(normalizedBrand) && reinstatesBrand) {
+        excludedBrand = null;
+      }
+    }
   }
-  return null;
+
+  return excludedBrand;
 }
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {

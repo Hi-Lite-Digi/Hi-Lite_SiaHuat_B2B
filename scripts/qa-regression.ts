@@ -384,6 +384,7 @@ for (const [id, prompt, history, expectedTerms, rejectedTerms] of [
   ["INTENT-CONTEXT-CASE-007", "Do you have another option that is not Atlantic Chef? Still 15cm with a red handle, need 3.", ["I need 3 chef knives around 15cm with a red handle."], ["chef knife", "15cm", "red handle", "excluding brand Atlantic Chef"], ["blue handle"]],
   ["INTENT-CONTEXT-CASE-008", "Okay, another dark colour is fine and 9 to 11 inch is okay. What can you sell me now? Still need 24.", ["Need 24 black dinner plates about 10 inch."], ["dark colour", "9 to 11 inch", "dinner", "plate tableware"], ["black 11 inch"]],
   ["INTENT-CONTEXT-CASE-009", "Do you have another similar product? Any brand is okay, but it must still be a black rectangular utility box around 20 by 15 inches. Need 2.", [], ["black", "rectangular", "utility box", "20 by 15 inches"], ["pail"]],
+  ["INTENT-CONTEXT-CASE-010", "ok then I need 500 of that exact Atlantic Chef red knife urgently", ["Need 5 red-handle chef knives around 15cm for a restaurant.", "got other one? not Atlantic Chef. same red handle same size, still 5"], ["chef knife", "15cm", "red handle"], ["excluding brand Atlantic Chef"]],
 ] as const) {
   const query = catalogueMessageWithContext(prompt, [...history]);
   const lower = query.toLowerCase();
