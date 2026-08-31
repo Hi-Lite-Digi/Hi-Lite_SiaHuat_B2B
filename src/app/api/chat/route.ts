@@ -1758,6 +1758,28 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
   return products.length > 0 ? { ...reply, products: products.slice(0, 3) } : reply;
 }
 
+function previouslyDisplayedStockIds(input: ChatRequest) {
+  const stockIds = new Set<string>();
+  for (const item of input.history) {
+    if (item.role !== "assistant") continue;
+    for (const match of item.content.matchAll(/\bOption\s+\d+:[^\n]*?\(code:\s*([a-z0-9._/-]+)/gi)) {
+      stockIds.add(match[1]);
+    }
+  }
+  return stockIds;
+}
+
+function excludePreviouslyDisplayedProducts(reply: ChatReply, excludedStockIds?: Set<string>): ChatReply {
+  if (!excludedStockIds || excludedStockIds.size === 0) return reply;
+  return {
+    ...reply,
+    products: reply.products.filter((product) => !excludedStockIds.has(product.stock_id)),
+    selectedProduct: reply.selectedProduct && !excludedStockIds.has(reply.selectedProduct.stock_id)
+      ? reply.selectedProduct
+      : null,
+  };
+}
+
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
   const baseUserHistory = catalogueHistoryWithClarification(input.message, input.history);
   const displayedCategorySeed = requestsAnotherOption(input.message)
@@ -1830,7 +1852,10 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
     : catalogueMessage;
   const excludedStockIds = requestsAnotherOption(input.message)
-    ? new Set((input.context?.displayedProducts ?? []).map((product) => product.stock_id))
+    ? new Set([
+        ...previouslyDisplayedStockIds(input),
+        ...(input.context?.displayedProducts ?? []).map((product) => product.stock_id),
+      ])
     : undefined;
   const pantsSizingReply = !input.image
     ? await groundedPantsSizingReply(input).catch((error) => {
@@ -1895,9 +1920,10 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     const safeAlternatives = categorySafeAlternatives.products.length > 0 || liveReply.products.length === 0
       ? categorySafeAlternatives
       : liveReply;
+    const unseenSafeAlternatives = excludePreviouslyDisplayedProducts(safeAlternatives, excludedStockIds);
     return guideAlternativeNoMatch(deduplicateReplyProducts(
       enforceLiveCheckoutGate(explainUnavailableProducts(
-        enforceRequestedQuantityOptions(safeAlternatives, catalogueMessage),
+        enforceRequestedQuantityOptions(unseenSafeAlternatives, catalogueMessage),
       )),
     ), input.message, catalogueMessage);
   }
@@ -1973,7 +1999,8 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const safeAlternatives = categorySafeAlternatives.products.length > 0 || liveReply.products.length === 0
     ? categorySafeAlternatives
     : liveReply;
-  const quantityReadyReply = enforceRequestedQuantityOptions(safeAlternatives, catalogueMessage);
+  const unseenSafeAlternatives = excludePreviouslyDisplayedProducts(safeAlternatives, excludedStockIds);
+  const quantityReadyReply = enforceRequestedQuantityOptions(unseenSafeAlternatives, catalogueMessage);
   return guideAlternativeNoMatch(deduplicateReplyProducts(
     enforceLiveCheckoutGate(explainUnavailableProducts(quantityReadyReply)),
   ), input.message, catalogueMessage);
