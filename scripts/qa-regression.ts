@@ -1801,7 +1801,7 @@ await check("FLOW-ALT-005", "Relaxed alternative constraints", "Okay, another da
   displayedProducts: [],
 });
 
-await check("FLOW-ALT-006", "Image-led alternative follow-up", "Do you have another similar product? Any brand is okay, but it must still be a black rectangular utility box around 20 by 15 inches. Need 2.", (reply) => {
+const explicitUtilityBoxReply = await check("FLOW-ALT-006", "Image-led alternative follow-up", "Do you have another similar product? Any brand is okay, but it must still be a black rectangular utility box around 20 by 15 inches. Need 2.", (reply) => {
   const products = reply.products ?? [];
   if (products.length === 0) return "The explicit utility-box follow-up incorrectly claimed that no product is carried";
   const invalid = products.find((product) =>
@@ -1818,6 +1818,30 @@ await check("FLOW-ALT-006", "Image-led alternative follow-up", "Do you have anot
   activeProduct: null,
   quantity: 2,
   displayedProducts: [],
+});
+const explicitUtilityBoxProducts = explicitUtilityBoxReply.products ?? [];
+await check("FLOW-ALT-007", "Photo-result shorthand alternative", "other similar one can? same black box roughly 20 by 15 inch, still need 2", (reply) => {
+  if (/^Sorry, we don['’]?t carry/i.test(reply.message)) {
+    return "The shorthand follow-up lost the displayed utility-box context";
+  }
+  const invalid = (reply.products ?? []).find((product) =>
+    !/utility\s+box|cambox/i.test(product.name)
+    || /pail|bucket/i.test(product.name)
+    || !/black/i.test(product.name),
+  );
+  if (invalid) return `Shorthand utility-box follow-up returned an unsuitable item: ${invalid.name}`;
+  if ((reply.products ?? []).length === 0 && !/another|source|relax|human/i.test(reply.message)) {
+    return "No-new-match reply did not offer a useful sourcing or relaxation path";
+  }
+  return null;
+}, [
+  { role: "user", content: "Need 2 of this for restaurant storage. What can I buy?" },
+  { role: "assistant", content: explicitUtilityBoxReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 2,
+  displayedProducts: contextProducts(explicitUtilityBoxProducts),
 });
 
 const addedSteelPanReply = await check("FLOW-MULTI-001", "Multi-item order memory", "Add a steel pan as well", (reply) => {

@@ -1759,7 +1759,19 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
 }
 
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
-  const userHistory = catalogueHistoryWithClarification(input.message, input.history);
+  const baseUserHistory = catalogueHistoryWithClarification(input.message, input.history);
+  const displayedCategorySeed = requestsAnotherOption(input.message)
+    && rememberedActiveCategories(baseUserHistory).length === 0
+    ? (input.context?.displayedProducts ?? [])
+        .map((product) => product.name)
+        .find((name) => productCategory(name)) ?? null
+    : null;
+  // Photo-led turns may not contain a product noun in the customer's text.
+  // When they ask for "another one" or "the same black box", carry the
+  // category from the product cards we just showed into the catalogue query.
+  const userHistory = displayedCategorySeed
+    ? [...baseUserHistory, displayedCategorySeed]
+    : baseUserHistory;
   const rememberedCatalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   const originalQuantity = requestedQuantity(input.message);
   const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
