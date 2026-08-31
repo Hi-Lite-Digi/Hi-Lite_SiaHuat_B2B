@@ -52,7 +52,12 @@ export function detectProductUseCase(message: string) {
 function searchableProductText(product: Product) {
   return [
     product.name,
+    product.brand,
+    product.brand_id,
+    product.model,
     product.description,
+    product.size,
+    product.dimensions,
     product.category,
     product.subcategory,
     product.third_category,
@@ -136,10 +141,29 @@ export function normalizeCatalogueQuery(message: string) {
   return cleaned;
 }
 
+function catalogueLookupQuery(query: string) {
+  return query
+    .replace(/\bexcluding\s+brand\s+[a-z0-9&' -]+$/i, " ")
+    .replace(/\bdark\s+colou?r\b/gi, " ")
+    .replace(/\b\d+(?:\.\d+)?\s*(?:-|to|through)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function matchesExplicitConstraints(query: string, product: Product) {
   const requested = query.toLowerCase();
   const candidate = searchableProductText(product).toLowerCase();
   const productName = product.name.toLowerCase();
+  const excludedBrand = requested.match(/\bexcluding\s+brand\s+([a-z0-9&' -]+)$/i)?.[1]?.trim();
+  if (excludedBrand) {
+    const excluded = looseToken(excludedBrand);
+    const catalogueBrands = [product.brand, product.brand_id]
+      .filter((value): value is string => Boolean(value))
+      .map(looseToken);
+    if (excluded && catalogueBrands.some((brand) => brand === excluded || brand.includes(excluded) || excluded.includes(brand))) {
+      return false;
+    }
+  }
   const requestsUtensils = /\b(?:kitchen\s+)?utensils?\b/.test(requested);
   const requestsUtensilAccessory = /\b(?:storage|stand|organizer|hanger|holder|rack)\b/.test(requested);
   const requestsPoweredWhisk = /\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\bwhisks?\b[\s\S]*\b(?:electric|cordless|powered)\b|\bnot\s+manual\b/.test(requested);
@@ -217,7 +241,9 @@ function matchesExplicitConstraints(query: string, product: Product) {
   ].filter((pattern): pattern is RegExp => pattern !== null);
   if (requestedMaterials.length > 0 && !requestedMaterials.some((pattern) => pattern.test(candidate))) return false;
 
-  const requestedColour = [...requested.matchAll(/\b(red|yellow|blue|black|white|green|silver)\b/g)].at(-1)?.[1];
+  if (/\bdark\s+colou?r\b/.test(requested) && !/\b(?:black|brown|grey|gray|charcoal)\b/.test(candidate)) return false;
+
+  const requestedColour = [...requested.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/g)].at(-1)?.[1];
   if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`).test(candidate)) return false;
 
   const requestedMetricSize = requested.match(/\b(\d+(?:\.\d+)?)\s*(cm|mm)\b/);
@@ -236,7 +262,21 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!capacityPattern.test(candidate)) return false;
   }
 
-  const requestedInchSize = requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
+  const requestedInchRange = requested.match(/\b(\d+(?:\.\d+)?)\s*(?:-|to|through)\s*(\d+(?:\.\d+)?)\s*(?:inch|inches|in)\b/);
+  if (requestedInchRange) {
+    const minimumCm = Math.min(Number.parseFloat(requestedInchRange[1]), Number.parseFloat(requestedInchRange[2])) * 2.54;
+    const maximumCm = Math.max(Number.parseFloat(requestedInchRange[1]), Number.parseFloat(requestedInchRange[2])) * 2.54;
+    const measurementsCm = [...candidate.matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|mm|inch|inches|in|\")/gi)]
+      .map((match) => {
+        const value = Number.parseFloat(match[1]);
+        if (/^mm$/i.test(match[2])) return value / 10;
+        if (/^(?:inch|inches|in|\")$/i.test(match[2])) return value * 2.54;
+        return value;
+      });
+    if (!measurementsCm.some((measurement) => measurement >= minimumCm - 1.1 && measurement <= maximumCm + 1.1)) return false;
+  }
+
+  const requestedInchSize = requestedInchRange ? null : requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
   if (requestedInchSize) {
     const inches = Number.parseFloat(requestedInchSize[1]);
     const directInches = new RegExp(`\\b${requestedInchSize[1]}\\s*-?\\s*(?:inch|in|\")`, "i");
@@ -266,7 +306,8 @@ export async function searchCatalogue(
   options: { resultLimit?: number; outputLimit?: number } = {},
 ) {
   const query = normalizeCatalogueQuery(message);
-  if (query.length < 2) return [];
+  const lookupQuery = catalogueLookupQuery(query);
+  if (lookupQuery.length < 2) return [];
 
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -275,7 +316,7 @@ export async function searchCatalogue(
   const response = await fetch(`${url}/rest/v1/rpc/search_products`, {
     method: "POST",
     headers: { "content-type": "application/json", apikey: key, authorization: `Bearer ${key}` },
-    body: JSON.stringify({ search_query: query, result_limit: options.resultLimit ?? 8 }),
+    body: JSON.stringify({ search_query: lookupQuery, result_limit: options.resultLimit ?? 8 }),
     cache: "no-store",
     signal: AbortSignal.timeout(4_000),
   });

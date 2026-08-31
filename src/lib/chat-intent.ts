@@ -144,6 +144,20 @@ export function extractShoeStyle(messages: string[]) {
   return null;
 }
 
+function excludedBrandConstraint(messages: string[]) {
+  for (const content of [...messages].reverse()) {
+    const labelled = content.match(/\b(?:not|except|excluding|exclude|avoid|anything\s+but)\s+(?:the\s+)?([a-z0-9&'-]+(?:\s+[a-z0-9&'-]+){0,3})\s+brand\b/i)?.[1];
+    if (labelled) return labelled.trim();
+
+    // Unlabelled brand exclusions are common in chat ("not Atlantic Chef").
+    // Limit this form to title-cased multi-word names so phrases such as
+    // "not conveyor" or "not red handle" are never mistaken for brands.
+    const titleCased = content.match(/\b(?:not|except|excluding|exclude|avoid|anything\s+but)\s+(?:the\s+)?([A-Z][A-Za-z0-9&'-]+(?:\s+[A-Z][A-Za-z0-9&'-]+)+)/)?.[1];
+    if (titleCased) return titleCased.trim();
+  }
+  return null;
+}
+
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
   const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
   const currentCategory = productCategory(message);
@@ -251,10 +265,22 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     }
     const fineDining = /\b(fine\s+dining)\b/i.test(joinedMessages) ? "fine dining" : null;
     const commercial = /\b(commercial|restaurant)\b/i.test(joinedMessages) ? "commercial" : null;
-    const colour = [...customerMessages].reverse()
-      .map((content) => [...content.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0])
-      .find(Boolean) ?? null;
-    const size = [...customerMessages].reverse().map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0]).find(Boolean) ?? null;
+    const colourSource = [...customerMessages].reverse().find((content) =>
+      /\b(?:red|yellow|blue|black|white|green|silver|grey|gray|brown)\b|\bdark\s+colou?r\b|\b(?:any|no\s+preference\s+for)\s+colou?r\b/i.test(content),
+    ) ?? "";
+    const colour = /\b(?:any|no\s+preference\s+for)\s+colou?r\b/i.test(colourSource)
+      ? null
+      : /\bdark\s+colou?r\b/i.test(colourSource)
+        ? "dark colour"
+        : [...colourSource.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0] ?? null;
+    const sizeSource = [...customerMessages].reverse().find((content) =>
+      /\b(?:any\s+size|no\s+size\s+preference)\b|\b\d+(?:\.\d+)?\s*(?:-|to|through)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b|\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(content),
+    ) ?? "";
+    const size = /\b(?:any\s+size|no\s+size\s+preference)\b/i.test(sizeSource)
+      ? null
+      : sizeSource.match(/\b\d+(?:\.\d+)?\s*(?:-|to|through)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0]
+        ?? sizeSource.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0]
+        ?? null;
     const shape = [...customerMessages].reverse()
       .map((content) => [...content.matchAll(/\b(round|square|rectangular|rectangle|oval)\b/gi)].at(-1)?.[0])
       .find(Boolean) ?? null;
@@ -319,7 +345,19 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     const size = [...customerMessages].reverse()
       .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
       .find(Boolean) ?? null;
-    return [damascus, origin, latestKnifeType, size].filter(Boolean).join(" ");
+    const colourSource = [...customerMessages].reverse().find((content) =>
+      /\b(?:red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/i.test(content),
+    ) ?? "";
+    const colour = [...colourSource.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[0] ?? null;
+    const excludedBrand = excludedBrandConstraint(customerMessages);
+    return [
+      damascus,
+      origin,
+      latestKnifeType,
+      size,
+      colour ? `${colour} handle` : null,
+      excludedBrand ? `excluding brand ${excludedBrand}` : null,
+    ].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "wok") {

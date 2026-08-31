@@ -381,6 +381,8 @@ for (const [id, prompt, history, expectedTerms, rejectedTerms] of [
   ["INTENT-CONTEXT-CASE-004", "give me recommendations for electric whisk, not manual", [], ["electric", "whisk"], ["manual"]],
   ["INTENT-CONTEXT-CASE-005", "how about cordless 3-in-1 blender, whisk product", [], ["cordless", "3-in-1", "blender", "whisk"], ["accessory"]],
   ["INTENT-CONTEXT-CASE-006", "Home got a new house need some sets for dining maybe 4 pax household", [], ["4 person", "complete dining set"], []],
+  ["INTENT-CONTEXT-CASE-007", "Do you have another option that is not Atlantic Chef? Still 15cm with a red handle, need 3.", ["I need 3 chef knives around 15cm with a red handle."], ["chef knife", "15cm", "red handle", "excluding brand Atlantic Chef"], ["blue handle"]],
+  ["INTENT-CONTEXT-CASE-008", "Okay, another dark colour is fine and 9 to 11 inch is okay. What can you sell me now? Still need 24.", ["Need 24 black dinner plates about 10 inch."], ["dark colour", "9 to 11 inch", "dinner", "plate tableware"], ["black 11 inch"]],
 ] as const) {
   const query = catalogueMessageWithContext(prompt, [...history]);
   const lower = query.toLowerCase();
@@ -615,6 +617,21 @@ for (const [id, prompt, expected] of [
     reason: pass ? "Matched expected behaviour" : `Expected bread knife, received: ${query}`,
     durationMs: 0,
     response: query,
+    products: [],
+  });
+}
+
+{
+  const prompt = "Another dark colour is fine";
+  const pass = requestsAnotherOption(prompt);
+  results.push({
+    id: "INTENT-MORE-002",
+    area: "Relaxed alternative intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "A relaxed alternative attribute was not recognized",
+    durationMs: 0,
+    response: "",
     products: [],
   });
 }
@@ -1710,6 +1727,76 @@ await check("FLOW-REC-001", "Recommendation flow", "Which one would you personal
   activeProduct: null,
   quantity: 3,
   displayedProducts: contextProducts(moreBlackPlateProducts),
+});
+
+const redKnifeReply = await check("FLOW-ALT-003", "Constraint-safe alternatives", "I need 3 chef knives around 15cm with a red handle. What do you have?", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected at least one red-handle 15cm chef knife";
+  const invalid = products.find((product) =>
+    !/chef.*knife|knife.*chef/i.test(product.name)
+    || !/15\s*cm/i.test(product.name)
+    || !/red\s+handle/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 3,
+  );
+  return invalid ? `Initial knife options violated a required constraint: ${invalid.name}` : null;
+}, [], 20_000);
+const redKnifeProducts = redKnifeReply.products ?? [];
+await check("FLOW-ALT-004", "Constraint-safe alternatives", "Do you have another option that is not Atlantic Chef? Still 15cm with a red handle, need 3.", (reply) => {
+  const products = reply.products ?? [];
+  const invalid = products.find((product) =>
+    /atlantic\s+chef/i.test(product.name)
+    || !/chef.*knife|knife.*chef/i.test(product.name)
+    || !/15\s*cm/i.test(product.name)
+    || !/red\s+handle/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 3,
+  );
+  if (invalid) return `Alternative request returned an excluded or mismatched product: ${invalid.name}`;
+  if (products.length === 0 && !/couldn.t confirm another|source a match|relax/i.test(reply.message)) {
+    return "No-match reply did not offer a useful sourcing or constraint-relaxation path";
+  }
+  return null;
+}, [
+  { role: "user", content: "I need 3 chef knives around 15cm with a red handle. What do you have?" },
+  { role: "assistant", content: redKnifeReply.message },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 3,
+  displayedProducts: contextProducts(redKnifeProducts),
+});
+
+await check("FLOW-ALT-005", "Relaxed alternative constraints", "Okay, another dark colour is fine and 9 to 11 inch is okay. What can you sell me now? Still need 24.", (reply) => {
+  const products = reply.products ?? [];
+  const invalid = products.find((product) => {
+    const dark = /\b(?:black|brown|grey|gray|charcoal)\b/i.test(product.name);
+    const metric = product.name.match(/\b(\d+(?:\.\d+)?)\s*cm\b/i)?.[1];
+    const inches = product.name.match(/\b(\d+(?:\.\d+)?)\s*(?:inch|in|\")\b/i)?.[1];
+    const sizeInches = metric ? Number(metric) / 2.54 : inches ? Number(inches) : null;
+    return !dark
+      || sizeInches === null
+      || sizeInches < 9 - 0.5
+      || sizeInches > 11 + 0.5
+      || product.stock_status !== "in_stock"
+      || Number(product.available_quantity ?? 0) < 24;
+  });
+  if (invalid) return `Relaxed plate search returned an unsuitable product: ${invalid.name}`;
+  if (products.length === 0 && !/dark colour|9 to 11 inch|source|relax/i.test(reply.message)) {
+    return "No-match reply forgot the customer's relaxed colour or size range";
+  }
+  if (products.length === 0 && /\bblack 11 inch\b/i.test(reply.message)) {
+    return "Reply revived the old exact black/11-inch constraint";
+  }
+  return null;
+}, [
+  { role: "user", content: "Need 24 black dinner plates about 10 inch. If the exact one is unavailable, show me another black plate around the same size." },
+  { role: "assistant", content: "I couldn't find that exact black dinner plate." },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 24,
+  displayedProducts: [],
 });
 
 const addedSteelPanReply = await check("FLOW-MULTI-001", "Multi-item order memory", "Add a steel pan as well", (reply) => {
