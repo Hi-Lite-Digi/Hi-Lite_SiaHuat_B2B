@@ -142,6 +142,10 @@ export function normalizeCatalogueQuery(message: string) {
 }
 
 function catalogueLookupQuery(query: string) {
+  if (/\bcambox\b/i.test(query)) return "cambox";
+  if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/i.test(query)) {
+    return "utility box";
+  }
   return query
     .replace(/\bexcluding\s+brand\s+[a-z0-9&' -]+$/i, " ")
     .replace(/\bdark\s+colou?r\b/gi, " ")
@@ -186,6 +190,9 @@ function matchesExplicitConstraints(query: string, product: Product) {
     const rejectsConveyor = /\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor|\d+(?:\s+or\s+\d+)?\s*slots?)\b/.test(requested);
     if (rejectsConveyor && /\bconveyor\b/.test(candidate)) return false;
   }
+  if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/.test(requested)
+    && (!/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/.test(productName)
+      || /\b(?:pail|bucket)\b/.test(productName))) return false;
   if (requestsUtensils) {
     if (!/\b(?:utensils?|spatulas?|turners?|whisks?|peelers?|tongs?|ladles?|spoons?|forks?)\b/.test(candidate)) return false;
     if (!requestsUtensilAccessory && /\b(?:storage\s+stand|counter\s+organizer|wall\s+hanger|utensil\s+(?:holder|rack)|(?:holder|rack)\s+for\s+utensils?)\b/.test(productName)) return false;
@@ -262,6 +269,14 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!capacityPattern.test(candidate)) return false;
   }
 
+  const requestedInchDimensions = requested.match(/\b(\d+(?:\.\d+)?)\s*(?:x|by|×)\s*(\d+(?:\.\d+)?)\s*(?:inch|inches|in)\b/);
+  if (requestedInchDimensions) {
+    const requestedSides = [Number.parseFloat(requestedInchDimensions[1]), Number.parseFloat(requestedInchDimensions[2])].sort((left, right) => left - right);
+    const candidatePairs = [...candidate.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:x|by|×)\s*(\d+(?:\.\d+)?)\s*(?:inch|inches|in|")/gi)]
+      .map((match) => [Number.parseFloat(match[1]), Number.parseFloat(match[2])].sort((left, right) => left - right));
+    if (!candidatePairs.some((sides) => Math.abs(sides[0] - requestedSides[0]) <= 1 && Math.abs(sides[1] - requestedSides[1]) <= 1)) return false;
+  }
+
   const requestedInchRange = requested.match(/\b(\d+(?:\.\d+)?)\s*(?:-|to|through)\s*(\d+(?:\.\d+)?)\s*(?:inch|inches|in)\b/);
   if (requestedInchRange) {
     const minimumCm = Math.min(Number.parseFloat(requestedInchRange[1]), Number.parseFloat(requestedInchRange[2])) * 2.54;
@@ -276,7 +291,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!measurementsCm.some((measurement) => measurement >= minimumCm - 1.1 && measurement <= maximumCm + 1.1)) return false;
   }
 
-  const requestedInchSize = requestedInchRange ? null : requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
+  const requestedInchSize = requestedInchRange || requestedInchDimensions ? null : requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
   if (requestedInchSize) {
     const inches = Number.parseFloat(requestedInchSize[1]);
     const directInches = new RegExp(`\\b${requestedInchSize[1]}\\s*-?\\s*(?:inch|in|\")`, "i");

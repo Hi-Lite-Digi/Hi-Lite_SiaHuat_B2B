@@ -359,6 +359,10 @@ function matchesExplicitProductCategory(message: string, product: Product) {
       && /\bconveyor\b/i.test(productText)) return false;
     return /\btoasters?\b/i.test(productText);
   }
+  if (requestedCategory === "utility box") {
+    return /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/i.test(productName)
+      && !/\b(?:pail|bucket)\b/i.test(productName);
+  }
   const requestsPoweredWhisk = /\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\bwhisks?\b[\s\S]*\b(?:electric|cordless|powered)\b|\bnot\s+manual\b/i.test(message);
   if (requestsPoweredWhisk) {
     if (/\b(?:accessor(?:y|ies)|accs|attachment|manual)\b/i.test(productName)) return false;
@@ -973,6 +977,7 @@ async function groundedCatalogueReply(
   const relevantProducts = options.authoritative
     ? products.filter((product) => {
         if (/\bwoks?\b/i.test(message)) return matchesConstrainedWokRequest(message, product);
+        if (productCategory(message) === "utility box") return matchesExplicitProductCategory(message, product);
         if (/\b(?:knife|knives|cleaver|cleavers)\b/i.test(message) || /砍骨刀|刀/u.test(message)) {
           return matchesConstrainedKnifeRequest(message, product);
         }
@@ -1163,6 +1168,13 @@ function meetsRequestedQuantity(product: Product, quantity: number | null) {
 
 function matchesRequestedDimensions(message: string, product: Product) {
   const productText = [product.name, product.size, product.dimensions, product.description].filter(Boolean).join(" ");
+  const requestedPair = message.match(/\b(\d+(?:\.\d+)?)\s*(?:x|by|×)\s*(\d+(?:\.\d+)?)\s*(inch|inches|in)\b/i);
+  if (requestedPair) {
+    const requestedSides = [Number.parseFloat(requestedPair[1]), Number.parseFloat(requestedPair[2])].sort((left, right) => left - right);
+    const candidatePairs = [...productText.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:x|by|×)\s*(\d+(?:\.\d+)?)\s*(?:inch|inches|in|\")/gi)]
+      .map((match) => [Number.parseFloat(match[1]), Number.parseFloat(match[2])].sort((left, right) => left - right));
+    return candidatePairs.some((sides) => Math.abs(sides[0] - requestedSides[0]) <= 1 && Math.abs(sides[1] - requestedSides[1]) <= 1);
+  }
   const measurements = [...productText.matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|mm|inch|inches|in|\")/gi)]
     .map((match) => {
       const value = Number.parseFloat(match[1]);
@@ -1193,7 +1205,7 @@ function matchesRequestedDimensions(message: string, product: Product) {
 }
 
 function enforceRequestedDimensions(reply: ChatReply, message: string): ChatReply {
-  if (!/\b\d+(?:\.\d+)?(?:\s*(?:-|to|through)\s*\d+(?:\.\d+)?)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(message)) return reply;
+  if (!/\b\d+(?:\.\d+)?(?:\s*(?:-|to|through|x|by|×)\s*\d+(?:\.\d+)?)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(message)) return reply;
   if (/\b(?:around|about|approximately|approx|closest|near(?:est)?)\b/i.test(message)) return reply;
   const products = reply.products.filter((product) => matchesRequestedDimensions(message, product));
   const selectedProduct = reply.selectedProduct && matchesRequestedDimensions(message, reply.selectedProduct)
@@ -1716,6 +1728,7 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
     product.third_category,
   ].filter(Boolean).join(" ");
   const anchorText = productText(anchor);
+  const utilityBoxAnchor = /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|bin)|cambox)\b/i.test(anchor.name);
   const familyPatterns = [
     /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/i,
     /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|bin)|cambox)\b/i,
@@ -1734,6 +1747,11 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
       : null;
   const products = reply.products.filter((product) => {
     const candidateText = productText(product);
+    if (utilityBoxAnchor) {
+      return /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|bin)|cambox)\b/i.test(product.name)
+        && !/\b(?:pail|bucket)\b/i.test(product.name)
+        && (!material || material.test(candidateText));
+    }
     return family.test(candidateText) && (!material || material.test(candidateText));
   });
 

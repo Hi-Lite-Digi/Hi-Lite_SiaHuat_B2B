@@ -20,7 +20,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|toaser|toasers|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|dispencer|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|box|boxes|bin|bins|cambox|storage|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|toaser|toasers|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|dispencer|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -40,6 +40,7 @@ export const productCategories = [
   { pattern: /\b(glass|glasses|glassware|tumbler|tumblers)\b/i, label: "glassware" },
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
   { pattern: /\b(strainers?|strainners?|straners?|skimmers?|colanders?)\b/i, label: "strainer" },
+  { pattern: /\b(?:utility|storage|dish|bus|cutlery|rectangular|multi[ -]?purpose)\s+(?:box|boxes|bin|bins)\b|\bcambox\b/i, label: "utility box" },
   { pattern: /\b(blender|blenders|blending machine)\b/i, label: "blender" },
   { pattern: /\b(?:toasters?|toasers?)\b/i, label: "toaster" },
   { pattern: /\b(?:step\s+)?(?:ladders?|stools?)\b/i, label: "ladder" },
@@ -298,6 +299,17 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|ya\s+kun|pop[ -]?up|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(joinedMessages)
       ? "commercial pop-up toaster"
       : "commercial toaster";
+  }
+
+  if (activeCategory === "utility box") {
+    const latestDetails = [...customerMessages].reverse().find((content) =>
+      /\b(?:black|white|grey|gray|brown|blue|red|rectangular|square|plastic|polyethylene)\b|\b\d+(?:\.\d+)?\s*(?:x|by|×)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(content),
+    ) ?? "";
+    const colour = [...latestDetails.matchAll(/\b(black|white|grey|gray|brown|blue|red)\b/gi)].at(-1)?.[0] ?? null;
+    const shape = /\brectangular\b/i.test(latestDetails) ? "rectangular" : null;
+    const material = /\b(?:plastic|polyethylene)\b/i.test(latestDetails) ? "plastic" : null;
+    const dimensions = latestDetails.match(/\b\d+(?:\.\d+)?\s*(?:x|by|×)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0] ?? null;
+    return [colour, shape, material, "utility box Cambox storage box", dimensions].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "ladder") {

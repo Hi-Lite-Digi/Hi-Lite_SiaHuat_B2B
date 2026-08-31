@@ -383,6 +383,7 @@ for (const [id, prompt, history, expectedTerms, rejectedTerms] of [
   ["INTENT-CONTEXT-CASE-006", "Home got a new house need some sets for dining maybe 4 pax household", [], ["4 person", "complete dining set"], []],
   ["INTENT-CONTEXT-CASE-007", "Do you have another option that is not Atlantic Chef? Still 15cm with a red handle, need 3.", ["I need 3 chef knives around 15cm with a red handle."], ["chef knife", "15cm", "red handle", "excluding brand Atlantic Chef"], ["blue handle"]],
   ["INTENT-CONTEXT-CASE-008", "Okay, another dark colour is fine and 9 to 11 inch is okay. What can you sell me now? Still need 24.", ["Need 24 black dinner plates about 10 inch."], ["dark colour", "9 to 11 inch", "dinner", "plate tableware"], ["black 11 inch"]],
+  ["INTENT-CONTEXT-CASE-009", "Do you have another similar product? Any brand is okay, but it must still be a black rectangular utility box around 20 by 15 inches. Need 2.", [], ["black", "rectangular", "utility box", "20 by 15 inches"], ["pail"]],
 ] as const) {
   const query = catalogueMessageWithContext(prompt, [...history]);
   const lower = query.toLowerCase();
@@ -1796,6 +1797,25 @@ await check("FLOW-ALT-005", "Relaxed alternative constraints", "Okay, another da
   stage: "clarify",
   activeProduct: null,
   quantity: 24,
+  displayedProducts: [],
+});
+
+await check("FLOW-ALT-006", "Image-led alternative follow-up", "Do you have another similar product? Any brand is okay, but it must still be a black rectangular utility box around 20 by 15 inches. Need 2.", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "The explicit utility-box follow-up incorrectly claimed that no product is carried";
+  const invalid = products.find((product) =>
+    !/utility\s+box|cambox/i.test(product.name)
+    || /pail|bucket/i.test(product.name)
+    || !/black/i.test(product.name)
+    || !/20xW15|15x20/i.test(`${product.name} ${product.size ?? ""}`)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 2,
+  );
+  return invalid ? `Utility-box alternative returned an unsuitable item: ${invalid.name}` : null;
+}, [], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 2,
   displayedProducts: [],
 });
 
