@@ -198,7 +198,7 @@ async function checkImageBuyingFlow() {
       : (photoOnlyResult.body.products?.length ?? 0) > 0
         ? "An ambiguous photo-only request returned unconfirmed product matches"
         : !/received the photo/i.test(photoOnlyMessage)
-          || !/saved quantity 2/i.test(photoOnlyMessage)
+          || !/(?:saved|kept) quantity 2/i.test(photoOnlyMessage)
           || !/item name|clearer product-only photo/i.test(photoOnlyMessage)
           || !/stock and price/i.test(photoOnlyMessage)
           ? "The ambiguous photo reply did not preserve quantity and guide the customer toward a safe catalogue search"
@@ -212,6 +212,36 @@ async function checkImageBuyingFlow() {
     durationMs: photoOnlyResult.durationMs,
     response: photoOnlyResult.body.message ?? "",
     products: (photoOnlyResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
+
+  const multiItemPhotoPrompt = "can check item 1 n 2? need 1 each";
+  const multiItemPhotoResult = await postChat({
+    message: multiItemPhotoPrompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "multi-option-reference.png",
+    },
+  });
+  const multiItemPhotoMessage = multiItemPhotoResult.body.message ?? "";
+  const multiItemPhotoFailure = multiItemPhotoResult.status !== 200
+    ? `HTTP ${multiItemPhotoResult.status}: ${multiItemPhotoResult.body.error ?? "unknown error"}`
+    : (multiItemPhotoResult.body.products?.length ?? 0) > 0
+      ? "An unreadable multi-option photo returned unconfirmed product substitutes"
+      : !/kept 1 each for items 1 and 2/i.test(multiItemPhotoMessage)
+        || !/two item names or model numbers/i.test(multiItemPhotoMessage)
+        || !/won.?t substitute/i.test(multiItemPhotoMessage)
+        ? "The multi-option photo reply did not preserve both referenced items and give a safe recovery step"
+        : null;
+  results.push({
+    id: "CASE-035",
+    area: "Multi-option photo reference",
+    prompt: multiItemPhotoPrompt,
+    pass: !multiItemPhotoFailure,
+    reason: multiItemPhotoFailure ?? "Preserved both pictured items and requested exact identifying text",
+    durationMs: multiItemPhotoResult.durationMs,
+    response: multiItemPhotoMessage,
+    products: (multiItemPhotoResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
 
   const toasterClarificationResult = await postChat({
@@ -1963,6 +1993,39 @@ await check("CASE-032", "Reject typed out-of-stock selection", "1", (reply) => {
   activeProduct: null,
   quantity: 2,
   displayedProducts: unavailableRiceDispenser,
+});
+await check("CASE-033", "Photo follow-up with toaster typos", "toaser 4 slot not conveyr, like pic", (reply) => {
+  if (/can.?t send product photos|tell me the item first/i.test(reply.message)) {
+    return "A reference to the customer's photo was misread as a request for Claire to send a photo";
+  }
+  const invalid = (reply.products ?? []).find((product) => /conveyor|utility\s+box|cambox/i.test(product.name));
+  if (invalid) return `Returned an unrelated product after the typo-heavy toaster follow-up: ${invalid.name}`;
+  return /toaster/i.test(reply.message) && /2/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "The typo-heavy follow-up should preserve the toaster, style and saved quantity";
+}, [
+  { role: "user", content: "do u have this? need 2" },
+  { role: "assistant", content: "I received the photo and saved quantity 2, but I can’t identify the item confidently enough." },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 2,
+  displayedProducts: [],
+});
+await check("CASE-034", "Rice-dispenser model shorthand", "rice dispencer wf rd10 n rd30", (reply) => {
+  const invalid = (reply.products ?? []).find((product) => /rice cooker|water dispenser|airpot/i.test(product.name));
+  if (invalid) return `Returned an unrelated substitute for the specified rice dispensers: ${invalid.name}`;
+  return /WF-RD-10/i.test(reply.message) && /WF-RD-30/i.test(reply.message) && /human colleague|source/i.test(reply.message)
+    ? null
+    : "Both shorthand model numbers should be retained for human sourcing";
+}, [
+  { role: "user", content: "can check item 1 n 2? need 1 each" },
+  { role: "assistant", content: "I received the photo and kept 1 each for items 1 and 2. Type the two model numbers." },
+], 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: 1,
+  displayedProducts: [],
 });
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must return the standard 5–10 minute handoff response"));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? (standardHandoff.test(reply.message) ? null : "Must recognize a direct human request"), knifeHistory);

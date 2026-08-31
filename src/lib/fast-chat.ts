@@ -96,7 +96,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     && /received the photo/i.test(item.content)
     && /identify the item confidently/i.test(item.content),
   );
-  const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conveyor|slots?|conveyor)\b/i.test(message);
+  const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conve(?:yor|yr)|slots?|conve(?:yor|yr))\b/i.test(message);
   if (followsAmbiguousPhotoClarification && currentCategory === "toaster" && !specifiesToasterStyle) {
     const savedQuantity = input.context?.quantity
       ? ` I’ve kept quantity ${input.context.quantity}.`
@@ -109,7 +109,9 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   // If the customer attached an image, references to "this picture" describe
   // their buying request; they are not asking Claire to send another photo.
-  const asksClaireForProductPhoto = !input.image && (
+  const refersToCustomerPhoto = /\b(?:like|same\s+as|similar\s+to|from|in|attached)\s+(?:the\s+)?(?:pic|photo|image|picture)s?\b/i.test(message)
+    || /\b(?:this|that)\s+(?:pic|photo|image|picture)s?\b/i.test(message);
+  const asksClaireForProductPhoto = !input.image && !refersToCustomerPhoto && (
     /\b(can|could|will|would)\s+(?:you|u)\s+(?:please\s+)?(?:send|show|share|post)\b.{0,40}\b(pic|photo|image|picture)s?\b/i.test(message)
     || /\b(pic|photo|image|picture)s?\b.{0,30}\b(send|show|share|post)\b/i.test(message)
     || /\b(?:got|have|show|share|see|view)\b.{0,25}\b(?:sample\s+)?(?:pic|photo|image|picture)s?\b/i.test(message)

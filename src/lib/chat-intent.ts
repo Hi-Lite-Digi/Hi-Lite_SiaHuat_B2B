@@ -20,7 +20,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|toaser|toasers|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|dispencer|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 export const productCategories = [
@@ -41,7 +41,7 @@ export const productCategories = [
   { pattern: /\b(plate|plates|tableware)\b/i, label: "tableware" },
   { pattern: /\b(strainers?|strainners?|straners?|skimmers?|colanders?)\b/i, label: "strainer" },
   { pattern: /\b(blender|blenders|blending machine)\b/i, label: "blender" },
-  { pattern: /\btoasters?\b/i, label: "toaster" },
+  { pattern: /\b(?:toasters?|toasers?)\b/i, label: "toaster" },
   { pattern: /\b(?:step\s+)?(?:ladders?|stools?)\b/i, label: "ladder" },
   { pattern: /\b(?:butane\s+|gas\s+)?cartridges?\b/i, label: "gas cartridge" },
   { pattern: /\b(?:scrub\s+)?sponges?\b/i, label: "cleaning sponge" },
@@ -51,7 +51,7 @@ export const productCategories = [
   { pattern: /\bcoffee(?:\s+beans?)?\b(?!\s*grinders?)/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
   { pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/i, label: "chef pants" },
-  { pattern: /\brice\s+dispensers?\b/i, label: "rice dispenser" },
+  { pattern: /\brice\s+disp(?:ens|enc)ers?\b/i, label: "rice dispenser" },
   { pattern: /\b(?:water\s+(?:dispenser|urn|boiler)|(?:electric|thermal)\s+airpot|drinking\s+fountain)\b/i, label: "water dispenser" },
 ] as const;
 
@@ -72,6 +72,7 @@ export function isCatalogueRequest(message: string) {
 
   return productWords.test(message)
     || /\b(?:strainners?|straners?|noodal|noodel)\b/i.test(message)
+    || productCategory(message) !== null
     || /\b(?:che+f+f?|knfie|kinife|knive)\b/i.test(message)
     || /[刀锅鍋盘盤碗杯勺叉]/u.test(message)
     || skuPattern.test(message)
@@ -286,7 +287,12 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   if (activeCategory === "cleaning sponge") return "scrub sponge";
   if (activeCategory === "paper towel") return "kitchen paper towel";
   if (activeCategory === "glove") return "glove";
-  if (activeCategory === "rice dispenser") return "rice dispenser";
+  if (activeCategory === "rice dispenser") {
+    const models = [...joinedMessages.matchAll(/\b(?:WF[\s-]*)?RD[\s-]*(\d+)\b/gi)]
+      .map((match) => `WF-RD-${match[1]}`)
+      .filter((model, index, values) => values.indexOf(model) === index);
+    return [...models, "rice dispenser"].join(" ");
+  }
 
   if (activeCategory === "knife") {
     const latestDamascusIndex = customerMessages.findLastIndex((content) => /\bdamascus\b/i.test(content));

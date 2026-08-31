@@ -317,7 +317,8 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:red|yellow|blue|black|white|green|silver)\b/i.test(message)
     || /\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|in)\b/i.test(message)
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
-    || exactCodeCandidates(message).length > 0;
+    || exactCodeCandidates(message).length > 0
+    || productCategory(message) !== null;
 }
 
 function matchesExplicitProductCategory(message: string, product: Product) {
@@ -326,6 +327,7 @@ function matchesExplicitProductCategory(message: string, product: Product) {
     .filter(Boolean)
     .join(" ");
   const requestedUseCase = detectProductUseCase(message);
+  const requestedCategory = productCategory(message);
   if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
   const requestedMaterials = [
     /\bstainless(?:\s+steel)?\b/i.test(message) ? /\bstainless(?:\s+steel)?\b/i : null,
@@ -339,7 +341,7 @@ function matchesExplicitProductCategory(message: string, product: Product) {
   if (requestedMaterials.length > 0 && !requestedMaterials.some((pattern) => pattern.test(productText))) return false;
   const requestedColour = [...message.matchAll(/\b(red|yellow|blue|black|white|green|silver)\b/gi)].at(-1)?.[1];
   if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`, "i").test(productText)) return false;
-  if (/\brice\s+dispensers?\b/i.test(message)) {
+  if (requestedCategory === "rice dispenser") {
     return /\brice\s+dispensers?\b/i.test(productName)
       && !/\bwater\s+(?:dispenser|urn|boiler)\b|\bairpot\b/i.test(productName);
   }
@@ -347,7 +349,7 @@ function matchesExplicitProductCategory(message: string, product: Product) {
     return /\btrolleys?\b/i.test(productName)
       && !/\b(?:cover|accessor(?:y|ies)|replacement|spare\s+part)\b/i.test(productName);
   }
-  if (/\btoasters?\b/i.test(message)) {
+  if (requestedCategory === "toaster") {
     if (/\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(message)
       && /\bconveyor\b/i.test(productText)) return false;
     return /\btoasters?\b/i.test(productText);
@@ -369,7 +371,7 @@ function matchesExplicitProductCategory(message: string, product: Product) {
       && /\b(?:dining|dinnerware|tableware|plates?|bowls?)\b/i.test(productText)
       && (!/\bramekins?\b/i.test(productName) || /\b(?:plates?|bowls?)\b/i.test(productName));
   }
-  if (/\b(?:ladders?|step\s+stools?)\b/i.test(message)) return /\b(?:ladders?|step\s+stools?|folding\s+stools?)\b/i.test(productName);
+  if (requestedCategory === "ladder") return /\b(?:ladders?|step\s+stools?|folding\s+stools?)\b/i.test(productName);
   if (/\b(?:gas|butane)\s+cartridges?\b/i.test(message)) return /\b(?:gas|butane)\b[\s\S]*\bcartridges?\b|\bcartridges?\b[\s\S]*\b(?:gas|butane)\b/i.test(productName);
   if (/\bshot\s+glass(?:es)?\b/i.test(message)) return /\bshot\s+glass(?:es)?\b/i.test(productText);
   if (/\b(?:scrub\s+)?sponges?\b/i.test(message)) return /\bsponges?\b/i.test(productName);
@@ -1473,13 +1475,7 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
   }
 
   if (input.image) {
-    return {
-      message: "I couldn’t identify that photo reliably. Tell me roughly what it is (for example, toaster, tong or drink dispenser), or send another photo.",
-      stage: "clarify",
-      products: [],
-      selectedProduct: null,
-      suggestions: ["Footwear", "Cookware", "Equipment", "Send another photo"],
-    };
+    return ambiguousPhotoReply(input);
   }
 
   const userHistory = catalogueHistoryWithClarification(input.message, input.history);
@@ -1497,6 +1493,39 @@ function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): Cha
     products: [],
     selectedProduct: null,
     suggestions: ["Find a product", "Browse products"],
+  };
+}
+
+function ambiguousPhotoReply(input: ChatRequest): ChatReply {
+  const quantity = requestedQuantity(input.message) ?? input.context?.quantity ?? null;
+  const referencesTwoItems = /\bitem\s*1\b[\s\S]{0,24}\b(?:and|n|&)\s*(?:item\s*)?2\b/i.test(input.message)
+    || /\bitems?\s*1\s*(?:and|n|&)\s*(?:item\s*)?2\b/i.test(input.message);
+  if (referencesTwoItems) {
+    const quantityCopy = quantity === null ? "the requested quantity" : `${quantity} each`;
+    return {
+      message: `I received the photo and kept ${quantityCopy} for items 1 and 2, but I can’t read their exact names or model numbers reliably. Type the two item names or model numbers shown in the picture, or choose Speak to a human. I won’t substitute a different product family.`,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: ["Type both item names", "Speak to a human", "Send a clearer photo"],
+    };
+  }
+
+  const perOutlet = quantity !== null
+    && /\b(?:each|per)\s+outlet\b|\b\d+\s+(?:each|per)\s+outlets?\b/i.test(input.message);
+  const savedDetails = [
+    quantity === null ? null : `quantity ${quantity}${perOutlet ? " per outlet" : ""}`,
+    /\b(?:same|similar)\s+spec/i.test(input.message) ? "the similar-spec requirement" : null,
+    /\b(?:no\s+need\s+same\s+brand|any\s+brand|similar\s+brand)\b/i.test(input.message) ? "brand flexibility" : null,
+    /\b(?:not|no)\b[^.!?]{0,30}\b(?:all\s+)?(?:aluminium|aluminum|alum)\b/i.test(input.message) ? "the not-all-aluminium requirement" : null,
+  ].filter(Boolean);
+  const savedCopy = savedDetails.length > 0 ? ` and kept ${savedDetails.join(", ")}` : "";
+  return {
+    message: `I received the photo${savedCopy}, but I can’t identify the item confidently enough to recommend the right product. Tell me the item name and one key detail (for example, “4-slot pop-up toaster”), or send a clearer product-only photo. Then I’ll check matching options, stock and price.`,
+    stage: "clarify",
+    products: [],
+    selectedProduct: null,
+    suggestions: ["Tell me the item name", "Send a clearer photo", "Speak to a human"],
   };
 }
 
@@ -1683,6 +1712,25 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const catalogueMessage = contextualQuantity !== null && requestedQuantity(rememberedCatalogueMessage) === null
     ? `${rememberedCatalogueMessage} ${contextualQuantity} units`
     : rememberedCatalogueMessage;
+  const riceDispenserModels = [...catalogueMessage.matchAll(/\bWF-RD-(\d+)\b/gi)]
+    .map((match) => `WF-RD-${match[1]}`)
+    .filter((model, index, values) => values.indexOf(model) === index);
+  if ((currentCategory === "rice dispenser" || previousCategory === "rice dispenser") && riceDispenserModels.length > 0) {
+    const modelCopy = riceDispenserModels.length === 1
+      ? riceDispenserModels[0]
+      : `${riceDispenserModels.slice(0, -1).join(", ")} and ${riceDispenserModels.at(-1)}`;
+    const modelQuantity = contextualQuantity ?? input.context?.quantity ?? null;
+    const quantityCopy = modelQuantity === null
+      ? ""
+      : riceDispenserModels.length > 1 ? ` at quantity ${modelQuantity} each` : ` at quantity ${modelQuantity}`;
+    return {
+      message: `I’ve kept the rice dispenser ${riceDispenserModels.length === 1 ? "model" : "models"} ${modelCopy}${quantityCopy}. I can’t verify those exact models in the current online catalogue, so I won’t substitute a rice cooker or water dispenser. I’ve alerted a human colleague to source and confirm them. They’ll be here in about 5–10 minutes.`,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: ["Share specifications", "Continue product enquiry"],
+    };
+  }
   const recentConversation = [...userHistory.slice(-3), input.message].join(" ");
   const rejectsAllAluminiumLadder = (currentCategory === "ladder" || previousCategory === "ladder")
     && /\b(?:not|no|do\s+not|don['’]?t|must\s+not|mustn['’]?t)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum)\b/i.test(recentConversation);
@@ -1717,7 +1765,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     || (requestedQuantity(catalogueMessage) !== null
       && (/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(catalogueMessage)
         || /\b(?:pop[ -]?up|non[ -]?conveyor|slots?)\s+toasters?\b|\btoasters?\b[\s\S]{0,30}\b(?:pop[ -]?up|non[ -]?conveyor|slots?)\b/i.test(catalogueMessage)))
-    || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?)\b/i.test(catalogueMessage)
+    || ["trolley", "ladder", "rice dispenser", "toaster"].includes(currentCategory ?? "")
     || /\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\b(?:cooking|steak)\s+tongs?\b/i.test(catalogueMessage)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
   const imagePurchaseClarification = imageBuyingClarification(input, catalogueMessage);
@@ -1966,17 +2014,10 @@ async function processChat(input: ChatRequest) {
   const hasAmbiguousPhotoOnlyReference = Boolean(
     input.image
     && !productCategory(input.message)
-    && /\b(?:this|that|these|those|item|one|it|photo|picture|image)\b/i.test(input.message),
+    && exactCodeCandidates(input.message).length === 0,
   );
   if (hasAmbiguousPhotoOnlyReference) {
-    const savedQuantity = quantity.kind === "valid" ? ` and saved quantity ${quantity.value}` : "";
-    const reply: ChatReply = {
-      message: `I received the photo${savedQuantity}, but I can’t identify the item confidently enough to recommend the right product. Tell me the item name and one key detail (for example, “4-slot pop-up toaster”), or send a clearer product-only photo. Then I’ll check matching options, stock and price.`,
-      stage: "clarify",
-      products: [],
-      selectedProduct: null,
-      suggestions: ["Tell me the item name", "Send a clearer photo", "Speak to a human"],
-    };
+    const reply = ambiguousPhotoReply(input);
     return NextResponse.json(customerReply(reply, input));
   }
 
