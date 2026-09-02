@@ -314,6 +314,7 @@ export function ChatDemo() {
   const pendingOrderRequestsRef = useRef<string[]>([]);
   const awaitingAdditionalProductRef = useRef(false);
   const lastQuotedProductRef = useRef<Product | null>(null);
+  const queuedAdditionalProductRef = useRef<string | null>(null);
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -744,6 +745,7 @@ export function ChatDemo() {
           (_, requestIndex) => requestIndex !== index,
         );
       }
+      queuedAdditionalProductRef.current = null;
     };
     const multiProductRequests = orderLinesRef.current.length === 0
       && pendingOrderRequestsRef.current.length === 0
@@ -781,6 +783,16 @@ export function ChatDemo() {
       && /^(?:cancel(?:\s+(?:the\s+)?additional\s+item)?|never\s*mind|no thanks|no thank you|不用了|取消|算了)[.!。！\s]*$/iu.test(clean);
     if (cancelsAdditionalProduct) {
       awaitingAdditionalProductRef.current = false;
+      const queuedRequestToCancel = queuedAdditionalProductRef.current;
+      if (queuedRequestToCancel) {
+        const queuedIndex = pendingOrderRequestsRef.current.indexOf(queuedRequestToCancel);
+        if (queuedIndex >= 0) {
+          pendingOrderRequestsRef.current = pendingOrderRequestsRef.current.filter(
+            (_, requestIndex) => requestIndex !== queuedIndex,
+          );
+        }
+      }
+      queuedAdditionalProductRef.current = null;
       const latestQuote = orderLinesRef.current.at(-1) ?? pendingQuote;
       const latestProduct = lastQuotedProductRef.current;
       syncHandledTurnWithN8n(clean);
@@ -809,6 +821,7 @@ export function ChatDemo() {
     if (startingAdditionalProduct) {
       if (queuedRequestIndex >= 0) {
         queuedRequestToConsume = pendingOrderRequestsRef.current[queuedRequestIndex];
+        queuedAdditionalProductRef.current = queuedRequestToConsume;
         messageForApi = queuedRequestToConsume;
       }
       if (isGenericAddAnotherItem(clean)) {
@@ -848,6 +861,7 @@ export function ChatDemo() {
       pendingOrderRequestsRef.current = [];
       orderLinesRef.current = [];
       lastQuotedProductRef.current = null;
+      queuedAdditionalProductRef.current = null;
       setStage("submitted");
       setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "开始新的询价"] : ["Download enquiry PDF", "Start another enquiry"]);
       setQuery("");
@@ -1389,6 +1403,7 @@ export function ChatDemo() {
     pendingOrderRequestsRef.current = [];
     awaitingAdditionalProductRef.current = false;
     lastQuotedProductRef.current = null;
+    queuedAdditionalProductRef.current = null;
     setMessages([firstMessage]);
     setConversationLanguage("en");
     setStage("discover");
