@@ -16,6 +16,14 @@ import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
 import { honestManualHandoff } from "@/lib/honest-handoff";
 import {
+  isImageComparisonRequest,
+  referencedComparisonItems,
+  referencesMultipleComparisonItems,
+  riceDispenserImageClarification,
+  visionImageKind,
+} from "@/lib/image-comparison";
+import { classifyImageRaster, imageMatchesCandidate, matchKnownProductReference } from "@/lib/image-evidence";
+import {
   catalogueHistoryWithClarification,
   catalogueMessageWithContext,
   productCategory,
@@ -74,11 +82,14 @@ function customerReply<T extends { message: string; suggestions?: string[]; prod
     input.message,
     catalogueHistoryWithClarification(input.message, input.history),
   );
+  const markerFreeMessage = reply.message
+    .replace(/^\s*IMAGE[_\s-]*KIND\s*[:=]\s*(?:PRODUCT|SCREENSHOT|DOCUMENT|TABLE|COMPARISON|OTHER)\s*\n?/i, "")
+    .trim();
   const safeMessage = honestManualHandoff(operationalFailure
     ? useChinese
       ? `刚才的查询没有完成。我还记得您要找的是 ${rememberedRequest}。请再发送最后一个要求，我会继续。`
       : `That lookup didn’t finish, but I still have your ${rememberedRequest} request. Send the last detail once more and I’ll continue.`
-    : reply.message);
+    : markerFreeMessage);
   return {
     ...reply,
     message: useChinese ? chineseCustomerMessage({ ...reply, message: safeMessage }) : normalizeClaireMessage(safeMessage),
@@ -329,6 +340,17 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:che+f+f?|knfie|kinife|knive|anot)\b/i.test(message)
     || exactCodeCandidates(message).length > 0
     || productCategory(message) !== null;
+}
+
+function imageReferenceNeedsVisualEvidence(message: string) {
+  return /\b(?:like|similar\s+to|same\s+as|looks?\s+like|as\s+shown|pictured|this|that|photo|picture|image)\b/i.test(message);
+}
+
+function hasImageIndependentBuyingSpecification(message: string) {
+  return exactCodeCandidates(message).length > 0
+    || /\b\d+(?:\.\d+)?\s*(?:qt|quarts?|l|litres?|liters?|ml|oz|kg|g|cm|mm|inches?|slots?|steps?)\b/i.test(message)
+    || /\b(?:stainless(?:\s+steel)?|carbon\s+steel|cast\s+iron|aluminium|aluminum|polycarbonate|melamine|plastic)\b/i.test(message)
+    || /\b(?:pop[ -]?up|non[ -]?conveyor|conveyor|folding|safety\s+handrail)\b/i.test(message);
 }
 
 function matchesExplicitProductCategory(message: string, product: Product) {
@@ -1573,12 +1595,22 @@ function isObviouslyUnusableImage(image: NonNullable<ChatRequest["image"]>) {
 
 function ambiguousPhotoReply(input: ChatRequest): ChatReply {
   const quantity = requestedQuantity(input.message) ?? input.context?.quantity ?? null;
-  const referencesTwoItems = /\bitem\s*1\b[\s\S]{0,24}\b(?:and|n|&)\s*(?:item\s*)?2\b/i.test(input.message)
-    || /\bitems?\s*1\s*(?:and|n|&)\s*(?:item\s*)?2\b/i.test(input.message);
+  const referencesTwoItems = referencesMultipleComparisonItems(input.message);
   if (referencesTwoItems) {
-    const quantityCopy = quantity === null ? "the requested quantity" : `${quantity} each`;
+    const referencedItems = referencedComparisonItems(input.message);
+    const itemCopy = referencedItems.length > 0
+      ? `items ${referencedItems.slice(0, -1).join(", ")}${referencedItems.length > 1 ? ` and ${referencedItems.at(-1)}` : referencedItems[0]}`
+      : "the referenced items";
+    const explicitQuantities = [...input.message.matchAll(/\b(?:need|qty|quantity)\s*[:=]?\s*(\d+)\b/gi)]
+      .map((match) => Number.parseInt(match[1], 10));
+    const quantityCopy = new Set(explicitQuantities).size > 1
+      ? "the quantities you gave"
+      : quantity === null ? "the requested quantity" : `${quantity} each`;
+    const identifierCopy = referencedItems.length === 2
+      ? "the two item names or model numbers"
+      : "the referenced item names or model numbers";
     return {
-      message: `I received the photo and kept ${quantityCopy} for items 1 and 2, but I can’t read their exact names or model numbers reliably. Type the two item names or model numbers shown in the picture, or prepare a summary to share with sales manually. I won’t substitute a different product family.`,
+      message: `I received the photo and kept ${quantityCopy} for ${itemCopy}, but I can’t read their exact names or model numbers reliably. Type ${identifierCopy} shown in the picture, or prepare a summary to share with sales manually. I won’t substitute a different product family.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,
@@ -1595,6 +1627,19 @@ function ambiguousPhotoReply(input: ChatRequest): ChatReply {
     /\b(?:not|no)\b[^.!?]{0,30}\b(?:all\s+)?(?:aluminium|aluminum|alum)\b/i.test(input.message) ? "the not-all-aluminium requirement" : null,
   ].filter(Boolean);
   const savedCopy = savedDetails.length > 0 ? ` and kept ${savedDetails.join(", ")}` : "";
+  const namedCategory = productCategory(input.message);
+  if (namedCategory) {
+    const detailHint = namedCategory === "rice dispenser"
+      ? "Type the model number and capacity shown for the rice dispenser"
+      : `Type the ${namedCategory} name and one key detail shown in the photo`;
+    return {
+      message: `I received the photo${savedCopy}, and I understand you’re looking for a ${namedCategory}. I can’t read the exact model reliably enough to recommend a purchasable item yet. ${detailHint}, or send a clearer crop of its label. Then I’ll check matching options, stock and price without substituting another product family. If you do not have those details, prepare a staff-review summary and share the PDF with Sia Huat sales for manual sourcing.`,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+      suggestions: ["Type the model number", "Send a clearer crop", "Prepare staff review summary"],
+    };
+  }
   return {
     message: `I received the photo${savedCopy}, but I can’t identify the item confidently enough to recommend the right product. Tell me the item name and one key detail (for example, “4-slot pop-up toaster”), or send a clearer product-only photo. Then I’ll check matching options, stock and price.`,
     stage: "clarify",
@@ -1768,6 +1813,53 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
   return products.length > 0 ? { ...reply, products: products.slice(0, 3) } : reply;
 }
 
+async function requireVisualCatalogueEvidence(
+  image: NonNullable<ChatRequest["image"]>,
+  reply: ChatReply,
+): Promise<ChatReply | null> {
+  const proposed = [
+    ...reply.products,
+    ...(reply.selectedProduct ? [reply.selectedProduct] : []),
+  ];
+  if (proposed.length === 0) return null;
+
+  const resolved = await Promise.all(proposed.map(async (product) => {
+    try {
+      return await findCatalogueProductByCode(product.stock_id) ?? product;
+    } catch (error) {
+      console.error("[api/chat] image candidate resolution failed", {
+        stockId: product.stock_id,
+        error,
+      });
+      return product;
+    }
+  }));
+  const evidence = await Promise.all(resolved.map(async (product) => ({
+    product,
+    matches: Boolean(product.image_url)
+      && await imageMatchesCandidate(image, product.image_url as string),
+  })));
+  const matchedById = new Map(
+    evidence
+      .filter((entry) => entry.matches)
+      .map((entry) => [entry.product.stock_id.toUpperCase(), entry.product]),
+  );
+  if (matchedById.size === 0) return null;
+
+  const products = reply.products
+    .map((product) => matchedById.get(product.stock_id.toUpperCase()))
+    .filter((product): product is Product => Boolean(product));
+  const selectedProduct = reply.selectedProduct
+    ? matchedById.get(reply.selectedProduct.stock_id.toUpperCase()) ?? null
+    : null;
+
+  return {
+    ...reply,
+    products,
+    selectedProduct,
+  };
+}
+
 function previouslyDisplayedStockIds(input: ChatRequest) {
   const stockIds = new Set<string>();
   for (const item of input.history) {
@@ -1791,6 +1883,15 @@ function excludePreviouslyDisplayedProducts(reply: ChatReply, excludedStockIds?:
 }
 
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
+  // Run the inexpensive local raster check alongside catalogue/n8n work. It is
+  // the final guard against treating a document or unrelated graphic as a
+  // purchasable product merely because the vision workflow guessed a family.
+  const rasterKindPromise = input.image
+    ? classifyImageRaster(input.image)
+    : Promise.resolve(null);
+  const knownProductQueryPromise = input.image
+    ? matchKnownProductReference(input.image)
+    : Promise.resolve(null);
   const baseUserHistory = catalogueHistoryWithClarification(input.message, input.history);
   const displayedCategorySeed = requestsAnotherOption(input.message)
     && rememberedActiveCategories(baseUserHistory).length === 0
@@ -1838,12 +1939,21 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     const quantityCopy = modelQuantity === null
       ? ""
       : riceDispenserModels.length > 1 ? ` at quantity ${modelQuantity} each` : ` at quantity ${modelQuantity}`;
+    if (riceDispenserModels.length === 1 && modelQuantity === null) {
+      return {
+        message: `I’ve kept rice dispenser model ${modelCopy}. I can’t verify that exact model in the current Sia Huat online catalogue, so I’m not claiming stock or price. How many units do you need? No sourcing request or order has been sent.`,
+        stage: "clarify",
+        products: [],
+        selectedProduct: null,
+        suggestions: ["Quantity 1", "Quantity 2", "Quantity 3"],
+      };
+    }
     return {
       message: `I’ve kept the rice dispenser ${riceDispenserModels.length === 1 ? "model" : "models"} ${modelCopy}${quantityCopy}. I can’t verify those exact models in the current online catalogue, so I won’t substitute a rice cooker or water dispenser. No sourcing request has been sent. Download the PDF and ask Sia Huat sales to source and confirm them manually.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,
-      suggestions: ["Share specifications", "Continue product enquiry"],
+      suggestions: ["Prepare staff review summary"],
     };
   }
   const recentConversation = [...userHistory.slice(-3), input.message].join(" ");
@@ -1891,14 +2001,19 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     rememberGrounded(imagePurchaseClarification);
     return imagePurchaseClarification;
   }
-  // When the customer names the product alongside a photo, their text is the
-  // authoritative buying request. Ground it immediately instead of waiting for
-  // vision; an uncertain image result must not ask them to identify an item
-  // they already named (for example, "stainless steel stockpot, around 12QT").
+  // A written request can stand on its own when it names the product and does
+  // not depend on the photo, or when it includes a buying specification such as
+  // a model, capacity, material or style. A generic "boxes like this" request
+  // must still pass the visual guards before any purchasable cards are shown.
   const hasExplicitImageCatalogueRequest = Boolean(
     input.image
-    && productCategory(catalogueMessage)
-    && isConcreteCatalogueRequest(catalogueMessage),
+    && !isImageComparisonRequest(input.message)
+    // The current message itself must carry the product identity. A category
+    // remembered only from history is not enough to trust an unrelated image.
+    && productCategory(input.message)
+    && isConcreteCatalogueRequest(catalogueMessage)
+    && (!imageReferenceNeedsVisualEvidence(input.message)
+      || hasImageIndependentBuyingSpecification(input.message)),
   );
   const authoritativeGroundedReply = ((!input.image && mustGroundCatalogueAnswer) || hasExplicitImageCatalogueRequest)
     ? await groundedCatalogueReply(catalogueMessage, { authoritative: true, excludedStockIds }).catch((error) => {
@@ -1938,6 +2053,29 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     ), input.message, catalogueMessage);
   }
 
+  const knownProductQuery = input.image && !isImageComparisonRequest(input.message)
+    ? await knownProductQueryPromise
+    : null;
+  if (input.image && knownProductQuery) {
+    const queryWithQuantity = contextualQuantity === null
+      ? knownProductQuery
+      : `${knownProductQuery} ${contextualQuantity} units`;
+    const knownReply = await groundedCatalogueReply(queryWithQuantity).catch((error) => {
+      console.error("[api/chat] known image reference lookup failed", { knownProductQuery, error });
+      return null;
+    });
+    const visuallyVerified = knownReply
+      ? await requireVisualCatalogueEvidence(input.image, knownReply)
+      : null;
+    if (visuallyVerified) {
+      rememberGrounded(visuallyVerified);
+      const liveReply = await addLiveCatalogueState(visuallyVerified);
+      return deduplicateReplyProducts(enforceLiveCheckoutGate(explainUnavailableProducts(
+        enforceRequestedQuantityOptions(liveReply, queryWithQuantity),
+      )));
+    }
+  }
+
   const n8nAbortController = new AbortController();
   const n8nReplyPromise = sendChatToN8n(
     workflowMessage === input.message ? input : { ...input, message: workflowMessage },
@@ -1972,12 +2110,65 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     return quickFallback(input, null);
   }
 
-  const groundedImageReply = input.image && n8nReply
+  const comparisonRasterKind = input.image && n8nReply
+    ? await rasterKindPromise
+    : null;
+  const imageComparison = input.image
+    && n8nReply
+    && comparisonRasterKind === "document-like"
+    && visionImageKind(n8nReply.message) === "screenshot"
+    ? riceDispenserImageClarification({
+        visionText: n8nReply.message,
+        userMessage: input.message,
+        quantity: contextualQuantity,
+        language: prefersChinese(input) ? "zh" : "en",
+      })
+    : null;
+  if (imageComparison) {
+    const comparisonReply: ChatReply = {
+      ...imageComparison,
+      stage: "clarify",
+      products: [],
+      selectedProduct: null,
+    };
+    rememberGrounded(comparisonReply);
+    return comparisonReply;
+  }
+
+  // A numbered multi-row request means the image itself is the authoritative
+  // comparison. If OCR/vision did not read enough labels to build the bounded
+  // clarification above, do not catalogue-search a guessed family from its
+  // prose (for example, returning utility boxes for a rice-dispenser table).
+  // Ask for the missing labels/crop while retaining the customer's quantity.
+  if (input.image && referencesMultipleComparisonItems(input.message)) {
+    const comparisonFallback = ambiguousPhotoReply(input);
+    rememberGrounded(comparisonFallback);
+    return comparisonFallback;
+  }
+
+  let groundedImageReply = input.image && n8nReply
     ? await groundImageNarrativeReply(n8nReply, catalogueMessage).catch((error) => {
         console.error("[api/chat] image narrative grounding failed", { error });
         return null;
       })
     : null;
+  if (input.image) {
+    const rasterKind = await rasterKindPromise;
+    if (rasterKind !== "product-like") {
+      const safeFallback = ambiguousPhotoReply(input);
+      rememberGrounded(safeFallback);
+      return safeFallback;
+    }
+
+    groundedImageReply = groundedImageReply
+      ? await requireVisualCatalogueEvidence(input.image, groundedImageReply)
+      : null;
+    if (!groundedImageReply) {
+      const safeFallback = ambiguousPhotoReply(input);
+      rememberGrounded(safeFallback);
+      return safeFallback;
+    }
+  }
   // Preserve the first catalogue-grounded image result immediately. If live
   // stock enrichment approaches the 27-second customer deadline, quickFallback
   // can still return these relevant products instead of a generic clarification.

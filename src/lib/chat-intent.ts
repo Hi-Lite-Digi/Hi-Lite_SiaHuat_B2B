@@ -1,5 +1,6 @@
 import type { HistoryItem, ImageAttachment } from "@/lib/chat-contract";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
+import { resolveRiceDispenserModels } from "@/lib/image-comparison";
 
 export type FastChatInput = {
   sessionId: string;
@@ -52,7 +53,7 @@ export const productCategories = [
   { pattern: /\bcoffee(?:\s+beans?)?\b(?!\s*grinders?)/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
   { pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/i, label: "chef pants" },
-  { pattern: /\brice\s+disp(?:ens|enc)ers?\b/i, label: "rice dispenser" },
+  { pattern: /\brice\s+disp(?:ens|enc)ers?\b|\bWF[\s_-]*RD[\s_-]*\d{1,3}\b/i, label: "rice dispenser" },
   { pattern: /\b(?:water\s+(?:dispenser|urn|boiler)|(?:electric|thermal)\s+airpot|drinking\s+fountain)\b/i, label: "water dispenser" },
 ] as const;
 
@@ -101,8 +102,21 @@ export function catalogueHistoryWithClarification(message: string, history: Hist
     .filter((item) => item.role === "user")
     .map((item) => item.content);
   const words = simplifyMessage(message).split(" ").filter(Boolean);
+  const latestTurn = history.at(-1);
+  const currentCategory = productCategory(message);
+  const latestAssistantCategory = latestTurn?.role === "assistant"
+    ? productCategory(latestTurn.content)
+    : null;
+  const hasNumberedComparisonReference = /\b(?:item|option|model|row)\s*#?\s*\d+\b/i.test(message);
+  // Customers commonly add natural buying or quantity words around a choice
+  // ("I want item 2, need 2"). Keep that choice attached to the immediately
+  // preceding comparison, while a newly named product category still starts a
+  // fresh search instead of reviving unrelated assistant context.
+  const isNumberedComparisonSelection = hasNumberedComparisonReference
+    && (currentCategory === null || currentCategory === latestAssistantCategory);
 
-  if (productCategory(message) || isCatalogueRequest(message) || words.length > 16) {
+  if (!isNumberedComparisonSelection
+    && (currentCategory || isCatalogueRequest(message) || words.length > 16)) {
     return userHistory;
   }
 
@@ -110,7 +124,6 @@ export function catalogueHistoryWithClarification(message: string, history: Hist
   // supply clarification context. Searching farther back can revive a stale
   // product after the customer has already switched enquiries (for example,
   // an old knife question overriding the current wok search).
-  const latestTurn = history.at(-1);
   const latestClarification = latestTurn?.role === "assistant"
     && productCategory(latestTurn.content) !== null
     && assistantClarificationPattern.test(latestTurn.content)
@@ -352,9 +365,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   if (activeCategory === "paper towel") return "kitchen paper towel";
   if (activeCategory === "glove") return "glove";
   if (activeCategory === "rice dispenser") {
-    const models = [...joinedMessages.matchAll(/\b(?:WF[\s-]*)?RD[\s-]*(\d+)\b/gi)]
-      .map((match) => `WF-RD-${match[1]}`)
-      .filter((model, index, values) => values.indexOf(model) === index);
+    const models = resolveRiceDispenserModels(message, userHistory);
     return [...models, "rice dispenser"].join(" ");
   }
 

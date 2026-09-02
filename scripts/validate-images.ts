@@ -3,17 +3,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 
-const defaultFixtures = [
-  "D:/Downloades/101CA-1000LCD.jpg",
-  "D:/Downloades/101CA-1520CBP-110.jpg",
-];
-const fixtures = process.argv.slice(2).length > 0
-  ? process.argv.slice(2)
-  : defaultFixtures;
-
 function expectedStockId(filePath: string) {
-  return path.basename(filePath, path.extname(filePath)).toUpperCase();
+  return path.basename(filePath, path.extname(filePath)).replace(/-portrait$/i, "").toUpperCase();
 }
+
+type ProductImageFixture = {
+  filePath: string;
+  expected: string;
+};
+
+const imageFixtureDir = path.resolve("test-fixtures", "images");
+const defaultFixtures: ProductImageFixture[] = [
+  { filePath: path.join(imageFixtureDir, "101CA-1000LCD.jpg"), expected: "101CA-1000LCD" },
+  { filePath: path.join(imageFixtureDir, "101CA-1520CBP-110.jpg"), expected: "101CA-1520CBP-110" },
+  // The same product on a phone-portrait canvas ensures a tall product photo
+  // is not rejected merely because it has screenshot-like dimensions.
+  { filePath: path.join(imageFixtureDir, "101CA-1000LCD-portrait.jpg"), expected: "101CA-1000LCD" },
+];
+const comparisonScreenshot = path.join(imageFixtureDir, "rice-dispenser-comparison.png");
+const randomNonProductImage = path.join(imageFixtureDir, "random-non-product.png");
+const cliFixtures = process.argv.slice(2);
+const fixtures: ProductImageFixture[] = cliFixtures.length > 0
+  ? cliFixtures.map((filePath) => ({ filePath, expected: expectedStockId(filePath) }))
+  : defaultFixtures;
 
 function oracleStockIds(expected: string) {
   const withoutSupplierPrefix = expected.replace(/^\d{3}[A-Z]{2}-/, "");
@@ -66,16 +78,20 @@ async function getOracleProduct(expected: string) {
   return null;
 }
 
-async function validateImage(filePath: string, index: number) {
+function mimeTypeFor(filePath: string) {
+  return path.extname(filePath).toLowerCase() === ".png" ? "image/png" : "image/jpeg";
+}
+
+async function validateImage(fixture: ProductImageFixture, index: number) {
+  const { filePath, expected } = fixture;
   const bytes = await fs.readFile(filePath);
-  const expected = expectedStockId(filePath);
   const oracle = await getOracleProduct(expected);
   const fallbackFamily = fallbackFamilyForFixture(expected);
   const { status, body, durationMs } = await postChat({
     message: "Do you sell this? Please identify it and show the SKU and catalogue price.",
     image: {
-      dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`,
-      mimeType: "image/jpeg",
+      dataUrl: `data:${mimeTypeFor(filePath)};base64,${bytes.toString("base64")}`,
+      mimeType: mimeTypeFor(filePath),
       // Deliberately hide the source filename from the bot. The filename is
       // only the test oracle used after the response has been received.
       name: `qa-pixel-only-upload-${index + 1}.jpg`,
@@ -124,11 +140,192 @@ async function validateImage(filePath: string, index: number) {
   };
 }
 
+async function validateComparisonScreenshot(message: string, expectedQuantity: RegExp, label: string) {
+  const bytes = await fs.readFile(comparisonScreenshot);
+  const { status, body, durationMs } = await postChat({
+    message,
+    image: {
+      dataUrl: `data:${mimeTypeFor(comparisonScreenshot)};base64,${bytes.toString("base64")}`,
+      mimeType: mimeTypeFor(comparisonScreenshot),
+      name: `qa-${label}.png`,
+    },
+  });
+  const responseMessage = body.message ?? "";
+  const productText = (body.products ?? []).map((product) => `${product.stock_id} ${product.name}`).join(" ");
+  const combined = `${responseMessage} ${productText}`;
+  const failures = [
+    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
+    status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
+    expectedQuantity.test(responseMessage) ? null : "The comparison screenshot lost the requested quantity",
+    /rice\s+disp(?:ens|enc)er|model|item name|key detail|closer crop|clearer/i.test(responseMessage)
+      ? null
+      : "The response did not give a useful product-identification next step",
+    !/utility box|cambox|storage box/i.test(combined)
+      ? null
+      : "The rice-dispenser comparison screenshot was misclassified as a utility/storage box",
+    (body.products?.length ?? 0) === 0
+      ? null
+      : "The unresolved comparison screenshot returned unverified catalogue product cards",
+  ].filter(Boolean);
+
+  return {
+    file: comparisonScreenshot,
+    sentName: `qa-${label}.png`,
+    expected: "rice-dispenser comparison screenshot",
+    oracle: null,
+    pass: failures.length === 0,
+    failures,
+    durationMs,
+    message: responseMessage,
+    selectedProduct: body.selectedProduct,
+    products: body.products,
+  };
+}
+
+async function validateRandomNonProduct() {
+  const bytes = await fs.readFile(randomNonProductImage);
+  const { status, body, durationMs } = await postChat({
+    message: "Can you help me buy this? I need 3.",
+    image: {
+      dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
+      mimeType: "image/png",
+      name: "qa-random-upload.png",
+    },
+  });
+  const responseMessage = body.message ?? "";
+  const failures = [
+    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
+    status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
+    /(?:kept|quantity|need)[^.!?]{0,30}\b3\b|\b3\b[^.!?]{0,30}(?:units?|each)/i.test(responseMessage)
+      ? null
+      : "The random-image response lost quantity 3",
+    /can['’]?t (?:identify|read)|item name|key detail|clearer|staff review/i.test(responseMessage)
+      ? null
+      : "The random-image response did not give a useful recovery step",
+    (body.products?.length ?? 0) === 0 && !body.selectedProduct
+      ? null
+      : "A random non-product image returned purchasable product cards",
+  ].filter(Boolean);
+
+  return {
+    file: randomNonProductImage,
+    sentName: "qa-random-upload.png",
+    expected: "safe non-product clarification",
+    oracle: null,
+    pass: failures.length === 0,
+    failures,
+    durationMs,
+    message: responseMessage,
+    selectedProduct: body.selectedProduct,
+    products: body.products,
+  };
+}
+
+async function validateRandomNonProductWithNamedCategory() {
+  const bytes = await fs.readFile(randomNonProductImage);
+  const { status, body, durationMs } = await postChat({
+    message: "Need 2 storage boxes like this.",
+    image: {
+      dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
+      mimeType: "image/png",
+      name: "qa-random-named-category.png",
+    },
+  });
+  const responseMessage = body.message ?? "";
+  const failures = [
+    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
+    status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
+    /(?:kept|quantity|need)[^.!?]{0,30}\b2\b|\b2\b[^.!?]{0,30}(?:units?|each)/i.test(responseMessage)
+      ? null
+      : "The named-category random-image response lost quantity 2",
+    /storage\s+box|item name|key detail|clearer|staff review/i.test(responseMessage)
+      ? null
+      : "The named-category random-image response did not preserve the category and give a useful recovery step",
+    (body.products?.length ?? 0) === 0 && !body.selectedProduct
+      ? null
+      : "A random image plus a generic named category bypassed visual safety and returned product cards",
+  ].filter(Boolean);
+
+  return {
+    file: randomNonProductImage,
+    sentName: "qa-random-named-category.png",
+    expected: "safe named-category clarification",
+    oracle: null,
+    pass: failures.length === 0,
+    failures,
+    durationMs,
+    message: responseMessage,
+    selectedProduct: body.selectedProduct,
+    products: body.products,
+  };
+}
+
+async function validateRandomNonProductWithRememberedCategory() {
+  const bytes = await fs.readFile(randomNonProductImage);
+  const { status, body, durationMs } = await postChat({
+    message: "Need 2.",
+    history: [
+      { role: "user", content: "I am looking for storage boxes." },
+      { role: "assistant", content: "I can help with storage boxes. Send the size or a product photo." },
+    ],
+    image: {
+      dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
+      mimeType: "image/png",
+      name: "qa-random-remembered-category.png",
+    },
+  });
+  const responseMessage = body.message ?? "";
+  const failures = [
+    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
+    status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
+    /(?:kept|quantity|need)[^.!?]{0,30}\b2\b|\b2\b[^.!?]{0,30}(?:units?|each)/i.test(responseMessage)
+      ? null
+      : "The remembered-category random-image response lost quantity 2",
+    /storage\s+box|item name|key detail|clearer|staff review/i.test(responseMessage)
+      ? null
+      : "The remembered-category response did not give a useful next step",
+    (body.products?.length ?? 0) === 0 && !body.selectedProduct
+      ? null
+      : "A generic follow-up plus a remembered category bypassed visual safety and returned product cards",
+  ].filter(Boolean);
+
+  return {
+    file: randomNonProductImage,
+    sentName: "qa-random-remembered-category.png",
+    expected: "safe remembered-category clarification",
+    oracle: null,
+    pass: failures.length === 0,
+    failures,
+    durationMs,
+    message: responseMessage,
+    selectedProduct: body.selectedProduct,
+    products: body.products,
+  };
+}
+
 async function main() {
   const results = [];
   for (let index = 0; index < fixtures.length; index += 1) {
     results.push(await validateImage(fixtures[index], index));
   }
+  results.push(await validateComparisonScreenshot(
+    "Do you have this? I need 2.",
+    /(?:kept|quantity|need)[^.!?]{0,30}\b2\b|\b2\b[^.!?]{0,30}(?:units?|each)/i,
+    "comparison-general",
+  ));
+  results.push(await validateComparisonScreenshot(
+    "Can you check items 1 and 2? I need 2 each.",
+    /\b2\s+each\b|kept[^.!?]{0,30}\b2\b/i,
+    "comparison-numbered",
+  ));
+  results.push(await validateComparisonScreenshot(
+    "Compare the rice dispensers in this screenshot; I need 2.",
+    /(?:kept|quantity|need)[^.!?]{0,30}\b2\b|\b2\b[^.!?]{0,30}(?:units?|each)/i,
+    "comparison-explicit-family",
+  ));
+  results.push(await validateRandomNonProduct());
+  results.push(await validateRandomNonProductWithNamedCategory());
+  results.push(await validateRandomNonProductWithRememberedCategory());
 
   const pass = results.filter((result) => result.pass).length;
   const report = {

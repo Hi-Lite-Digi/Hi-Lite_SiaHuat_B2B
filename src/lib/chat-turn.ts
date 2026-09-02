@@ -128,6 +128,16 @@ export function confirmsOrderRequest(message: string) {
     || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核|完成询价摘要)[。.！!\s]*$/u.test(normalized);
 }
 
+export function requestsStaffReview(message: string) {
+  const normalized = message.trim();
+  if (/^(?:prepare staff review summary|continue for staff review|准备人工审核摘要|交由人员确认)[.!。！\s]*$/iu.test(normalized)) {
+    return true;
+  }
+  return /\b(?:prepare|create|make|give|show|need|want)\b[^.!?]{0,70}\b(?:staff|manual)\s+review(?:\s+(?:summary|details?))?\b/i.test(normalized)
+    || /\bprepare\b[^.!?]{0,90}\b(?:details?|summary)\b[^.!?]{0,90}\b(?:download|share)\b[^.!?]{0,50}\bsales\b/i.test(normalized)
+    || /(?:准备|生成|整理).{0,24}(?:人工审核|审核摘要|询价摘要)|(?:下载|分享).{0,24}(?:销售|人工审核)/u.test(normalized);
+}
+
 const PRODUCT_NOUN = /\b(?:apron|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;
 const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-]+)+\b/i;
 

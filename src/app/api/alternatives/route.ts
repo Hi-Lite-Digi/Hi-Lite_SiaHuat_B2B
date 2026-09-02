@@ -7,6 +7,7 @@ export const runtime = "nodejs";
 const requestSchema = z.object({
   stockId: z.string().trim().min(1).max(100),
   quantity: z.coerce.number().int().positive().max(100_000).optional(),
+  excludeStockIds: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
 });
 
 export async function POST(request: Request) {
@@ -22,7 +23,12 @@ export async function POST(request: Request) {
 
   try {
     const minimumQuantity = input.data.quantity ?? 1;
-    const candidates = await findAvailableCatalogueAlternatives(input.data.stockId, 12, minimumQuantity);
+    const candidates = await findAvailableCatalogueAlternatives(
+      input.data.stockId,
+      12,
+      minimumQuantity,
+      new Set(input.data.excludeStockIds ?? []),
+    );
     const liveChecks = await Promise.allSettled(
       candidates.map(async (product) => {
         if (!product.source_url) return null;

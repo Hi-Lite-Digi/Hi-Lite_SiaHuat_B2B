@@ -453,6 +453,7 @@ export async function findAvailableCatalogueAlternatives(
   stockId: string,
   limit = 3,
   minimumQuantity = 1,
+  excludedStockIds: ReadonlySet<string> = new Set(),
 ) {
   const source = await findProductForStockCheck(stockId);
   if (!source) return [];
@@ -487,6 +488,7 @@ export async function findAvailableCatalogueAlternatives(
     if (!response.ok) throw new Error(`SUPABASE_ALTERNATIVES_${response.status}`);
     for (const product of catalogueProductSchema.array().parse(await response.json())) {
       if (product.stock_id === source.stock_id
+        || excludedStockIds.has(product.stock_id)
         || product.uom_id.trim().toLowerCase() !== sourceUom
         || product.available_quantity === null
         || product.available_quantity === undefined
@@ -501,6 +503,7 @@ export async function findAvailableCatalogueAlternatives(
     const broadMatches = await searchCatalogue(broadSearch, { resultLimit: 80, outputLimit: 80 });
     for (const product of broadMatches) {
       if (product.stock_id === source.stock_id
+        || excludedStockIds.has(product.stock_id)
         || product.uom_id.trim().toLowerCase() !== sourceUom
         || product.stock_status !== "in_stock"
         || product.available_quantity === null

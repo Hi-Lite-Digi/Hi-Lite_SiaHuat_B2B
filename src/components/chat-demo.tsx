@@ -23,9 +23,16 @@ import {
   requestedQuantity,
   requestsAdditionalProduct,
   requestsAnotherOption,
+  requestsStaffReview,
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
 import { productCategory } from "@/lib/chat-intent";
+import {
+  conversationPdfText,
+  isConversationUiAction,
+  needsUnicodePdfRendering,
+  wrapMeasuredText,
+} from "@/lib/conversation-export";
 
 type QuoteSummary = {
   item: string;
@@ -256,18 +263,6 @@ function VoiceNotePlayer({ note }: { note: VoiceNote }) {
   </div>;
 }
 
-function pdfSafeText(value: string) {
-  return value
-    .replace(/\*([^*\n]+)\*/g, "$1")
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[–—]/g, "-")
-    .normalize("NFKD")
-    .replace(/[^\x20-\x7E\n]/g, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .trim();
-}
-
 function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: string }) {
   const status = role === "user" ? "Sent" : "Received";
 
@@ -311,10 +306,12 @@ export function ChatDemo() {
   const [queuedMessages, setQueuedMessages] = useState<Array<{ value: string; voiceNote?: VoiceNote }>>([]);
   const submitRef = useRef<((value: string, voiceNote?: VoiceNote) => Promise<void>) | null>(null);
   const orderLinesRef = useRef<QuoteSummary[]>([]);
+  const shownProductIdsRef = useRef<Set<string>>(new Set());
   const pendingOrderRequestsRef = useRef<string[]>([]);
   const awaitingAdditionalProductRef = useRef(false);
   const lastQuotedProductRef = useRef<Product | null>(null);
   const queuedAdditionalProductRef = useRef<string | null>(null);
+  const lastUnavailableProductRef = useRef<Product | null>(null);
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -349,7 +346,13 @@ export function ChatDemo() {
     const quote = summaries.map(
       (summary) => `Order summary line: ${summary.quantity} ${summary.uom} of ${summary.item} (code: ${summary.code})`,
     );
-    return [message.text, ...productOptions, ...selected, ...quote].filter(Boolean).join("\n");
+    const suppliedMedia = [
+      message.imageUrl
+        ? "[Customer supplied a product photo in this turn. Use the assistant's recorded description on later turns; do not ask for the same reference again unless it was unreadable.]"
+        : "",
+      message.voiceNote ? `[Customer supplied a voice note. Transcript: ${message.voiceNote.transcript}]` : "",
+    ];
+    return [message.text, ...suppliedMedia, ...productOptions, ...selected, ...quote].filter(Boolean).join("\n");
   }
 
   function brainHistory() {
@@ -596,6 +599,57 @@ export function ChatDemo() {
     setQuery("");
     await submit(transcript, understoodVoiceNote);
     setTranscribingVoice(false);
+  }
+
+  function rememberShownProducts(products: Product[]) {
+    products.forEach((product) => shownProductIdsRef.current.add(product.stock_id));
+  }
+
+  function staffReviewSummary(language: ChatLanguage, product: Product | null = null, quantity: number | null = pendingQuantity) {
+    const customerRequests = messagesRef.current
+      .filter((message) => message.role === "user" && message.text.trim())
+      .map((message) => message.text.trim())
+      .filter((message) => !isConversationUiAction(message) && !/^\d+$/.test(message));
+    const allDistinctRequests = [...new Set(customerRequests)];
+    const distinctRequests = allDistinctRequests.length > 6
+      ? [allDistinctRequests[0], ...allDistinctRequests.slice(-5)]
+      : allDistinctRequests;
+    const hasPhoto = messagesRef.current.some((message) => Boolean(message.imageUrl));
+    const hasVoice = messagesRef.current.some((message) => Boolean(message.voiceNote));
+
+    if (language === "zh") {
+      const requirements = distinctRequests.length > 0
+        ? distinctRequests.map((request) => `- ${request}`).join("\n")
+        : "- 未提供商品说明";
+      return [
+        "*人工审核摘要*",
+        "*客户要求：*",
+        requirements,
+        product ? `*目录商品：* ${product.name}（${product.stock_id}）` : "",
+        quantity === null ? "*数量：* 尚未确认" : `*数量：* ${quantity}`,
+        hasPhoto ? "*图片：* 客户已提供；PDF 只保留图片标记，请另附原图。" : "",
+        hasVoice ? "*语音：* 客户已提供；PDF 会保留文字记录，不会嵌入原音频。" : "",
+        "*核实状态：* 尚未确认准确商品、兼容性、实时库存或最终价格。",
+        "",
+        "此演示不会自动联系销售人员或下单。请下载 PDF，并与任何原始图片一起手动发给您的 Sia Huat 销售联系人。",
+      ].filter(Boolean).join("\n");
+    }
+
+    const requirements = distinctRequests.length > 0
+      ? distinctRequests.map((request) => `- ${request}`).join("\n")
+      : "- Product details not supplied";
+    return [
+      "*STAFF REVIEW SUMMARY*",
+      "*Customer requirements:*",
+      requirements,
+      product ? `*Catalogue item:* ${product.name} (${product.stock_id})` : "",
+      quantity === null ? "*Quantity:* Not confirmed" : `*Quantity:* ${quantity}`,
+      hasPhoto ? "*Photo:* Supplied by the customer. The PDF keeps a photo marker only, so attach the original image separately." : "",
+      hasVoice ? "*Voice note:* Supplied by the customer. The PDF keeps its transcript, not the original audio." : "",
+      "*Verification status:* Exact item, compatibility, live stock and final price are not confirmed.",
+      "",
+      "This demo has not contacted sales or placed an order. Download the PDF and manually share it, together with any original photo, with your Sia Huat sales contact.",
+    ].filter(Boolean).join("\n");
   }
 
   useEffect(() => {
@@ -976,8 +1030,10 @@ export function ChatDemo() {
 
     if (clean === "Choose another item" || clean === "选择其他商品") {
       syncHandledTurnWithN8n(clean);
-      const currentProduct = confirmedProduct ?? pendingProduct ?? lastProducts[0] ?? null;
-      const excludedStockIds = new Set(lastProducts.map((product) => product.stock_id));
+      const currentProduct = confirmedProduct ?? pendingProduct ?? lastUnavailableProductRef.current ?? lastProducts[0] ?? null;
+      const sourceWasCompletelyOutOfStock = currentProduct?.stock_status === "out_of_stock"
+        || (currentProduct ? availableLimit(currentProduct) === 0 : false);
+      const excludedStockIds = new Set(shownProductIdsRef.current);
       if (currentProduct) excludedStockIds.add(currentProduct.stock_id);
       const minimumQuantity = pendingQuantity;
       let alternatives = currentProduct
@@ -1001,6 +1057,7 @@ export function ChatDemo() {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               stockId: currentProduct.stock_id,
+              excludeStockIds: [...excludedStockIds].slice(0, 100),
               ...(minimumQuantity !== null ? { quantity: minimumQuantity } : {}),
             }),
             signal: AbortSignal.timeout(12_000),
@@ -1020,7 +1077,13 @@ export function ChatDemo() {
         }
       }
 
-      if (alternatives.length > 0) setLastProducts(alternatives);
+      if (alternatives.length > 0) {
+        rememberShownProducts(alternatives);
+        lastUnavailableProductRef.current = null;
+        setLastProducts(alternatives);
+      } else if (sourceWasCompletelyOutOfStock) {
+        lastUnavailableProductRef.current = currentProduct;
+      }
       setPendingQuantity(minimumQuantity);
       const alternativeUom = alternatives.length > 0
         && alternatives.every((product) => product.uom_id === alternatives[0].uom_id)
@@ -1033,6 +1096,8 @@ export function ChatDemo() {
             ? minimumQuantity !== null
               ? `好的，这里有 ${alternatives.length} 个相关选择，每个都有至少 ${minimumQuantity} ${alternativeUom} 库存。您想要哪一个？`
               : `好的，这里有 ${alternatives.length} 个有货的替代选择。您想要哪一个？`
+            : sourceWasCompletelyOutOfStock
+              ? "这件商品完全缺货，因此减少数量也无法购买。我也无法确认其他符合要求且有库存的商品。您可以更改尺寸或品牌重新查询，或下载人工审核摘要并手动联系销售人员采购。"
             : minimumQuantity !== null
               ? `抱歉，我找不到同类商品能满足 ${minimumQuantity} 件的实时库存。您要减少数量吗？`
               : "抱歉，目前无法确认其他有货的选择。请告诉我您偏好的尺寸、款式或品牌，我会扩大查询范围。"
@@ -1040,6 +1105,8 @@ export function ChatDemo() {
             ? minimumQuantity !== null
               ? `Here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} relevant option${alternatives.length === 1 ? "" : "s"} with at least ${minimumQuantity} ${alternativeUom} available. Which one would you like?`
               : `Sure—here ${alternatives.length === 1 ? "is" : "are"} ${alternatives.length} available alternative${alternatives.length === 1 ? "" : "s"}. Which one would you like?`
+            : sourceWasCompletelyOutOfStock
+              ? "This item is completely out of stock, so reducing the quantity will not make it available. I also couldn’t confirm another matching in-stock option. Change the size or brand and search again, or download a staff-review summary for manual sourcing."
             : minimumQuantity !== null
               ? `Sorry, I couldn’t confirm another matching item with at least ${minimumQuantity} units available. Would you like a smaller quantity?`
               : "Sorry, I couldn’t confirm another available option right now. Tell me what size, style or brand you prefer and I’ll widen the search.",
@@ -1047,31 +1114,31 @@ export function ChatDemo() {
       }]);
       setSuggestions(alternatives.length > 0
         ? productOptionSuggestions(alternatives)
+        : sourceWasCompletelyOutOfStock
+          ? replyLanguage === "zh" ? ["重新查询", "准备人工审核摘要"] : ["Search again", "Prepare staff review summary"]
         : minimumQuantity !== null
           ? replyLanguage === "zh" ? ["减少数量", "重新查询"] : ["Try a smaller quantity", "Search again"]
           : replyLanguage === "zh" ? ["重新查询", "浏览商品"] : ["Search again", "Browse products"]); return;
     }
 
-    if (confirmedProduct?.stock_status === "out_of_stock" && /^(no|no thanks|no thank you|not now)$/i.test(clean)) {
-      syncHandledTurnWithN8n(clean);
-      setMessages((current) => [...current,
-        { id: nextId.current++, role: "user", text: clean },
-        { id: nextId.current++, role: "assistant", text: "No problem. Thank you for checking with Sia Huat. If you need another item later, I’ll be happy to help." },
-      ]);
-      setQuery(""); setSuggestions([]); setStage("complete"); return;
-    }
-
-    const preparesStaffReview = clean === "Prepare staff review summary"
-      || clean === "Continue for staff review"
-      || clean === "准备人工审核摘要"
-      || clean === "交由人员确认";
-    if (preparesStaffReview && !confirmedProduct) {
+    const declinesUnavailableItem = /^(?:no|no thanks|no thank you|not now|不用了(?:[，,]?\s*谢谢)?|不需要|暂时不要)[.!。！\s]*$/iu.test(clean);
+    if (confirmedProduct?.stock_status === "out_of_stock" && declinesUnavailableItem) {
       syncHandledTurnWithN8n(clean);
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
         { id: nextId.current++, role: "assistant", text: replyLanguage === "zh"
-          ? "已在本对话中保留您的要求。此演示不会自动联系销售人员。请下载 PDF 并手动发给您的 Sia Huat 销售联系人。"
-          : "I’ve kept your requirements in this conversation. This demo does not contact sales automatically. Download the PDF and share it with your Sia Huat sales contact to continue." },
+          ? "没问题，感谢您向 Sia Huat 查询。如果之后需要其他商品，我很乐意继续帮您。"
+          : "No problem. Thank you for checking with Sia Huat. If you need another item later, I’ll be happy to help." },
+      ]);
+      setQuery(""); setSuggestions([]); setStage("complete"); return;
+    }
+
+    const preparesStaffReview = requestsStaffReview(clean);
+    if (preparesStaffReview && !confirmedProduct) {
+      syncHandledTurnWithN8n(clean);
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        { id: nextId.current++, role: "assistant", text: staffReviewSummary(replyLanguage, lastUnavailableProductRef.current) },
       ]);
       setStage("submitted");
       setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "选择其他商品"] : ["Download enquiry PDF", "Choose another item"]);
@@ -1084,7 +1151,7 @@ export function ChatDemo() {
         const quantity = pendingQuantity;
         setMessages((current) => [...current,
           { id: nextId.current++, role: "user", text: clean },
-          { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `已在本对话中保留您需要 ${quantity} ${confirmedProduct.uom_id} 的 ${confirmedProduct.name}。此演示不会自动联系销售人员。请下载 PDF 并手动发给 Sia Huat 销售联系人，以确认库存和最终价格。` : `I’ve kept ${quantity} ${confirmedProduct.uom_id} of ${confirmedProduct.name} in this conversation. This demo does not contact sales automatically. Download the PDF and share it with your Sia Huat sales contact so they can verify availability and final price.`, selectedProduct: confirmedProduct },
+          { id: nextId.current++, role: "assistant", text: staffReviewSummary(replyLanguage, confirmedProduct, quantity), selectedProduct: confirmedProduct },
         ]);
         setPendingQuantity(null); setStage("submitted"); setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "选择其他商品"] : ["Download enquiry PDF", "Choose another item"]); return;
       }
@@ -1155,6 +1222,10 @@ export function ChatDemo() {
     const attachedImage = attachment;
 
     const requestSession = sessionId.current;
+    // Reaching the API means the customer supplied a fresh product request or
+    // clarification, so an earlier unavailable-card pointer must not steer a
+    // later "Choose another item" action.
+    lastUnavailableProductRef.current = null;
     setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean, imageUrl: attachedImage?.dataUrl, voiceNote }]);
     setQuery(""); setAttachment(null); setAttachmentError(""); setSuggestions([]); loadingRef.current = true; setLoading(true);
     try {
@@ -1204,12 +1275,18 @@ export function ChatDemo() {
       const products = reply.products ?? [];
       // Product cards remain the active choices until Claire displays a new
       // list. A clarification-only reply must not erase option memory.
-      if (products.length > 0) setLastProducts(products);
+      if (products.length > 0) {
+        lastUnavailableProductRef.current = null;
+        rememberShownProducts(products);
+        setLastProducts(products);
+      }
       const requested = requestedQuantity(messageForApi);
       if (requested !== null) setPendingQuantity(requested);
 
       if (reply.selectedProduct) {
         const product = reply.selectedProduct;
+        lastUnavailableProductRef.current = null;
+        rememberShownProducts([product]);
         const quantity = requestedQuantity(messageForApi) ?? (startingAdditionalProduct ? null : pendingQuantity);
         setPendingProduct(product); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
         setLastProducts((current) => current.some((item) => item.stock_id === product.stock_id) ? current : [product, ...current]);
@@ -1266,8 +1343,10 @@ export function ChatDemo() {
 
   function chooseProduct(product: Product, userText = conversationLanguage === "zh" ? `我要这个：${product.name}` : `This one: ${product.name}`) {
     if (loading) return;
+    rememberShownProducts([product]);
     if (product.stock_status === "out_of_stock") {
       const quantity = requestedQuantity(userText) ?? pendingQuantity;
+      lastUnavailableProductRef.current = product;
       setPendingProduct(null); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify");
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: userText },
@@ -1280,6 +1359,7 @@ export function ChatDemo() {
       ]);
       setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]); return;
     }
+    lastUnavailableProductRef.current = null;
     const quantity = requestedQuantity(userText) ?? pendingQuantity;
     setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
     setMessages((current) => [...current,
@@ -1346,9 +1426,12 @@ export function ChatDemo() {
         setSuggestions(quantitySuggestions(check.availableQuantity));
       } else if (check.stockStatus === "out_of_stock") {
         setStage("clarify");
-        setPendingQuantity(null);
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `${product.name} 目前缺货。要我为您显示其他选择吗？` : `${product.name} is currently out of stock. Would you like me to show you another option instead?`, selectedProduct: liveProduct }]);
-        setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "不用了，谢谢"] : ["Choose another item", "No, thank you"]);
+        setPendingQuantity(quantity);
+        lastUnavailableProductRef.current = liveProduct;
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
+          ? `${product.name} 目前完全缺货。${quantity === null ? "" : `已在本对话中保留数量 ${quantity}。`}减少数量也无法购买这件商品。要查看其他有货的选择，还是准备人工审核摘要？`
+          : `${product.name} is currently completely out of stock. ${quantity === null ? "" : `I’ve kept your requested quantity of ${quantity}. `}A smaller quantity will not make this item available. Would you like another in-stock option, or a staff-review summary for manual sourcing?`, selectedProduct: liveProduct }]);
+        setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要", "不用了，谢谢"] : ["Choose another item", "Prepare staff review summary", "No, thank you"]);
       } else {
         setStage("clarify");
         setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
@@ -1400,10 +1483,12 @@ export function ChatDemo() {
     loadingRef.current = false;
     setQueuedMessages([]);
     orderLinesRef.current = [];
+    shownProductIdsRef.current = new Set();
     pendingOrderRequestsRef.current = [];
     awaitingAdditionalProductRef.current = false;
     lastQuotedProductRef.current = null;
     queuedAdditionalProductRef.current = null;
+    lastUnavailableProductRef.current = null;
     setMessages([firstMessage]);
     setConversationLanguage("en");
     setStage("discover");
@@ -1444,6 +1529,7 @@ export function ChatDemo() {
 
     try {
       const { jsPDF } = await import("jspdf");
+      await document.fonts.ready;
       const pdf = new jsPDF({ unit: "mm", format: "a4", compress: true });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
@@ -1494,12 +1580,24 @@ export function ChatDemo() {
           productStockLabel(product),
           product.source_url ?? "",
         ].filter(Boolean).join("\n")).join("\n\n");
-        const body = pdfSafeText([
+        const body = conversationPdfText([
           message.imageUrl ? "[Product photo attached]" : "",
           message.voiceNote ? `[Voice note - ${voiceTime(message.voiceNote.durationSeconds)}]\nTranscript: ${message.text}` : message.text,
           productText,
         ].filter(Boolean).join("\n\n"));
-        const lines = pdf.splitTextToSize(body, textWidth) as string[];
+        const needsCanvasText = needsUnicodePdfRendering(body);
+        const canvasScale = 2;
+        const pixelsPerMm = 96 / 25.4;
+        const fontSizePixels = 9.5 * (96 / 72) * canvasScale;
+        const measureCanvas = needsCanvasText ? document.createElement("canvas") : null;
+        const measureContext = measureCanvas?.getContext("2d") ?? null;
+        if (needsCanvasText && !measureContext) throw new Error("Unicode PDF renderer is unavailable.");
+        if (measureContext) {
+          measureContext.font = `${fontSizePixels}px "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", "Heiti SC", Arial, sans-serif`;
+        }
+        const lines = needsCanvasText && measureContext
+          ? wrapMeasuredText(body, textWidth * pixelsPerMm * canvasScale, (value) => measureContext.measureText(value).width)
+          : pdf.splitTextToSize(body, textWidth) as string[];
         const label = `${message.role === "user" ? "You (customer)" : "Claire (assistant)"} - ${message.time ?? ""}`;
         let lineIndex = 0;
 
@@ -1517,10 +1615,27 @@ export function ChatDemo() {
           pdf.setFontSize(9);
           pdf.setTextColor(23, 104, 83);
           pdf.text(lineIndex === 0 ? label : `${label} (continued)`, margin + 5, y + 6);
-          pdf.setFont("helvetica", "normal");
-          pdf.setFontSize(9.5);
-          pdf.setTextColor(51, 75, 68);
-          pdf.text(chunk, margin + 5, y + 12, { lineHeightFactor: 1.25 });
+          if (needsCanvasText) {
+            const lineHeightPixels = lineHeight * pixelsPerMm * canvasScale;
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, Math.ceil(textWidth * pixelsPerMm * canvasScale));
+            canvas.height = Math.max(1, Math.ceil(chunk.length * lineHeightPixels));
+            const context = canvas.getContext("2d");
+            if (!context) throw new Error("Unicode PDF renderer is unavailable.");
+            context.font = `${fontSizePixels}px "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", "Heiti SC", Arial, sans-serif`;
+            context.fillStyle = "#334b44";
+            context.textBaseline = "alphabetic";
+            chunk.forEach((line, index) => {
+              const baseline = (index + 1) * lineHeightPixels - (lineHeightPixels - fontSizePixels) * 0.45;
+              context.fillText(line, 0, baseline);
+            });
+            pdf.addImage(canvas.toDataURL("image/png"), "PNG", margin + 5, y + 9, textWidth, chunk.length * lineHeight);
+          } else {
+            pdf.setFont("helvetica", "normal");
+            pdf.setFontSize(9.5);
+            pdf.setTextColor(51, 75, 68);
+            pdf.text(chunk, margin + 5, y + 12, { lineHeightFactor: 1.25 });
+          }
 
           y += boxHeight + 5;
           lineIndex += chunk.length;
@@ -1562,6 +1677,16 @@ export function ChatDemo() {
   function handleSuggestion(item: string) {
     if (item === "Download enquiry PDF" || item === "下载询价 PDF") {
       void saveConversationAsPdf();
+      return;
+    }
+    if (item === "Start another enquiry" || item === "开始新的询价") {
+      resetConversation({
+        id: 1,
+        role: "assistant",
+        text: item === "开始新的询价"
+          ? "新的询价已开始。您要找什么商品？请发送商品名称、品牌或照片。"
+          : "New enquiry started. What product are you looking for? Send the item name, brand or a photo.",
+      });
       return;
     }
     void submit(item);

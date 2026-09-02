@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { readFile } from "node:fs/promises";
 import { postChat, qaBaseUrl, writeQaReport } from "./qa-utils";
 import type { ConversationContext } from "../src/lib/chat-contract";
 import { catalogueMessageWithContext } from "../src/lib/chat-intent";
@@ -12,6 +13,7 @@ import {
   requestedQuantity,
   requestsAdditionalProduct,
   requestsAnotherOption,
+  requestsStaffReview,
   splitMultipleProductRequest,
 } from "../src/lib/chat-turn";
 
@@ -81,12 +83,13 @@ async function checkAlternatives(
   stockId: string,
   quantity: number,
   validate: (products: ReplyProduct[]) => string | null,
+  excludeStockIds: string[] = [],
 ) {
   const started = performance.now();
   const response = await fetch(`${qaBaseUrl}/api/alternatives`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ stockId, quantity }),
+    body: JSON.stringify({ stockId, quantity, excludeStockIds }),
   });
   const body = await response.json() as { products?: ReplyProduct[]; error?: string };
   const durationMs = Math.round(performance.now() - started);
@@ -95,13 +98,14 @@ async function checkAlternatives(
   results.push({
     id,
     area: "Stock-qualified alternatives",
-    prompt: `${stockId}, minimum quantity ${quantity}`,
+    prompt: `${stockId}, minimum quantity ${quantity}${excludeStockIds.length > 0 ? `, excluding ${excludeStockIds.join(", ")}` : ""}`,
     pass: !failure,
     reason: failure ?? "Matched expected behaviour",
     durationMs,
     response: response.ok ? `Returned ${products.length} stock-qualified alternatives` : body.error ?? "",
     products: products.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
+  return products;
 }
 
 async function checkImageBuyingFlow() {
@@ -433,6 +437,120 @@ async function checkImageBuyingFlow() {
     response: inlineSlotPhotoMessage,
     products: inlineSlotProducts.map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
+
+  const clutteredRiceComparisonPrompt = "can chk item 1 n item 2 from this busy comparison screenshot? need 2 each";
+  const clutteredRiceComparisonResult = await postChat({
+    message: clutteredRiceComparisonPrompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "rice-dispenser-comparison-screenshot.png",
+    },
+  });
+  const clutteredRiceComparisonMessage = clutteredRiceComparisonResult.body.message ?? "";
+  const clutteredRiceComparisonFailure = clutteredRiceComparisonResult.status !== 200
+    ? `HTTP ${clutteredRiceComparisonResult.status}: ${clutteredRiceComparisonResult.body.error ?? "unknown error"}`
+    : unsupportedAutomaticHandoffClaim(`${clutteredRiceComparisonMessage} ${(clutteredRiceComparisonResult.body.suggestions ?? []).join(" ")}`)
+      ? "The cluttered comparison-photo reply made an unsupported automatic staff handoff or sourcing claim"
+      : (clutteredRiceComparisonResult.body.products?.length ?? 0) > 0
+        ? "The cluttered comparison screenshot returned unconfirmed product substitutes"
+        : !/received the photo/i.test(clutteredRiceComparisonMessage)
+          || !/kept 2 each for items 1 and 2/i.test(clutteredRiceComparisonMessage)
+          || !/two item names or model numbers/i.test(clutteredRiceComparisonMessage)
+          || !/won.?t substitute/i.test(clutteredRiceComparisonMessage)
+          ? "The cluttered comparison screenshot did not preserve both items and quantity or request reliable identifiers"
+          : null;
+  results.push({
+    id: "CASE-039",
+    area: "Cluttered rice-dispenser comparison screenshot",
+    prompt: clutteredRiceComparisonPrompt,
+    pass: !clutteredRiceComparisonFailure,
+    reason: clutteredRiceComparisonFailure ?? "The screenshot was handled safely without guessing, while both items and quantity were retained",
+    durationMs: clutteredRiceComparisonResult.durationMs,
+    response: clutteredRiceComparisonMessage,
+    products: (clutteredRiceComparisonResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
+
+  const riceModelFollowUp = await postChat({
+    message: "rice dispencer wf rd10 n rd30 pls, need 2 ea",
+    history: [
+      { role: "user", content: clutteredRiceComparisonPrompt },
+      { role: "assistant", content: clutteredRiceComparisonMessage },
+    ],
+    context: { stage: "clarify", activeProduct: null, quantity: 2, displayedProducts: [] },
+  });
+  const riceModelFollowUpMessage = riceModelFollowUp.body.message ?? "";
+  const riceModelInvalidProduct = (riceModelFollowUp.body.products ?? []).find((product) => /rice cooker|water dispenser|airpot/i.test(product.name) || !/rice dispenser/i.test(product.name));
+  const riceModelFollowUpFailure = riceModelFollowUp.status !== 200
+    ? `HTTP ${riceModelFollowUp.status}: ${riceModelFollowUp.body.error ?? "unknown error"}`
+    : unsupportedAutomaticHandoffClaim(`${riceModelFollowUpMessage} ${(riceModelFollowUp.body.suggestions ?? []).join(" ")}`)
+      ? "The imperfect model follow-up made an unsupported automatic staff handoff or sourcing claim"
+      : riceModelInvalidProduct
+        ? `The imperfect comparison follow-up returned an unrelated substitute: ${riceModelInvalidProduct.name}`
+        : !/WF-RD-10/i.test(riceModelFollowUpMessage) || !/WF-RD-30/i.test(riceModelFollowUpMessage)
+          ? "The imperfect follow-up did not retain both rice-dispenser model numbers"
+          : !/quantity 2 each/i.test(riceModelFollowUpMessage)
+            ? "The imperfect follow-up did not preserve quantity 2 for each model"
+            : (riceModelFollowUp.body.products?.length ?? 0) === 0
+              ? honestManualGuidance(riceModelFollowUp.body)
+              : null;
+  results.push({
+    id: "CASE-040",
+    area: "Imperfect rice-dispenser model follow-up",
+    prompt: "rice dispencer wf rd10 n rd30 pls, need 2 ea",
+    pass: !riceModelFollowUpFailure,
+    reason: riceModelFollowUpFailure ?? "The imperfect follow-up retained both models and quantity 2 each without unsafe substitution",
+    durationMs: riceModelFollowUp.durationMs,
+    response: riceModelFollowUpMessage,
+    products: (riceModelFollowUp.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
+
+  const comparisonOutOfStockProducts = contextProducts([
+    {
+      stock_id: "WF-RD-10",
+      name: "TABLETOP RICE DISPENSER WF-RD-10, 10KG",
+      list_price: 1_000,
+      uom_id: "PC",
+      stock_status: "out_of_stock",
+      available_quantity: 0,
+    },
+    {
+      stock_id: "WF-RD-30",
+      name: "TABLETOP RICE DISPENSER WF-RD-30, 30KG",
+      list_price: 2_000,
+      uom_id: "PC",
+      stock_status: "out_of_stock",
+      available_quantity: 0,
+    },
+  ]);
+  const comparisonOutOfStockSelection = await postChat({
+    message: "2",
+    history: [
+      { role: "user", content: "show wf rd10 and wf rd30 rice dispensers, need 2 each" },
+      { role: "assistant", content: "Here are the two comparison models." },
+    ],
+    context: { stage: "clarify", activeProduct: null, quantity: 2, displayedProducts: comparisonOutOfStockProducts },
+  });
+  const comparisonOutOfStockMessage = comparisonOutOfStockSelection.body.message ?? "";
+  const comparisonOutOfStockFailure = comparisonOutOfStockSelection.status !== 200
+    ? `HTTP ${comparisonOutOfStockSelection.status}: ${comparisonOutOfStockSelection.body.error ?? "unknown error"}`
+    : comparisonOutOfStockSelection.body.selectedProduct
+      ? "The second out-of-stock comparison model was still selectable"
+      : /smaller quantity/i.test(comparisonOutOfStockMessage)
+        ? "The out-of-stock comparison model incorrectly suggested a smaller quantity"
+        : !/cannot be selected/i.test(comparisonOutOfStockMessage) || !/(?:quantity of 2|quantity 2)/i.test(comparisonOutOfStockMessage)
+          ? "The unavailable comparison selection was not refused while preserving quantity 2"
+          : honestManualGuidance(comparisonOutOfStockSelection.body);
+  results.push({
+    id: "CASE-041",
+    area: "Out-of-stock comparison model selection",
+    prompt: "2",
+    pass: !comparisonOutOfStockFailure,
+    reason: comparisonOutOfStockFailure ?? "The unavailable comparison model could not be selected and did not trigger a smaller-quantity suggestion",
+    durationMs: comparisonOutOfStockSelection.durationMs,
+    response: comparisonOutOfStockMessage,
+    products: (comparisonOutOfStockSelection.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
 }
 
 async function checkMalformedJson() {
@@ -496,6 +614,23 @@ for (const [id, prompt] of [
     prompt,
     pass,
     reason: pass ? "Matched expected behaviour" : "A slot or pax specification was misclassified as an order quantity",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt] of [
+  ["INTENT-STAFF-NEG-001", "I need staff uniform details"],
+  ["INTENT-STAFF-NEG-002", "Show manual coffee grinder details"],
+] as const) {
+  const pass = !requestsStaffReview(prompt);
+  results.push({
+    id,
+    area: "Natural staff-review intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "A valid product request was mistaken for a staff-review handoff",
     durationMs: 0,
     response: "",
     products: [],
@@ -607,6 +742,164 @@ async function checkMalformedJsonEndpoint(id: string, path: string) {
   });
 }
 
+async function checkOwnerGuideCapabilityContract() {
+  const chatDemoSource = await readFile(new URL("../src/components/chat-demo.tsx", import.meta.url), "utf8");
+  const alternativesRouteSource = await readFile(new URL("../src/app/api/alternatives/route.ts", import.meta.url), "utf8");
+  const catalogueSource = await readFile(new URL("../src/lib/catalogue.ts", import.meta.url), "utf8");
+  const contractCases = [
+    {
+      id: "GUIDE-CONTRACT-001",
+      area: "Owner guide: reset capability",
+      prompt: "Reset starts a new local conversation and clears the current enquiry state",
+      checks: [
+        /aria-label="Reset conversation"[\s\S]{0,300}onClick=\{reset\}/,
+        /function reset\(\)\s*\{\s*resetConversation\(welcome\);\s*\}/,
+        /sessionId\.current = crypto\.randomUUID\(\)/,
+        /orderLinesRef\.current = \[\]/,
+        /setMessages\(\[firstMessage\]\)/,
+      ],
+      failure: "The reset control no longer clears the local conversation, order lines, and session state as documented",
+    },
+    {
+      id: "GUIDE-CONTRACT-002",
+      area: "Owner guide: PDF capability",
+      prompt: "PDF downloads the visible transcript as a local file",
+      checks: [
+        /aria-label="Download conversation PDF"/,
+        /new jsPDF\(/,
+        /pdf\.output\("blob"\)/,
+        /link\.download = filename/,
+        /The PDF could not be downloaded\. Please try again\./,
+      ],
+      failure: "The documented local PDF download or its visible error handling is missing",
+    },
+    {
+      id: "GUIDE-CONTRACT-003",
+      area: "Owner guide: media export limitation",
+      prompt: "PDF records photo and voice-note markers/transcripts rather than embedding the original media",
+      checks: [
+        /\[Product photo attached\]/,
+        /\[Voice note - \$\{voiceTime\(message\.voiceNote\.durationSeconds\)\}\]/,
+        /Transcript: \$\{message\.text\}/,
+      ],
+      failure: "The PDF media-marker/transcript limitation no longer matches the documented behaviour",
+    },
+    {
+      id: "GUIDE-CONTRACT-004",
+      area: "Owner guide: manual sales handoff",
+      prompt: "Finishing an enquiry does not place an order or notify sales automatically",
+      checks: [
+        /Your enquiry summary is ready\. This demo has not sent it to Sia Huat sales staff\./,
+        /No purchase has been placed\. Download the PDF above and share it with your Sia Huat sales contact/,
+        /This demo has not contacted sales or placed an order\. Download the PDF and manually share it/,
+      ],
+      failure: "The completion copy no longer states the no-order, no-auto-send, manual-PDF handoff limitation",
+    },
+    {
+      id: "GUIDE-CONTRACT-005",
+      area: "Owner guide: multi-item flow",
+      prompt: "Customers can add items sequentially and receive a combined summary",
+      checks: [
+        /Add another item/,
+        /orderLinesRef\.current/,
+        /quotes\.length > 1/,
+        /GRAND TOTAL:/,
+        /Finish enquiry summary/,
+      ],
+      failure: "The documented add-another-item and combined-summary flow is missing",
+    },
+    {
+      id: "GUIDE-CONTRACT-006",
+      area: "Owner guide: post-summary controls",
+      prompt: "A finished enquiry offers PDF download and a new enquiry, without claiming submission",
+      checks: [
+        /\["Download enquiry PDF", "Start another enquiry"\]/,
+        /item === "Download enquiry PDF"/,
+        /void saveConversationAsPdf\(\)/,
+      ],
+      failure: "The documented post-summary PDF and new-enquiry controls are missing",
+    },
+    {
+      id: "GUIDE-CONTRACT-007",
+      area: "Owner guide: completely out-of-stock recovery",
+      prompt: "A completely out-of-stock item never enters a smaller-quantity loop",
+      checks: [
+        /sourceWasCompletelyOutOfStock/,
+        /reducing the quantity will not make it available/,
+        /\["Search again", "Prepare staff review summary"\]/,
+      ],
+      failure: "The UI no longer guarantees the documented no-smaller-quantity recovery for completely unavailable items",
+    },
+    {
+      id: "GUIDE-CONTRACT-007B",
+      area: "Owner guide: multilingual out-of-stock recovery",
+      prompt: "The Chinese decline action cleanly completes an unavailable-item enquiry",
+      checks: [
+        /const declinesUnavailableItem = [^\n]*不用了/,
+        /没问题，感谢您向 Sia Huat 查询/,
+        /setQuery\(""\); setSuggestions\(\[\]\); setStage\("complete"\)/,
+      ],
+      failure: "The Chinese No-thank-you action no longer completes the out-of-stock flow as documented",
+    },
+    {
+      id: "GUIDE-CONTRACT-008",
+      area: "Owner guide: structured staff-review summary",
+      prompt: "The manual review summary retains customer words, quantity and media limitations",
+      checks: [
+        /\*STAFF REVIEW SUMMARY\*/,
+        /\*Customer requirements:\*/,
+        /\*Quantity:\*/,
+        /The PDF keeps a photo marker only/,
+        /Exact item, compatibility, live stock and final price are not confirmed/,
+      ],
+      failure: "The structured staff-review summary no longer matches the owner guide",
+    },
+    {
+      id: "GUIDE-CONTRACT-009",
+      area: "Owner guide: fresh enquiry control",
+      prompt: "Start another enquiry clears the previous local state",
+      checks: [
+        /item === "Start another enquiry"/,
+        /resetConversation\(\{/,
+        /shownProductIdsRef\.current = new Set\(\)/,
+      ],
+      failure: "Start another enquiry no longer clears the prior enquiry and alternative memory",
+    },
+  ] as const;
+
+  for (const testCase of contractCases) {
+    const failedCheck = testCase.checks.find((pattern) => !pattern.test(chatDemoSource));
+    results.push({
+      id: testCase.id,
+      area: testCase.area,
+      prompt: testCase.prompt,
+      pass: !failedCheck,
+      reason: failedCheck ? testCase.failure : "The live component source matches the documented capability contract",
+      durationMs: 0,
+      response: "",
+      products: [],
+    });
+  }
+
+  const crossFileContracts = [
+    /excludeStockIds: \[\.\.\.excludedStockIds\]/.test(chatDemoSource),
+    /excludeStockIds: z\.array/.test(alternativesRouteSource),
+    /excludedStockIds\.has\(product\.stock_id\)/.test(catalogueSource),
+  ];
+  results.push({
+    id: "GUIDE-CONTRACT-010",
+    area: "Owner guide: non-repeating alternatives",
+    prompt: "Previously displayed alternatives are excluded before the next shortlist is produced",
+    pass: crossFileContracts.every(Boolean),
+    reason: crossFileContracts.every(Boolean)
+      ? "Alternative exclusions flow from the browser through the endpoint into catalogue selection"
+      : "The documented alternative no-repeat behavior is not enforced end to end",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
 const noProducts = (reply: Reply) => (reply.products?.length ?? 0) === 0 ? null : `Expected no products, received ${reply.products?.length}`;
 const hasProductsOrHonestManualNextStep = (reply: Reply) => (reply.products?.length ?? 0) > 0
   ? null
@@ -694,6 +987,8 @@ for (const [id, prompt] of [
   ["INTENT-ORDER-CONFIRM-002", "okay, confirm the order"],
   ["INTENT-ORDER-CONFIRM-003", "确认订单询价"],
   ["INTENT-ORDER-CONFIRM-004", "Submit enquiry now"],
+  ["INTENT-ORDER-CONFIRM-005", "Finish enquiry summary"],
+  ["INTENT-ORDER-CONFIRM-006", "完成询价摘要"],
 ] as const) {
   const pass = confirmsOrderRequest(prompt);
   results.push({
@@ -784,6 +1079,24 @@ for (const [id, prompt, expected] of [
     prompt,
     pass,
     reason: pass ? "Matched expected behaviour" : "Casual request for more items was not recognized",
+    durationMs: 0,
+    response: "",
+    products: [],
+  });
+}
+
+for (const [id, prompt] of [
+  ["INTENT-STAFF-001", "Prepare staff review summary"],
+  ["INTENT-STAFF-002", "No exact match is fine. Prepare the closest option details for me to download and share with sales."],
+  ["INTENT-STAFF-003", "帮我整理人工审核摘要，我要下载后发给销售。"],
+] as const) {
+  const pass = requestsStaffReview(prompt);
+  results.push({
+    id,
+    area: "Natural staff-review intent",
+    prompt,
+    pass,
+    reason: pass ? "Matched expected behaviour" : "A natural request for a staff-review summary was not recognized",
     durationMs: 0,
     response: "",
     products: [],
@@ -889,6 +1202,8 @@ for (const testCase of [
     products: [],
   });
 }
+
+await checkOwnerGuideCapabilityContract();
 
 await check("CAT-001", "Catalogue scope & latency", "What do you sell?", (reply) =>
   noProducts(reply)
@@ -1843,7 +2158,7 @@ await check("CTX-022", "Fresh additional-item search", "3 wine glasses", (reply)
 await checkMalformedJson();
 await checkMalformedJsonEndpoint("API-002", "/api/stock-check");
 await checkMalformedJsonEndpoint("API-003", "/api/alternatives");
-await checkAlternatives("STOCK-002", "960.99", 10, (products) => {
+const grinderAlternatives = await checkAlternatives("STOCK-002", "960.99", 10, (products) => {
   if (products.length === 0) return "Expected relevant alternatives for the low-stock coffee grinder";
   if (!products.every((product) => /grinder/i.test(product.name))) {
     return `Alternative lookup returned an unrelated product: ${products.map((product) => product.name).join("; ")}`;
@@ -1990,6 +2305,11 @@ await check("FLOW-ALT-004", "Constraint-safe alternatives", "Do you have another
   quantity: 3,
   displayedProducts: contextProducts(redKnifeProducts),
 });
+await checkAlternatives("STOCK-004", "960.99", 10, (products) => {
+  const excluded = new Set(grinderAlternatives.map((product) => product.stock_id));
+  const repeated = products.find((product) => excluded.has(product.stock_id));
+  return repeated ? `Excluded alternative was repeated: ${repeated.stock_id}` : null;
+}, grinderAlternatives.map((product) => product.stock_id));
 
 await check("FLOW-ALT-005", "Relaxed alternative constraints", "Okay, another dark colour is fine and 9 to 11 inch is okay. What can you sell me now? Still need 24.", (reply) => {
   const products = reply.products ?? [];

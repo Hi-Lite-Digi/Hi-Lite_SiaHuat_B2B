@@ -401,8 +401,8 @@ def cover_page(canvas, doc):
     canvas.drawString(MARGIN_X + 6 * mm, note_y + 16.5 * mm, "IMPORTANT DEMO LIMIT")
     canvas.setFont(FONT, 8.5)
     canvas.setFillColor(INK)
-    canvas.drawString(MARGIN_X + 6 * mm, note_y + 9.5 * mm, "Claire prepares an on-screen summary; it does not save, send or place an order.")
-    canvas.drawString(MARGIN_X + 6 * mm, note_y + 4.5 * mm, "Download the PDF and manually send it to a Sia Huat sales contact for follow-up.")
+    canvas.drawString(MARGIN_X + 6 * mm, note_y + 9.5 * mm, "Claire does not create a sales record, notify sales or place an order.")
+    canvas.drawString(MARGIN_X + 6 * mm, note_y + 4.5 * mm, "Download the on-screen summary as a PDF and send it to sales manually.")
 
     canvas.setFont(FONT, 7.8)
     canvas.setFillColor(MUTED)
@@ -440,7 +440,7 @@ def build_story():
     story.append(P("The complete customer journey", "Section"))
     for number, title, body in [
         (1, "Ask", "Customer sends an item name, quantity and any important requirement. A photo can also be included."),
-        (2, "Compare", "Claire presents suitable product choices with code, price, website stock status and product link."),
+        (2, "Compare", "Claire presents suitable product choices with code, price and website stock status. A product link appears when the catalogue supplies one."),
         (3, "Choose and confirm", "Customer replies with the product number, then confirms the exact item. Claire checks fresh stock before adding it."),
         (4, "Review", "Claire prepares a running enquiry summary. The customer can change quantity or use Add another item."),
         (5, "Finish and share manually", "Finish enquiry summary completes the on-screen summary only. Download its PDF and send it to a Sia Huat sales contact."),
@@ -454,7 +454,7 @@ def build_story():
     story.append(bullet("Use the PDF icon to download the current conversation. Review it before sharing because it may contain customer and enquiry details."))
     story.append(bullet("The PDF contains message text plus markers for an attached photo or voice transcript. It does not embed the original photo or audio; forward that media separately when sales needs it."))
     story.append(bullet("Voice input works only in a supported browser with microphone permission and configured transcription. If it is unavailable, type the item and quantity instead."))
-    story.append(bullet("Download the PDF before reset, refresh or closing the tab. The demo has no owner inbox, shared queue or persistent conversation history."))
+    story.append(bullet("Download the PDF before reset, refresh or closing the tab. This demo application has no owner inbox, shared queue or persistent browser conversation history."))
     story.append(bullet("Reset is immediate and irreversible in the current tab. Use it only after exporting any record you need, and before starting a new customer scenario."))
     story.append(PageBreak())
 
@@ -465,7 +465,7 @@ def build_story():
     story.append(Spacer(1, 4 * mm))
     story.append(P("What Claire should return", "Section"))
     story.append(bullet("A short list of matching product cards, normally numbered."))
-    story.append(bullet("Product name, item code, price, catalogue website stock status and product link."))
+    story.append(bullet("Product name, item code, price and catalogue website stock status. A product link appears when the catalogue supplies one."))
     story.append(bullet("A clear next step such as Reply 1 or 2, or ask for more options."))
     story.append(Spacer(1, 4 * mm))
     story.append(P("Actual selection sequence", "Section"))
@@ -510,7 +510,7 @@ def build_story():
         "Other similar one can? Same black box, roughly 20 by 15 inch, still need 2.",
     ]:
         story.extend([example_box("Customer", message), Spacer(1, 3 * mm)])
-    story.append(callout("What Claire remembers", "Within the current open tab, Claire can carry the product type, quantity and clear requirements into the next turn. Already shown products should not be repeated when the customer asks for different ones.", "green"))
+    story.append(callout("What Claire remembers", "Within the current open tab, Claire can carry the product type, quantity and clear requirements into the next turn. When Choose another item is used, the displayed group is excluded from the next alternatives. Always check the codes if a later free-text search returns similar cards.", "green"))
     story.append(Spacer(1, 5 * mm))
     story.append(P("Reject a brand or specification", "Section"))
     story.append(example_box("Customer", "Not Atlantic Chef. Same red handle and 15cm."))
@@ -523,7 +523,7 @@ def build_story():
     story.append(P("If the wording is vague", "Section"))
     story.append(bullet("Keep a clearly confirmed product and quantity. If either is uncertain, restate the full current requirement."))
     story.append(bullet("Ask only for the missing detail that affects the purchase, such as size, capacity, material or budget."))
-    story.append(bullet("Do not ask again for a photo or reference that is already present in the conversation."))
+    story.append(bullet("When a photo is already present, use Claire's recorded description in the follow-up. If the image was unreadable, ask for a model number, useful detail or clearer crop instead of restarting the enquiry."))
     story.append(PageBreak())
 
     # Page 5
@@ -543,10 +543,11 @@ def build_story():
     story.append(bullet("Use a well-lit image with the product taking up most of the frame."))
     story.append(bullet("Use JPG, PNG or WebP. The file must be smaller than 5 MB."))
     story.append(bullet("Avoid screenshots containing several unrelated products unless the customer names the exact item."))
+    story.append(bullet("For the tested rice-dispenser comparison table, Claire may attempt to read visible model and capacity text, then ask the customer to choose. Other comparison screenshots, or rows that cannot be read reliably, require the customer to type the exact item name or model."))
     story.append(bullet("If the model number or label is visible, type it in the message as well."))
     story.append(bullet("For fit-sensitive products, include measurements. A photo cannot prove that a strainer fits a pot or that a lid fits a pan."))
     story.append(Spacer(1, 5 * mm))
-    story.append(callout("If the photo is unclear", "Claire should ask for one useful detail or prepare a staff-review summary. It should not confidently name an unrelated product or force the customer to start again. No staff member is notified automatically.", "red"))
+    story.append(callout("If the photo is unclear", "Claire should ask for one useful detail or prepare a structured staff-review summary that retains the customer's words, quantity and media marker. It should not confidently name an unrelated product or force the customer to start again. No staff member is notified automatically.", "red"))
     story.append(PageBreak())
 
     # Page 6
@@ -568,7 +569,7 @@ def build_story():
     story.append(Spacer(1, 3 * mm))
     story.append(example_box("Next cycle", "For 4oz, 6oz and 8oz ladles, add each size in its own Add another item cycle."))
     story.append(Spacer(1, 5 * mm))
-    story.append(callout("Before manual sharing", "Check every line in the summary, including item code, description, quantity, price basis and GST wording. Finish enquiry summary only completes the screen: it does not save, transmit, place an order or notify staff. Download the PDF and send it through the agreed sales channel.", "gold"))
+    story.append(callout("Before manual sharing", "Check every line in the summary, including item code, description, quantity, price basis and GST wording. Finish enquiry summary only completes the on-screen enquiry: it does not create a sales record, place an order or notify staff. Download the PDF and send it through the agreed sales channel.", "gold"))
     story.append(PageBreak())
 
     # Page 7
@@ -598,7 +599,7 @@ def build_story():
     story.append(PageBreak())
 
     # Page 8
-    story.extend(section_header("7. Know when a person should take over", "Claire supports the buying journey, but a sales owner remains responsible for commitments and exceptions."))
+    story.extend(section_header("7. When a person should take over", "Claire supports the buying journey, but a sales owner remains responsible for commitments and exceptions."))
     story.append(P("Escalate to a person for", "Section"))
     for item in [
         "Quotation status, missing quotation, special pricing or formal quotation documents.",
@@ -613,14 +614,14 @@ def build_story():
     story.append(P("Safe handoff wording", "Section"))
     story.append(example_box("Claire", "I could not confirm an exact match. I have kept your quantity and requirements in this on-screen summary. Download the PDF and share it with your Sia Huat sales contact."))
     story.append(Spacer(1, 5 * mm))
-    story.append(callout("Manual handoff", "Nothing is sent automatically. The demo has no owner inbox, shared queue, persistent history, automatic email or WhatsApp notification. Keep the tab open or export the PDF, then use the agreed external sales channel and tracking process.", "gold"))
+    story.append(callout("Manual handoff", "No sales handoff is sent automatically. This demo application has no owner inbox, shared queue, persistent browser history, automatic email or WhatsApp notification. Keep the tab open or export the PDF, then use the agreed external sales channel and tracking process.", "gold"))
     story.append(Spacer(1, 3 * mm))
     story.append(callout("Never promise", "Do not confirm stock allocation, final quotation, payment approval or delivery timing unless a responsible person has verified it.", "red"))
     story.append(Spacer(1, 6 * mm))
     story.append(P("Daily owner checklist", "Section"))
     checks = [
         "Open the live assistant and run one simple enquiry.",
-        "Check that product cards show a working link, realistic price and clear stock status.",
+        "Check that product cards show a realistic price and clear stock status, and that product links work where shown.",
         "Run one ask for more items message and confirm that new products appear.",
         "Run one photo enquiry using a known product image.",
         "Review PDFs and notes received through the team's external sales channel or tracking process.",
