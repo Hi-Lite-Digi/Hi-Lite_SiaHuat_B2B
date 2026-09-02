@@ -242,6 +242,36 @@ async function checkImageBuyingFlow() {
     products: (photoOnlyResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
   });
 
+  const shownToasterPrompt = "Do you have a toaster like the one shown? Need 1.";
+  const shownToasterResult = await postChat({
+    message: shownToasterPrompt,
+    image: {
+      dataUrl: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      mimeType: "image/png",
+      name: "toaster-chat-screenshot.png",
+    },
+  });
+  const shownToasterMessage = shownToasterResult.body.message ?? "";
+  const shownToasterFailure = shownToasterResult.status !== 200
+    ? `HTTP ${shownToasterResult.status}: ${shownToasterResult.body.error ?? "unknown error"}`
+    : (shownToasterResult.body.products?.length ?? 0) > 0 || shownToasterResult.body.selectedProduct
+      ? "A toaster screenshot without a confirmed style returned a selectable product"
+      : !/choose the style|4 or 6 slots/i.test(shownToasterMessage)
+        || !(shownToasterResult.body.suggestions ?? []).some((suggestion) => /4-slot pop-up/i.test(suggestion))
+        || !(shownToasterResult.body.suggestions ?? []).some((suggestion) => /conveyor/i.test(suggestion))
+        ? "The toaster screenshot did not ask for the buying-critical style"
+        : null;
+  results.push({
+    id: "CASE-043",
+    area: "Toaster screenshot style guard",
+    prompt: shownToasterPrompt,
+    pass: !shownToasterFailure,
+    reason: shownToasterFailure ?? "Requested the toaster style before showing a selectable catalogue product",
+    durationMs: shownToasterResult.durationMs,
+    response: shownToasterMessage,
+    products: (shownToasterResult.body.products ?? []).map((product) => `${product.stock_id} | ${product.name} | $${product.list_price}/${product.uom_id}`),
+  });
+
   const multiItemPhotoPrompt = "can check item 1 n 2? need 1 each";
   const multiItemPhotoResult = await postChat({
     message: multiItemPhotoPrompt,
@@ -835,7 +865,7 @@ async function checkOwnerGuideCapabilityContract() {
       area: "Owner guide: multilingual out-of-stock recovery",
       prompt: "The Chinese decline action cleanly completes an unavailable-item enquiry",
       checks: [
-        /const declinesUnavailableItem = [^\n]*不用了/,
+        /declinesUnavailableItem\(clean\)[\s\S]{0,160}hasUnavailableProductContext\(\{/,
         /没问题，感谢您向 Sia Huat 查询/,
         /setQuery\(""\); setSuggestions\(\[\]\); setStage\("complete"\)/,
       ],
@@ -2734,6 +2764,24 @@ await check("CASE-034", "Rice-dispenser model shorthand", "rice dispencer wf rd1
   quantity: 1,
   displayedProducts: [],
 });
+await check("CASE-042", "Typo-tolerant plate buying request", "i ned 2 blak dinnr plates", (reply) => {
+  const products = reply.products ?? [];
+  const wrongProduct = products.find((product) =>
+    !/\b(?:plates?|platters?)\b/i.test(product.name) || !/\bblack\b/i.test(product.name),
+  );
+  if (wrongProduct) {
+    return `The typo-heavy black dinner-plate request returned a wrong product or colour: ${wrongProduct.name}`;
+  }
+  if (products.length > 0) {
+    return /\b2\b/.test(reply.message)
+      ? null
+      : "The purchasable black plate reply did not retain quantity 2";
+  }
+  const honestNoMatch = /couldn.?t find|no (?:exact|matching)|not available|out of stock|manual sourcing/i.test(reply.message);
+  return honestNoMatch && /black|dinner|plate/i.test(reply.message)
+    ? null
+    : "Expected black dinner-plate options or an honest constraint-preserving no-match reply";
+}, [], 20_000);
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? honestManualGuidance(reply));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? honestManualGuidance(reply), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? honestManualGuidance(reply));

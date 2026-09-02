@@ -1,4 +1,5 @@
 import type { Product } from "@/lib/chat-contract";
+import { normalizeCommonProductTypos } from "@/lib/chat-intent";
 
 export function requestedProductIndex(message: string, productCount: number) {
   const numbered = message.trim().match(/^(\d+)$/)?.[1]
@@ -136,6 +137,51 @@ export function requestsStaffReview(message: string) {
   return /\b(?:prepare|create|make|give|show|need|want)\b[^.!?]{0,70}\b(?:staff|manual)\s+review(?:\s+(?:summary|details?))?\b/i.test(normalized)
     || /\bprepare\b[^.!?]{0,90}\b(?:details?|summary)\b[^.!?]{0,90}\b(?:download|share)\b[^.!?]{0,50}\bsales\b/i.test(normalized)
     || /(?:准备|生成|整理).{0,24}(?:人工审核|审核摘要|询价摘要)|(?:下载|分享).{0,24}(?:销售|人工审核)/u.test(normalized);
+}
+
+export function shouldStartFreshAdditionalItem(input: {
+  message: string;
+  additionalItemInProgress: boolean;
+  completedItemCount: number;
+}) {
+  const choosesAnotherItem = /^(?:choose another item|选择其他商品)[.!。！\s]*$/iu.test(input.message.trim());
+  return choosesAnotherItem
+    && input.additionalItemInProgress
+    && input.completedItemCount > 0;
+}
+
+/**
+ * Recognises a customer's short decision to stop an unavailable-item search.
+ * Keep this anchored to the whole message so a request such as “no small one,
+ * show a larger one” continues through the product-search path.
+ */
+export function declinesUnavailableItem(message: string) {
+  const normalized = message
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[’]/g, "'")
+    .replace(/[.,!?;:…，。！？；：、]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const englishDecline = /^(?:(?:no(?:pe)?|nah)|(?:i\s+)?(?:do\s+not|don'?t|dont|dun)\s+(?:need|want)(?:\s+(?:it|this|that))?|no\s+need(?:\s+(?:it|this|that))?|not\s+(?:now|anymore)|maybe\s+later|cancel(?:\s+(?:it|this|that|the\s+(?:enquiry|request|order)))?|stop(?:\s+(?:it|this|that))?|forget\s+it|never[ -]?mind|nvm|thanks?|thank\s+you|thx|thks|thnks|ty)(?:\s+(?:please|pls|la+h?|thanks?|thank\s+you|thx|thks|thnks))?$/i;
+  if (englishDecline.test(normalized)) return true;
+
+  return /^(?:(?:先|暂时)?不用[了啦]?|不需要(?:了)?|不要了|暂时不要|算了|取消(?:这次)?(?:询价|请求|订单)?(?:吧)?|停止(?:吧)?|谢谢(?:了|你)?|多谢)(?:\s*(?:谢谢(?:了|你)?|多谢))?$/u.test(normalized);
+}
+
+export function hasUnavailableProductContext(input: {
+  confirmedProduct?: Product | null;
+  pendingProduct?: Product | null;
+  rememberedUnavailableProduct?: Product | null;
+  displayedProducts?: Product[];
+}) {
+  return [
+    input.confirmedProduct,
+    input.pendingProduct,
+    input.rememberedUnavailableProduct,
+    ...(input.displayedProducts ?? []),
+  ].some((product) => product?.stock_status === "out_of_stock" || product?.available_quantity === 0);
 }
 
 const PRODUCT_NOUN = /\b(?:apron|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;
@@ -285,6 +331,7 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
 }
 
 export function parseRequestedQuantity(message: string): QuantityParseResult {
+  message = normalizeCommonProductTypos(message);
   const candidates = [
     ...collectQuantityCandidates(
       message,

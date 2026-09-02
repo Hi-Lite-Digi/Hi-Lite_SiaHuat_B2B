@@ -343,7 +343,7 @@ function isConcreteCatalogueRequest(message: string) {
 }
 
 function imageReferenceNeedsVisualEvidence(message: string) {
-  return /\b(?:like|similar\s+to|same\s+as|looks?\s+like|as\s+shown|pictured|this|that|photo|picture|image)\b/i.test(message);
+  return /\b(?:like|similar\s+to|same\s+as|looks?\s+like|as\s+shown|shown|pictured|shared|attached|this|that|photo|picture|pic|image)\b/i.test(message);
 }
 
 function hasImageIndependentBuyingSpecification(message: string) {
@@ -1652,7 +1652,7 @@ function ambiguousPhotoReply(input: ChatRequest): ChatReply {
 function imageBuyingClarification(input: ChatRequest, catalogueMessage: string): ChatReply | null {
   if (!input.image || !/\btoasters?\b/i.test(catalogueMessage)) return null;
 
-  const refersToPhoto = /\b(?:look(?:s|ing)?\s+like|similar\s+to|photo|picture|image|this)\b/i.test(input.message);
+  const refersToPhoto = /\b(?:look(?:s|ing)?\s+like|similar\s+to|same\s+as|as\s+shown|shown|pictured|shared|attached|photo|picture|pic|image|this|that)\b/i.test(input.message);
   const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conveyor|slots?|conveyor)\b/i.test(input.message);
   if (!refersToPhoto || specifiesToasterStyle) return null;
 
@@ -2060,7 +2060,12 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     const queryWithQuantity = contextualQuantity === null
       ? knownProductQuery
       : `${knownProductQuery} ${contextualQuantity} units`;
-    const knownReply = await groundedCatalogueReply(queryWithQuantity).catch((error) => {
+    // A known-image query comes from a curated local fingerprint rather than
+    // untrusted vision prose. Force the catalogue lookup even when the query's
+    // family (for example, "beverage dispenser") is not one of the generic
+    // text-intent categories; otherwise it falls through to the slower vision
+    // workflow and can miss the customer-response deadline.
+    const knownReply = await groundedCatalogueReply(queryWithQuantity, { authoritative: true }).catch((error) => {
       console.error("[api/chat] known image reference lookup failed", { knownProductQuery, error });
       return null;
     });

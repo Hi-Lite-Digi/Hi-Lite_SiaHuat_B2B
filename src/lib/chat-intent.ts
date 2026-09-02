@@ -24,6 +24,20 @@ export type FastReply = {
 export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|box|boxes|bin|bins|cambox|storage|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|toaser|toasers|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|dispencer|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
+/**
+ * Corrects a deliberately small set of high-confidence product-request typos.
+ * This is used only for intent/search parsing; the customer's original words
+ * remain unchanged in the visible conversation and exported summary.
+ */
+export function normalizeCommonProductTypos(message: string) {
+  return message
+    .replace(/\b(?:ned|nead|nedd)\b/gi, "need")
+    .replace(/\b(?:blak|balck|blakc)\b/gi, "black")
+    .replace(/\b(?:dinnr|dinr)\b/gi, "dinner")
+    .replace(/\b(?:pltes|paltes)\b/gi, "plates")
+    .replace(/\b(?:plte|palte)\b/gi, "plate");
+}
+
 export const productCategories = [
   { pattern: /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/i, label: "knife sharpener" },
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b|砍骨刀|菜刀|刀/u, label: "knife" },
@@ -58,7 +72,7 @@ export const productCategories = [
 ] as const;
 
 export function simplifyMessage(message: string) {
-  return message
+  return normalizeCommonProductTypos(message)
     .toLowerCase()
     .replace(/[^a-z0-9'\s]/g, " ")
     .replace(/\s+/g, " ")
@@ -66,25 +80,27 @@ export function simplifyMessage(message: string) {
 }
 
 export function isCatalogueRequest(message: string) {
-  const simple = message
+  const normalizedMessage = normalizeCommonProductTypos(message);
+  const simple = normalizedMessage
     .toLowerCase()
     .replace(/[^a-z0-9'\s/-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  return productWords.test(message)
-    || /\b(?:strainners?|straners?|noodal|noodel)\b/i.test(message)
-    || productCategory(message) !== null
-    || /\b(?:che+f+f?|knfie|kinife|knive)\b/i.test(message)
-    || /[刀锅鍋盘盤碗杯勺叉]/u.test(message)
-    || skuPattern.test(message)
+  return productWords.test(normalizedMessage)
+    || /\b(?:strainners?|straners?|noodal|noodel)\b/i.test(normalizedMessage)
+    || productCategory(normalizedMessage) !== null
+    || /\b(?:che+f+f?|knfie|kinife|knive)\b/i.test(normalizedMessage)
+    || /[刀锅鍋盘盤碗杯勺叉]/u.test(normalizedMessage)
+    || skuPattern.test(normalizedMessage)
     || /^\d{4,}$/.test(simple)
     || /^(i want|i need|i'm looking for|im looking for|looking for|do you sell|do u sell|do you guys sell|do u guys sell|do you have|do u have|can i get|got any|find me|show me)\b/.test(simple);
 }
 
 export function productCategory(message: string) {
-  const matches = productCategories.filter((category) => category.pattern.test(message));
-  if (matches.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(message)) {
+  const normalizedMessage = normalizeCommonProductTypos(message);
+  const matches = productCategories.filter((category) => category.pattern.test(normalizedMessage));
+  if (matches.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(normalizedMessage)) {
     return matches.at(-1)?.label ?? null;
   }
   return matches[0]?.label ?? null;
@@ -195,6 +211,8 @@ function excludedBrandConstraint(messages: string[]) {
 }
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
+  message = normalizeCommonProductTypos(message);
+  userHistory = userHistory.map(normalizeCommonProductTypos);
   const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
   const currentCategory = productCategory(message);
   const activeCategory = currentCategory ?? previousCategory;

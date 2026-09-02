@@ -10,6 +10,8 @@ function expectedStockId(filePath: string) {
 type ProductImageFixture = {
   filePath: string;
   expected: string;
+  message?: string;
+  maximumDurationMs?: number;
 };
 
 const imageFixtureDir = path.resolve("test-fixtures", "images");
@@ -18,13 +20,25 @@ const defaultFixtures: ProductImageFixture[] = [
   { filePath: path.join(imageFixtureDir, "101CA-1520CBP-110.jpg"), expected: "101CA-1520CBP-110" },
   // The same product on a phone-portrait canvas ensures a tall product photo
   // is not rejected merely because it has screenshot-like dimensions.
-  { filePath: path.join(imageFixtureDir, "101CA-1000LCD-portrait.jpg"), expected: "101CA-1000LCD" },
+  {
+    filePath: path.join(imageFixtureDir, "101CA-1000LCD-portrait.jpg"),
+    expected: "101CA-1000LCD",
+    message: "Do you sell this beverage dispenser? Need 1.",
+    // A curated fingerprint should use the deterministic catalogue path. If it
+    // falls through to the vision workflow, it typically reaches the 26-second
+    // customer deadline instead of returning promptly.
+    maximumDurationMs: 18_000,
+  },
 ];
 const comparisonScreenshot = path.join(imageFixtureDir, "rice-dispenser-comparison.png");
 const randomNonProductImage = path.join(imageFixtureDir, "random-non-product.png");
 const cliFixtures = process.argv.slice(2);
 const fixtures: ProductImageFixture[] = cliFixtures.length > 0
-  ? cliFixtures.map((filePath) => ({ filePath, expected: expectedStockId(filePath) }))
+  ? cliFixtures.map((filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      return defaultFixtures.find((fixture) => path.resolve(fixture.filePath) === resolvedPath)
+        ?? { filePath, expected: expectedStockId(filePath) };
+    })
   : defaultFixtures;
 
 function oracleStockIds(expected: string) {
@@ -84,11 +98,12 @@ function mimeTypeFor(filePath: string) {
 
 async function validateImage(fixture: ProductImageFixture, index: number) {
   const { filePath, expected } = fixture;
+  const sentMessage = fixture.message ?? "Do you sell this? Please identify it and show the SKU and catalogue price.";
   const bytes = await fs.readFile(filePath);
   const oracle = await getOracleProduct(expected);
   const fallbackFamily = fallbackFamilyForFixture(expected);
   const { status, body, durationMs } = await postChat({
-    message: "Do you sell this? Please identify it and show the SKU and catalogue price.",
+    message: sentMessage,
     image: {
       dataUrl: `data:${mimeTypeFor(filePath)};base64,${bytes.toString("base64")}`,
       mimeType: mimeTypeFor(filePath),
@@ -114,7 +129,9 @@ async function validateImage(fixture: ProductImageFixture, index: number) {
   const qualifiedAsSuggestion = /\b(suggest|possible|likely|looks like|could be|appears to be)\b/i.test(responseMessage);
   const claimsExactWithoutEvidence = positiveExactClaim && !qualifiedAsSuggestion;
   const failures = [
-    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
+    durationMs < (fixture.maximumDurationMs ?? 30_000)
+      ? null
+      : `Reply took ${durationMs}ms; expected under ${fixture.maximumDurationMs ?? 30_000}ms`,
     status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
     oracle || fallbackFamily ? null : `Could not load the catalogue oracle for ${expected}`,
     returned.length > 0 ? null : "The image produced no catalogue suggestions",
@@ -129,6 +146,7 @@ async function validateImage(fixture: ProductImageFixture, index: number) {
   return {
     file: filePath,
     sentName: `qa-pixel-only-upload-${index + 1}.jpg`,
+    sentMessage,
     expected,
     oracle,
     pass: failures.length === 0,

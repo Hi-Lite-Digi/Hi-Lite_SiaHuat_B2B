@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   catalogueHistoryWithClarification,
   catalogueMessageWithContext,
+  normalizeCommonProductTypos,
+  productCategory,
 } from "./chat-intent";
 import {
   encodedImageDimensions,
@@ -161,4 +163,12 @@ test("does not attach a fresh catalogue request to the preceding comparison", ()
     assert.doesNotMatch(context.join("\n"), /WF-RD-30/);
     assert.equal(catalogueMessageWithContext(message, context), "bread knife");
   }
+});
+
+test("normalizes common human typos without losing plate buying constraints", () => {
+  const message = "i ned 2 blak dinnr plates";
+
+  assert.equal(normalizeCommonProductTypos(message), "i need 2 black dinner plates");
+  assert.equal(productCategory(message), "tableware");
+  assert.equal(catalogueMessageWithContext(message, []), "black dinner plate tableware");
 });

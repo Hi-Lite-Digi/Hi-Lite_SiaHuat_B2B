@@ -15,6 +15,8 @@ import {
   asksForRecommendation,
   confirmsDisplayedProduct,
   confirmsOrderRequest,
+  declinesUnavailableItem,
+  hasUnavailableProductContext,
   isGenericAddAnotherItem,
   isProductRefinementOnly,
   parseRequestedQuantity,
@@ -24,6 +26,7 @@ import {
   requestsAdditionalProduct,
   requestsAnotherOption,
   requestsStaffReview,
+  shouldStartFreshAdditionalItem,
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
 import { productCategory } from "@/lib/chat-intent";
@@ -309,6 +312,7 @@ export function ChatDemo() {
   const shownProductIdsRef = useRef<Set<string>>(new Set());
   const pendingOrderRequestsRef = useRef<string[]>([]);
   const awaitingAdditionalProductRef = useRef(false);
+  const additionalItemInProgressRef = useRef(false);
   const lastQuotedProductRef = useRef<Product | null>(null);
   const queuedAdditionalProductRef = useRef<string | null>(null);
   const lastUnavailableProductRef = useRef<Product | null>(null);
@@ -710,6 +714,8 @@ export function ChatDemo() {
       quote,
     ];
     orderLinesRef.current = nextOrder;
+    additionalItemInProgressRef.current = false;
+    awaitingAdditionalProductRef.current = false;
     lastQuotedProductRef.current = product;
     const nextQueuedRequest = pendingOrderRequestsRef.current[0] ?? null;
     const nextQueuedLabel = nextQueuedRequest ? queuedRequestLabel(nextQueuedRequest) : null;
@@ -830,13 +836,17 @@ export function ChatDemo() {
     const returnsToExistingSummary = awaitingAdditionalProduct
       && hasExistingOrderSummary
       && (confirmsOrderRequest(clean) || clean === "Change quantity" || clean === "更改数量");
-    if (returnsToExistingSummary) awaitingAdditionalProductRef.current = false;
+    if (returnsToExistingSummary) {
+      awaitingAdditionalProductRef.current = false;
+      additionalItemInProgressRef.current = false;
+    }
 
     const cancelsAdditionalProduct = hasExistingOrderSummary
       && (awaitingAdditionalProduct || pendingQuote === null)
       && /^(?:cancel(?:\s+(?:the\s+)?additional\s+item)?|never\s*mind|no thanks|no thank you|不用了|取消|算了)[.!。！\s]*$/iu.test(clean);
     if (cancelsAdditionalProduct) {
       awaitingAdditionalProductRef.current = false;
+      additionalItemInProgressRef.current = false;
       const queuedRequestToCancel = queuedAdditionalProductRef.current;
       if (queuedRequestToCancel) {
         const queuedIndex = pendingOrderRequestsRef.current.indexOf(queuedRequestToCancel);
@@ -873,6 +883,7 @@ export function ChatDemo() {
       || ((pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
         && requestsAdditionalProduct(clean)));
     if (startingAdditionalProduct) {
+      additionalItemInProgressRef.current = true;
       if (queuedRequestIndex >= 0) {
         queuedRequestToConsume = pendingOrderRequestsRef.current[queuedRequestIndex];
         queuedAdditionalProductRef.current = queuedRequestToConsume;
@@ -914,6 +925,7 @@ export function ChatDemo() {
       setLastProducts([]);
       pendingOrderRequestsRef.current = [];
       orderLinesRef.current = [];
+      additionalItemInProgressRef.current = false;
       lastQuotedProductRef.current = null;
       queuedAdditionalProductRef.current = null;
       setStage("submitted");
@@ -1028,6 +1040,32 @@ export function ChatDemo() {
       setStage("quantity"); setSuggestions(["1", "6", "12", "24"]); return;
     }
 
+    if (shouldStartFreshAdditionalItem({
+      message: clean,
+      additionalItemInProgress: additionalItemInProgressRef.current,
+      completedItemCount: orderLinesRef.current.length,
+    })) {
+      syncHandledTurnWithN8n(clean);
+      awaitingAdditionalProductRef.current = true;
+      queuedAdditionalProductRef.current = null;
+      lastUnavailableProductRef.current = null;
+      setPendingProduct(null);
+      setPendingQuantity(null);
+      setPendingQuote(null);
+      setConfirmedProduct(null);
+      setLastProducts([]);
+      setStage("discover");
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh"
+          ? "好的，我已保留询价摘要中已添加的商品。您接下来要添加什么不同的商品？请告诉我商品名称和数量。"
+          : "Sure. I’ve kept the items already added to your enquiry summary. What different product would you like to add next? Please include the item name and quantity." },
+      ]);
+      setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "取消"] : ["Finish enquiry summary", "Cancel additional item"]);
+      setQuery("");
+      return;
+    }
+
     if (clean === "Choose another item" || clean === "选择其他商品") {
       syncHandledTurnWithN8n(clean);
       const currentProduct = confirmedProduct ?? pendingProduct ?? lastUnavailableProductRef.current ?? lastProducts[0] ?? null;
@@ -1121,8 +1159,14 @@ export function ChatDemo() {
           : replyLanguage === "zh" ? ["重新查询", "浏览商品"] : ["Search again", "Browse products"]); return;
     }
 
-    const declinesUnavailableItem = /^(?:no|no thanks|no thank you|not now|不用了(?:[，,]?\s*谢谢)?|不需要|暂时不要)[.!。！\s]*$/iu.test(clean);
-    if (confirmedProduct?.stock_status === "out_of_stock" && declinesUnavailableItem) {
+    const declinesUnavailableRecovery = declinesUnavailableItem(clean)
+      && hasUnavailableProductContext({
+        confirmedProduct,
+        pendingProduct,
+        rememberedUnavailableProduct: lastUnavailableProductRef.current,
+        displayedProducts: lastProducts,
+      });
+    if (declinesUnavailableRecovery) {
       syncHandledTurnWithN8n(clean);
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
@@ -1130,6 +1174,8 @@ export function ChatDemo() {
           ? "没问题，感谢您向 Sia Huat 查询。如果之后需要其他商品，我很乐意继续帮您。"
           : "No problem. Thank you for checking with Sia Huat. If you need another item later, I’ll be happy to help." },
       ]);
+      lastUnavailableProductRef.current = null;
+      setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setLastProducts([]);
       setQuery(""); setSuggestions([]); setStage("complete"); return;
     }
 
@@ -1486,6 +1532,7 @@ export function ChatDemo() {
     shownProductIdsRef.current = new Set();
     pendingOrderRequestsRef.current = [];
     awaitingAdditionalProductRef.current = false;
+    additionalItemInProgressRef.current = false;
     lastQuotedProductRef.current = null;
     queuedAdditionalProductRef.current = null;
     lastUnavailableProductRef.current = null;
