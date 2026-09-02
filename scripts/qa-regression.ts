@@ -1477,6 +1477,15 @@ await check("MATCH-015", "Typo-tolerant relevance", "got 7 pcs noodal strainner 
   );
   return invalid ? `Typo-heavy noodle-strainer request returned an unsuitable item: ${invalid.name}` : null;
 }, [], 20_000);
+await check("MATCH-016", "Explicit manual-operation relevance", "Add 2 manual coffee grinders.", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected available manual coffee grinders";
+  const invalid = products.find((product) => !/\bmanual\b/i.test(product.name));
+  if (invalid) return `Manual-grinder request returned a product without manual evidence: ${invalid.name}`;
+  return products.every((product) => product.stock_status === "in_stock" && Number(product.available_quantity ?? 0) >= 2)
+    ? null
+    : "Manual-grinder options must have at least two units available";
+}, [], 20_000);
 await check("MATCH-008", "Human tone", "Got chef knife anot?", (reply) => {
   if (/supabase|database|stock_id|list_price/i.test(reply.message)) return "Customer-facing reply exposed implementation jargon";
   return (reply.products?.length ?? 0) <= 3 ? null : "Customer-facing reply showed more than 3 options";

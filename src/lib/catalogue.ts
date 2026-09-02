@@ -176,6 +176,10 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!/\b(?:electric|cordless|powered|mixer|blender)\b/.test(candidate)) return false;
     if (!/\b(?:whisks?|blenders?|mixer|3[ -]?in[ -]?1|three[ -]?in[ -]?one)\b/.test(candidate)) return false;
   }
+  const requestsManualGrinder = /\bmanual\b/.test(requested)
+    && /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/.test(requested)
+    && !/\b(?:not|no|non[ -]?)\s*manual\b/.test(requested);
+  if (requestsManualGrinder && !/\bmanual\b/.test(candidate)) return false;
   if (/\bsteak\s+tongs?\b/.test(requested) && !/\bsteak\s+tongs?\b/.test(candidate)) return false;
   if (/\bcooking\s+tongs?\b/.test(requested)) {
     if (!/\b(?:cooking|kitchen|steak)\s+tongs?\b|\btongs?\b[\s\S]*\b(?:cooking|kitchen|steak)\b/.test(candidate)) return false;

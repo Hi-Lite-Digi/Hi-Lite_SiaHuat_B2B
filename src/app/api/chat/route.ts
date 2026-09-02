@@ -396,6 +396,12 @@ function matchesExplicitProductCategory(message: string, product: Product) {
     return /\b(?:electric|cordless|powered|mixer|blender)\b/i.test(productText)
       && /\b(?:whisks?|blenders?|mixer|3[ -]?in[ -]?1|three[ -]?in[ -]?one)\b/i.test(productText);
   }
+  const requestsManualGrinder = /\bmanual\b/i.test(message)
+    && /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(message)
+    && !/\b(?:not|no|non[ -]?)\s*manual\b/i.test(message);
+  if (requestsManualGrinder) {
+    return /\bgrinders?\b/i.test(productText) && /\bmanual\b/i.test(productText);
+  }
   if (/\bsteak\s+tongs?\b/i.test(message)) return /\bsteak\s+tongs?\b/i.test(productText);
   if (/\bcooking\s+tongs?\b/i.test(message)) {
     return /\b(?:cooking|kitchen|steak)\s+tongs?\b|\btongs?\b[\s\S]*\b(?:cooking|kitchen|steak)\b/i.test(productText)
