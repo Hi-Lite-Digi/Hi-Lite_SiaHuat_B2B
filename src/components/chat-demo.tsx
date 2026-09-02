@@ -76,7 +76,7 @@ function whatsAppQuoteMessage(order: QuoteSummary | QuoteSummary[], confirmed = 
   if (language === "zh") {
     const lines = [
       confirmed
-        ? "谢谢确认。我已将这份询价记录下来，交由 Sia Huat 销售人员审核。"
+        ? "您的询价摘要已准备好。此演示不会自动发送给销售人员。"
         : quotes.length > 1 ? `请检查以下 ${quotes.length} 件商品。` : "请检查以下询价内容。",
       "",
       "*订单摘要*",
@@ -94,14 +94,14 @@ function whatsAppQuoteMessage(order: QuoteSummary | QuoteSummary[], confirmed = 
     });
     if (quotes.length > 1) lines.push("", `*总计：* $${grandTotal.toFixed(2)}（未含 GST）`);
     lines.push("", confirmed
-      ? "目前尚未正式下单。销售团队会与您确认最终订单。"
-      : "目前尚未正式下单。您可以继续添加商品，或确认订单询价。");
+      ? "目前尚未正式下单。请使用上方 PDF 按钮下载摘要，并手动发给 Sia Huat 销售人员以确认报价、库存、付款和送货。"
+      : "目前尚未正式下单。您可以继续添加商品，或完成询价摘要。");
     return lines.join("\n");
   }
 
   const lines = [
     confirmed
-      ? "Thank you for confirming. I’ve recorded this as an enquiry for Sia Huat staff review."
+      ? "Your enquiry summary is ready. This demo has not sent it to Sia Huat sales staff."
       : quotes.length > 1 ? `Please review these ${quotes.length} items.` : "Please review this enquiry.",
     "",
     "*ORDER SUMMARY*",
@@ -119,8 +119,8 @@ function whatsAppQuoteMessage(order: QuoteSummary | QuoteSummary[], confirmed = 
   });
   if (quotes.length > 1) lines.push("", `*GRAND TOTAL:* $${grandTotal.toFixed(2)} (ex GST)`);
   lines.push("", confirmed
-    ? "No purchase has been placed yet. The sales team will confirm the final order with you."
-    : "No purchase has been placed yet. Use the buttons below to add another item or submit this enquiry.");
+    ? "No purchase has been placed. Download the PDF above and share it with your Sia Huat sales contact for quotation and order confirmation."
+    : "No purchase has been placed yet. Use the buttons below to add another item or finish this enquiry summary.");
   return lines.join("\n");
 }
 
@@ -199,11 +199,11 @@ function productOptionPrompt(products: Product[], language: ChatLanguage = "en")
     product.stock_status === "out_of_stock" ? [] : [String(index + 1)],
   );
   if (language === "zh") {
-    if (options.length === 0) return "这些缺货商品仅供参考；Claire 正在协助寻找替代货源。";
+    if (options.length === 0) return "这些缺货商品仅供参考。尚未发送采购请求；请下载 PDF 并手动联系 Sia Huat 销售人员。";
     if (options.length < 2) return "回复 1 即可选择这件商品。";
     return `请回复 ${options.join("、")} 选择商品。`;
   }
-  if (options.length === 0) return "These out-of-stock matches are shown for reference only while Claire helps source an option.";
+  if (options.length === 0) return "These out-of-stock matches are shown for reference only. No sourcing request has been sent; download the PDF and contact Sia Huat sales for manual sourcing.";
   if (options.length < 2) return "Reply with 1 to choose this item.";
   return `Reply with ${options.slice(0, -1).join(", ")} or ${options.at(-1)}.`;
 }
@@ -673,10 +673,10 @@ export function ChatDemo() {
     setQuery("");
     setStage("clarify");
     setSuggestions(nextQueuedRequest
-      ? [conversationLanguage === "zh" ? nextQueuedRequest : `Continue: ${nextQueuedLabel}`, conversationLanguage === "zh" ? "确认订单询价" : "Submit enquiry now"]
+      ? [conversationLanguage === "zh" ? nextQueuedRequest : `Continue: ${nextQueuedLabel}`, conversationLanguage === "zh" ? "完成询价摘要" : "Finish enquiry summary"]
       : conversationLanguage === "zh"
-        ? ["确认订单询价", "再加一件商品", "更改数量"]
-        : ["Submit enquiry", "Add another item", "Change quantity"]);
+        ? ["完成询价摘要", "再加一件商品", "更改数量"]
+        : ["Finish enquiry summary", "Add another item", "Change quantity"]);
   }
 
   function showQuantityLimit(userText: string, quantity: number, product: Product, limit: number) {
@@ -798,7 +798,7 @@ export function ChatDemo() {
       pendingOrderRequestsRef.current = [];
       orderLinesRef.current = [];
       setStage("submitted");
-      setSuggestions(replyLanguage === "zh" ? ["开始新的询价"] : ["Start another enquiry"]);
+      setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "开始新的询价"] : ["Download enquiry PDF", "Start another enquiry"]);
       setQuery("");
       return;
     }
@@ -976,15 +976,32 @@ export function ChatDemo() {
       setQuery(""); setSuggestions([]); setStage("complete"); return;
     }
 
-    if ((clean === "Continue for staff review" || clean === "交由人员确认") && confirmedProduct) {
+    const preparesStaffReview = clean === "Prepare staff review summary"
+      || clean === "Continue for staff review"
+      || clean === "准备人工审核摘要"
+      || clean === "交由人员确认";
+    if (preparesStaffReview && !confirmedProduct) {
+      syncHandledTurnWithN8n(clean);
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh"
+          ? "已在本对话中保留您的要求。此演示不会自动联系销售人员。请下载 PDF 并手动发给您的 Sia Huat 销售联系人。"
+          : "I’ve kept your requirements in this conversation. This demo does not contact sales automatically. Download the PDF and share it with your Sia Huat sales contact to continue." },
+      ]);
+      setStage("submitted");
+      setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "选择其他商品"] : ["Download enquiry PDF", "Choose another item"]);
+      setQuery("");
+      return;
+    }
+    if (preparesStaffReview && confirmedProduct) {
       syncHandledTurnWithN8n(clean);
       if (pendingQuantity) {
         const quantity = pendingQuantity;
         setMessages((current) => [...current,
           { id: nextId.current++, role: "user", text: clean },
-          { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `我已记录您需要 ${quantity} ${confirmedProduct.uom_id} 的 ${confirmedProduct.name}，销售人员会确认库存和最终价格。` : `I’ve recorded ${quantity} ${confirmedProduct.uom_id} of ${confirmedProduct.name} for staff to verify. They will confirm the available quantity and final price.`, selectedProduct: confirmedProduct },
+          { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `已在本对话中保留您需要 ${quantity} ${confirmedProduct.uom_id} 的 ${confirmedProduct.name}。此演示不会自动联系销售人员。请下载 PDF 并手动发给 Sia Huat 销售联系人，以确认库存和最终价格。` : `I’ve kept ${quantity} ${confirmedProduct.uom_id} of ${confirmedProduct.name} in this conversation. This demo does not contact sales automatically. Download the PDF and share it with your Sia Huat sales contact so they can verify availability and final price.`, selectedProduct: confirmedProduct },
         ]);
-        setPendingQuantity(null); setStage("submitted"); setSuggestions(replyLanguage === "zh" ? ["选择其他商品"] : ["Choose another item"]); return;
+        setPendingQuantity(null); setStage("submitted"); setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "选择其他商品"] : ["Download enquiry PDF", "Choose another item"]); return;
       }
       setStage("quantity");
       setMessages((current) => [...current,
@@ -1042,10 +1059,10 @@ export function ChatDemo() {
     if (pendingQuote && !startingAdditionalProduct) {
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
-        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "这份询价尚未提交。请选择“确认订单询价”、“更改数量”或“选择其他商品”。" : "This enquiry is still open. Use a button below, or type the name of the next product you need." },
+        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "这份询价摘要尚未完成。请使用下方按钮，或输入下一件商品的名称。" : "This enquiry summary is still open. Use a button below, or type the name of the next product you need." },
       ]);
       setQuery("");
-      setSuggestions(replyLanguage === "zh" ? ["确认订单询价", "更改数量", "选择其他商品"] : ["Submit enquiry", "Change quantity", "Add another item"]);
+      setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "更改数量", "选择其他商品"] : ["Finish enquiry summary", "Change quantity", "Add another item"]);
       return;
     }
 
@@ -1155,11 +1172,11 @@ export function ChatDemo() {
         {
           id: nextId.current++, role: "assistant",
           text: conversationLanguage === "zh"
-            ? `这件商品无法选择，因为 Sia Huat 网站显示完全缺货。${quantity ? `我已保留您需要的数量 ${quantity}，` : ""}人工采购协助仍在进行中。您可以选择其他有库存的商品，或告诉我不同的规格。`
-            : `That result cannot be selected because the Sia Huat website shows it is completely out of stock. ${quantity ? `I’ve kept your requested quantity of ${quantity}, and ` : ""}human sourcing is already in progress. Choose another available item or tell me a different specification.`,
+            ? `这件商品无法选择，因为 Sia Huat 网站显示完全缺货。${quantity ? `已在本对话中保留数量 ${quantity}。` : ""}尚未发送人工采购请求。您可以选择其他有库存的商品、更改规格，或准备摘要手动发给销售人员。`
+            : `That result cannot be selected because the Sia Huat website shows it is completely out of stock. ${quantity ? `I’ve kept your requested quantity of ${quantity} in this conversation. ` : ""}No sourcing request has been sent. Choose another available item, change a specification, or prepare a summary to share with sales manually.`,
         },
       ]);
-      setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "联系人工"] : ["Choose another item", "Speak to a human"]); return;
+      setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]); return;
     }
     const quantity = requestedQuantity(userText) ?? pendingQuantity;
     setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
@@ -1202,9 +1219,9 @@ export function ChatDemo() {
         if (quantity !== null && check.availableQuantity === null) {
           setStage("clarify");
           setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
-            ? `我已记录您需要 ${quantity} ${product.uom_id}，但网站无法确认确切库存。您要查看其他选择，还是交由 Sia Huat 人员确认？`
-            : `I have your request for ${quantity} ${product.uom_id}, but the available quantity could not be confirmed. Would you like another option, or should Sia Huat staff verify it?`, selectedProduct: liveProduct }]);
-          setSuggestions(conversationLanguage === "zh" ? ["交由人员确认", "选择其他商品"] : ["Continue for staff review", "Choose another item"]);
+            ? `已在本对话中保留您需要 ${quantity} ${product.uom_id}，但网站无法确认确切库存。您要查看其他选择，还是准备摘要手动发给 Sia Huat 销售人员？`
+            : `I have your request for ${quantity} ${product.uom_id}, but the available quantity could not be confirmed. Would you like another option, or should I prepare the details for you to share with Sia Huat sales manually?`, selectedProduct: liveProduct }]);
+          setSuggestions(conversationLanguage === "zh" ? ["准备人工审核摘要", "选择其他商品"] : ["Prepare staff review summary", "Choose another item"]);
           return;
         }
         if (quantity !== null && check.availableQuantity !== null && quantity > check.availableQuantity) {
@@ -1234,21 +1251,21 @@ export function ChatDemo() {
         setStage("clarify");
         setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
           ? quantity
-            ? `我已记录您需要 ${quantity} ${product.uom_id}，但网站无法确认库存。您要查看其他选择，还是交由 Sia Huat 人员确认？`
-            : "网站无法确认库存。您要查看其他选择，还是交由 Sia Huat 人员确认？"
+            ? `已在本对话中保留您需要 ${quantity} ${product.uom_id}，但网站无法确认库存。您要查看其他选择，还是准备摘要手动发给 Sia Huat 销售人员？`
+            : "网站无法确认库存。您要查看其他选择，还是准备摘要手动发给 Sia Huat 销售人员？"
           : quantity
-            ? `I have your request for ${quantity} ${product.uom_id}, but the available quantity could not be confirmed. Would you like another option, or should Sia Huat staff verify it?`
-            : "The available quantity could not be confirmed. Would you like another option, or should Sia Huat staff verify this item?", selectedProduct: liveProduct }]);
-        setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "交由人员确认"] : ["Choose another item", "Continue for staff review"]);
+            ? `I have your request for ${quantity} ${product.uom_id}, but the available quantity could not be confirmed. Would you like another option, or should I prepare the details for you to share with Sia Huat sales manually?`
+            : "The available quantity could not be confirmed. Would you like another option, or should I prepare the details for you to share with Sia Huat sales manually?", selectedProduct: liveProduct }]);
+        setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]);
       }
     } catch {
       if (quantity !== null) {
         setStage("clarify");
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `我已记录您需要 ${quantity} ${product.uom_id}，但无法确认库存和价格。要交由 Sia Huat 人员确认吗？` : `I have your request for ${quantity} ${product.uom_id}, but the available quantity and price could not be confirmed. Would you like Sia Huat staff to verify it?`, selectedProduct: product }]);
-        setSuggestions(conversationLanguage === "zh" ? ["交由人员确认", "选择其他商品"] : ["Continue for staff review", "Choose another item"]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `已在本对话中保留您需要 ${quantity} ${product.uom_id}，但无法确认库存和价格。要准备摘要手动发给 Sia Huat 销售人员吗？` : `I have your request for ${quantity} ${product.uom_id}, but the available quantity and price could not be confirmed. Would you like me to prepare the details for you to share with Sia Huat sales manually?`, selectedProduct: product }]);
+        setSuggestions(conversationLanguage === "zh" ? ["准备人工审核摘要", "选择其他商品"] : ["Prepare staff review summary", "Choose another item"]);
       } else {
         setStage("quantity");
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时无法确认库存。\n\n您需要多少 ${product.uom_id}？销售人员会进一步确认。` : `I couldn’t confirm the live stock just now, but I still have the selected item.\n\nHow many ${product.uom_id} do you need for staff verification?`, selectedProduct: product }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时无法确认库存，但我仍保留了已选商品。\n\n您需要多少 ${product.uom_id}？完成摘要后，请手动发给销售人员确认。` : `I couldn’t confirm the live stock just now, but I still have the selected item.\n\nHow many ${product.uom_id} do you need? After the summary is ready, share it with sales manually for verification.`, selectedProduct: product }]);
         setSuggestions(["1", "6", "12", "24"]);
       }
     } finally {
@@ -1437,6 +1454,14 @@ export function ChatDemo() {
     }
   }
 
+  function handleSuggestion(item: string) {
+    if (item === "Download enquiry PDF" || item === "下载询价 PDF") {
+      void saveConversationAsPdf();
+      return;
+    }
+    void submit(item);
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); void submit(query); }
 
   return <div onPaste={handleImagePaste} className="conversation-export min-w-0 w-full max-w-[490px] rounded-[2.5rem] bg-[#112f29] p-2 shadow-[0_35px_90px_rgba(21,54,47,.24)] sm:rounded-[3.3rem] sm:p-3">
@@ -1452,7 +1477,7 @@ export function ChatDemo() {
           {message.time && <MessageTimestamp role={message.role} time={message.time} />}
         </div>)}
         {loading && <div aria-label="Sia Huat is typing" aria-live="polite" className="flex w-fit items-center gap-1.5 rounded-2xl bg-white px-4 py-3 shadow-sm"><i className="typing-dot" /><i className="typing-dot" /><i className="typing-dot" /></div>}
-        {!loading && suggestions.length > 0 && <div className="chat-suggestions flex flex-wrap gap-2">{suggestions.map((item) => <button key={item} onClick={() => void submit(item)} className="rounded-full border border-[#176853]/20 bg-white/90 px-3 py-2 text-xs font-medium text-[#176853] hover:bg-white">{item}</button>)}</div>}
+        {!loading && suggestions.length > 0 && <div className="chat-suggestions flex flex-wrap gap-2">{suggestions.map((item) => <button key={item} onClick={() => handleSuggestion(item)} className="rounded-full border border-[#176853]/20 bg-white/90 px-3 py-2 text-xs font-medium text-[#176853] hover:bg-white">{item}</button>)}</div>}
         <div ref={conversationEnd} />
       </div>
       <div className="chat-composer border-t border-[#15362f]/10 bg-white p-3">

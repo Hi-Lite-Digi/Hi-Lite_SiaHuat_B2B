@@ -124,8 +124,8 @@ export function confirmsDisplayedProduct(message: string) {
 
 export function confirmsOrderRequest(message: string) {
   const normalized = message.trim();
-  return /^(?:(?:ok(?:ay|ie)?|yes|yup|yeah|sure)[,\s-]*)?(?:confirm(?:ed)?(?:\s+(?:the\s+)?(?:order|order request|enquiry))?|place the enquiry|submit(?:\s+the)?\s+enquiry(?:\s+now)?|send the enquiry|submit for review)(?:[.!\s]*)$/i.test(normalized)
-    || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核)[。.！!\s]*$/u.test(normalized);
+  return /^(?:(?:ok(?:ay|ie)?|yes|yup|yeah|sure)[,\s-]*)?(?:confirm(?:ed)?(?:\s+(?:the\s+)?(?:order|order request|enquiry))?|place the enquiry|submit(?:\s+the)?\s+enquiry(?:\s+now)?|send the enquiry|submit for review|finish(?:\s+the)?(?:\s+enquiry)?\s+summary|finish summary)(?:[.!\s]*)$/i.test(normalized)
+    || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核|完成询价摘要)[。.！!\s]*$/u.test(normalized);
 }
 
 const PRODUCT_NOUN = /\b(?:apron|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;

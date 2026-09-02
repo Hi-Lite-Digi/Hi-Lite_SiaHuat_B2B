@@ -13,6 +13,7 @@ import {
   type FastChatInput,
   type FastReply,
 } from "@/lib/chat-intent";
+import { requestedQuantity } from "@/lib/chat-turn";
 
 export { isCatalogueRequest } from "@/lib/chat-intent";
 
@@ -69,13 +70,13 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(?:call(?:ing)?|contact|get)\s+(?:the\s+)?police\b|\bhello\s+police\b/i.test(message)) {
     return reply(
-      "I’m sorry we kept showing the wrong items. I’ll stop the product suggestions and hand this to a human colleague for review. They’ll be here in about 5–10 minutes.",
-      ["Speak to a human"],
+      "I’m sorry the suggestions were not useful. I’ll stop the product suggestions. This demo cannot contact a person automatically; use the PDF button to save the conversation and contact Sia Huat sales directly.",
+      ["Prepare staff review summary"],
     );
   }
 
   if (requestsHuman && !asksAboutIdentity) {
-    return reply("I’ve alerted a human colleague. They’ll be here in about 5–10 minutes.", []);
+    return reply("I can’t connect you to a person from this demo. I’ve kept the enquiry details in this conversation; use the PDF button and contact Sia Huat sales directly.", ["Continue product enquiry"]);
   }
 
   if (asksOperationalFollowup) {
@@ -85,8 +86,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       : null;
     return reply(
       suppliedReference
-        ? `I’ve recorded reference ${suppliedReference} and alerted a human colleague to check it. They’ll be here in about 5–10 minutes.`
-        : "I’ve alerted a human colleague to check this. They’ll be here in about 5–10 minutes. Please share the quotation, invoice or order number if you have it.",
+        ? `Reference ${suppliedReference} is kept in this conversation. I can’t check its status or notify staff from this demo. Please quote this reference when contacting Sia Huat sales directly.`
+        : "I can’t check the status or notify staff from this demo. Please share the quotation, invoice or order number if you have it, then contact Sia Huat sales directly.",
       suppliedReference ? ["Continue product enquiry"] : ["Share reference number", "Continue product enquiry"],
     );
   }
@@ -97,6 +98,28 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     && /identify the item confidently/i.test(item.content),
   );
   const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conve(?:yor|yr)|slots?|conve(?:yor|yr))\b/i.test(message);
+  const photoSuggestsYaKunToaster = Boolean(input.image)
+    && /\bya\s*kun\b|\b(?:not|non[ -]?)\s*conve(?:yor|yr)\b/i.test(message);
+  // The customer's explicit product wording is more reliable than an uncertain
+  // image label. This prevents a toaster photo from being routed to an
+  // unrelated family when vision recognition guesses incorrectly.
+  if (photoSuggestsYaKunToaster) {
+    const suppliedSlots = message.match(/\b(4|6)\s*[ -]?slots?\b/i)?.[1] ?? null;
+    // Once the customer supplies the slot count, let the catalogue path run.
+    // The toaster category recognises Ya Kun/non-conveyor wording even when
+    // the customer omits the word "toaster".
+    if (suppliedSlots) return null;
+    const parsedQuantity = requestedQuantity(message);
+    const quantity = parsedQuantity !== null
+      ? String(parsedQuantity)
+      : input.context?.quantity
+        ? String(input.context.quantity)
+        : null;
+    return reply(
+      `Got it—you want a Ya Kun-style pop-up/slot toaster like the photo, not a conveyor toaster.${quantity ? ` I’ve kept quantity ${quantity}.` : ""} Choose 4 or 6 slots so I can check the closest catalogue option, availability and price.`,
+      ["4-slot pop-up toaster", "6-slot pop-up toaster"],
+    );
+  }
   if (followsAmbiguousPhotoClarification && currentCategory === "toaster" && !specifiesToasterStyle) {
     const savedQuantity = input.context?.quantity
       ? ` I’ve kept quantity ${input.context.quantity}.`
@@ -129,7 +152,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (humanHandoffContext && /^(no thanks|no thank you|not anymore|cancel (the )?(human )?(request|follow up)|never mind)$/.test(simple)) {
     return reply(
-      `No problem—I won’t request human follow-up.${activeTask ? ` Your ${activeTask.replace(/^your /, "")} enquiry is still here.` : " What else can I help you find?"}`,
+      `No problem—I won’t continue with the manual contact guidance.${activeTask ? ` Your ${activeTask.replace(/^your /, "")} enquiry is still in this conversation.` : " What else can I help you find?"}`,
       activeTask ? ["Continue with my enquiry", "Start again"] : ["Find a product", "Browse products"],
     );
   }
@@ -379,8 +402,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       /\bstainless(?:\s+steel)?\b/i.test(message) ? "stainless steel" : null,
     ].filter(Boolean).join(" ");
     return reply(
-      `I’ve kept both items${pairQuantity ? ` at quantity ${pairQuantity} each` : ""}: ${specification ? `${specification} ` : ""}stockpots and strainers that fit those exact pots. I can’t verify the fit safely from the catalogue alone, so I’ve alerted a human colleague to source and confirm the compatible pair. They’ll be here in about 5–10 minutes.`,
-      ["Share pot dimensions", "Continue product enquiry"],
+      `I’ve kept both items${pairQuantity ? ` at quantity ${pairQuantity} each` : ""}: ${specification ? `${specification} ` : ""}stockpots and strainers that fit those exact pots. I can’t verify the fit safely from the catalogue alone. Download the PDF and ask Sia Huat sales to confirm and source the compatible pair.`,
+      ["Share pot dimensions", "Prepare staff review summary"],
     );
   }
 
@@ -430,8 +453,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       ?? (input.context?.quantity ? String(input.context.quantity) : null);
     const quantityCopy = eachQuantity ? ` Quantity ${eachQuantity} each.` : "";
     return reply(
-      `Got it—I’ve kept both items: stockpots and matching strainers that fit those exact pots.${quantityCopy} A human colleague is sourcing and confirming the compatible pair. They’ll be here in about 5–10 minutes.`,
-      ["Share pot dimensions", "Continue product enquiry"],
+      `Got it—I’ve kept both items: stockpots and matching strainers that fit those exact pots.${quantityCopy} No sourcing request has been sent. Download the PDF and ask Sia Huat sales to confirm and source the compatible pair.`,
+      ["Share pot dimensions", "Prepare staff review summary"],
     );
   }
   if (/^(show both|both items|both|both start with (knife|pan)|start with (knife|pan))$/.test(simple) && rememberedCategorySet.length > 1) {
@@ -581,7 +604,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(are you (an? )?(ai|bot|chatbot)|is this (an? )?(ai|bot|chatbot))\b/.test(simple)) {
     return reply(
-      "Yes, I’m Sia Huat’s AI chat assistant. I can help with the catalogue and enquiries; the sales team reviews everything before it’s confirmed.",
+      "Yes, I’m Sia Huat’s AI chat assistant. I can help with the catalogue and prepare an enquiry summary. This demo does not send it automatically; download the PDF and share it with a salesperson for review.",
       ["Find a product", "Browse products"],
     );
   }
@@ -599,7 +622,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   if (/\b(are you (a )?(human|real person)|am i talking to (a )?(human|person))\b/.test(simple)) {
     return reply(
-      "I’m Claire, Sia Huat’s AI chat assistant. The sales team reviews enquiries before anything is confirmed.",
+      "I’m Claire, Sia Huat’s AI chat assistant. I can prepare an enquiry summary, but this demo does not notify sales automatically. Download the PDF and share it with a salesperson for review.",
       ["Find a product", "Browse products"],
     );
   }
@@ -668,6 +691,10 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
 
   // Once a product conversation starts, n8n remains responsible for product context.
   if (hasProductContext || hasAssistantClarificationContext || currentCategory || isCatalogueRequest(message)) return null;
+
+  // A photo can supply the missing product noun. Let the image-aware catalogue
+  // path inspect it instead of rejecting casual text such as "this Ya Kun type".
+  if (input.image) return null;
 
   // Keep unrecognised open-ended conversation inside the Sia Huat product
   // scope. Passing it to a general conversational model can produce a fluent

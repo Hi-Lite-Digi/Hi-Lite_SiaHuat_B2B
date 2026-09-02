@@ -42,7 +42,7 @@ export const productCategories = [
   { pattern: /\b(strainers?|strainners?|straners?|skimmers?|colanders?)\b/i, label: "strainer" },
   { pattern: /\b(?:utility|storage|dish|bus|cutlery|rectangular|multi[ -]?purpose)\s+(?:box|boxes|bin|bins)\b|\bcambox\b/i, label: "utility box" },
   { pattern: /\b(blender|blenders|blending machine)\b/i, label: "blender" },
-  { pattern: /\b(?:toasters?|toasers?)\b/i, label: "toaster" },
+  { pattern: /\b(?:toasters?|toasers?|ya\s+kun)\b|\b(?:not|non[ -]?)\s*(?:a\s+)?conve(?:yor|yr)\b/i, label: "toaster" },
   { pattern: /\b(?:step\s+)?(?:ladders?|stools?)\b/i, label: "ladder" },
   { pattern: /\b(?:butane\s+|gas\s+)?cartridges?\b/i, label: "gas cartridge" },
   { pattern: /\b(?:scrub\s+)?sponges?\b/i, label: "cleaning sponge" },
@@ -89,7 +89,7 @@ export function productCategory(message: string) {
   return matches[0]?.label ?? null;
 }
 
-const assistantClarificationPattern = /\?|\b(?:acceptable|would (?:that|this|it) work|do you prefer|which (?:one|type|size|material)|what (?:kind|type|size|material)|is (?:that|this|it) (?:okay|ok|fine))\b/i;
+const assistantClarificationPattern = /\?|\b(?:acceptable|choose(?:\s+\d+\s+or\s+\d+)?|would (?:that|this|it) work|do you prefer|which (?:one|type|size|material)|what (?:kind|type|size|material)|is (?:that|this|it) (?:okay|ok|fine))\b/i;
 
 /**
  * Keeps a short customer follow-up attached to Claire's latest catalogue
@@ -318,9 +318,13 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   }
 
   if (activeCategory === "toaster") {
-    return /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|ya\s+kun|pop[ -]?up|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(joinedMessages)
-      ? "commercial pop-up toaster"
-      : "commercial toaster";
+    const latestSlotCount = [...customerMessages].reverse()
+      .map((content) => content.match(/\b(\d+)\s*[ -]?slots?\b/i)?.[1])
+      .find(Boolean) ?? null;
+    const isPopUp = /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|ya\s+kun|pop[ -]?up|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(joinedMessages);
+    return [latestSlotCount ? `${latestSlotCount}-slot` : null, isPopUp ? "commercial pop-up toaster" : "commercial toaster"]
+      .filter(Boolean)
+      .join(" ");
   }
 
   if (activeCategory === "utility box") {

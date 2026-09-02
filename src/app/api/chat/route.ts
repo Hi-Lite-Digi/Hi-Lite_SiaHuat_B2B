@@ -14,6 +14,7 @@ import {
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
+import { honestManualHandoff } from "@/lib/honest-handoff";
 import {
   catalogueHistoryWithClarification,
   catalogueMessageWithContext,
@@ -38,6 +39,9 @@ function prefersChinese(input: Pick<ChatRequest, "message" | "history">) {
 
 function chineseCustomerMessage<T extends { message: string; products?: Product[]; selectedProduct?: Product | null }>(reply: T) {
   if (/\p{Script=Han}/u.test(reply.message)) return reply.message;
+  if (/No staff member has been notified automatically|contact Sia Huat sales directly/i.test(reply.message)) {
+    return "已在本对话中保留您的要求，但尚未自动通知销售人员。请使用 PDF 按钮保存对话，并手动联系 Sia Huat 销售人员。";
+  }
   const products = reply.products ?? [];
   if (/couldn't find an exact .*water dispenser/i.test(reply.message)) {
     return products.length > 0
@@ -57,7 +61,8 @@ function chineseSuggestion(suggestion: string) {
     "Search again": "重新查询",
     "Choose another item": "选择其他商品",
     "No, thank you": "不用了，谢谢",
-    "Continue for staff review": "交由人员确认",
+    "Prepare staff review summary": "准备人工审核摘要",
+    "Continue for staff review": "准备人工审核摘要",
   };
   return translations[suggestion] ?? suggestion;
 }
@@ -69,11 +74,11 @@ function customerReply<T extends { message: string; suggestions?: string[]; prod
     input.message,
     catalogueHistoryWithClarification(input.message, input.history),
   );
-  const safeMessage = operationalFailure
+  const safeMessage = honestManualHandoff(operationalFailure
     ? useChinese
       ? `刚才的查询没有完成。我还记得您要找的是 ${rememberedRequest}。请再发送最后一个要求，我会继续。`
       : `That lookup didn’t finish, but I still have your ${rememberedRequest} request. Send the last detail once more and I’ll continue.`
-    : reply.message;
+    : reply.message);
   return {
     ...reply,
     message: useChinese ? chineseCustomerMessage({ ...reply, message: safeMessage }) : normalizeClaireMessage(safeMessage),
@@ -703,11 +708,11 @@ async function unavailableCatalogueReply(message: string): Promise<ChatReply> {
   if (sourceableCatalogueRequest
     || /\b(?:trolleys?|ladders?|step\s+stools?|rice\s+dispensers?|toasters?|(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|(?:electric|cordless|powered)\b[\s\S]{0,40}\bwhisks?|cooking\s+tongs?|steak\s+tongs?)\b/i.test(message)) {
     return {
-      message: `I couldn’t find ${requestedItem} in the current online catalogue, so I won’t show an accessory or unrelated item. I’ve kept your requested specification and quantity, and alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
+      message: `I couldn’t find ${requestedItem} in the current online catalogue, so I won’t show an accessory or unrelated item. I’ve kept your requested specification and quantity in this conversation. No sourcing request has been sent. Download the PDF and contact Sia Huat sales if you want them to source it manually.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,
-      suggestions: ["Share specifications", "Continue product enquiry"],
+      suggestions: ["Share specifications", "Prepare staff review summary", "Choose another item"],
     };
   }
   if (!useCase) {
@@ -1039,11 +1044,11 @@ async function groundedCatalogueReply(
       );
       if (allMatchingItemsOutOfStock) {
         return {
-          message: `I found a matching ${requestedCatalogueItem(message)}, but the matching catalogue item is out of stock. I’ve kept your requested quantity of ${minimumQuantity} and alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
+          message: `I found a matching ${requestedCatalogueItem(message)}, but the matching catalogue item is out of stock. I’ve kept your requested quantity of ${minimumQuantity} in this conversation. No sourcing request has been sent. Choose another item, or download the PDF and contact Sia Huat sales for manual sourcing.`,
           stage: "clarify",
           products: relevantProducts.slice(0, 3),
           selectedProduct: null,
-          suggestions: ["Speak to a human", "Choose another item"],
+          suggestions: ["Prepare staff review summary", "Choose another item"],
         };
       }
       const unitLabel = minimumQuantity === 1 ? "unit" : "units";
@@ -1055,7 +1060,7 @@ async function groundedCatalogueReply(
         products: [],
         selectedProduct: null,
         suggestions: minimumQuantity === 1
-          ? ["Choose another item", "Speak to a human"]
+          ? ["Choose another item", "Prepare staff review summary"]
           : ["Try a smaller quantity", "Choose another item"],
       };
     }
@@ -1222,8 +1227,8 @@ function guideAlternativeNoMatch(reply: ChatReply, customerMessage: string, cata
     .trim();
   return {
     ...reply,
-    message: `I couldn’t find another available option that meets all of your saved requirements for ${requestedItem}. I won’t show a product that breaks them. I’ve asked a human colleague to source a match. To widen the catalogue search now, tell me which one detail can change: brand, colour, size or style.`,
-    suggestions: ["Relax the brand", "Relax the colour or size", "Speak to a human"],
+    message: `I couldn’t find another available option that meets all of your saved requirements for ${requestedItem}. I won’t show a product that breaks them. No sourcing request has been sent. To widen the catalogue search now, tell me which one detail can change: brand, colour, size or style. You can also download the PDF and ask Sia Huat sales to source it manually.`,
+    suggestions: ["Relax the brand", "Relax the colour or size", "Prepare staff review summary"],
   };
 }
 
@@ -1248,11 +1253,11 @@ function enforceRequestedQuantityOptions(reply: ChatReply, message: string): Cha
   if (allCandidatesOutOfStock) {
     return {
       ...reply,
-      message: `The matching catalogue ${catalogueCandidates.length === 1 ? "item is" : "items are"} out of stock. I’ve kept your requested quantity of ${quantity} and alerted a human colleague to help source it. They’ll be here in about 5–10 minutes.`,
+      message: `The matching catalogue ${catalogueCandidates.length === 1 ? "item is" : "items are"} out of stock. I’ve kept your requested quantity of ${quantity} in this conversation. No sourcing request has been sent. Choose another item, or download the PDF and contact Sia Huat sales for manual sourcing.`,
       stage: "clarify",
       products: catalogueCandidates.slice(0, 3),
       selectedProduct: null,
-      suggestions: ["Speak to a human", "Choose another item"],
+      suggestions: ["Prepare staff review summary", "Choose another item"],
     };
   }
 
@@ -1283,7 +1288,7 @@ function enforceRequestedQuantityOptions(reply: ChatReply, message: string): Cha
     suggestions: foundAvailableMatch
       ? []
       : quantity === 1
-        ? ["Choose another item", "Speak to a human"]
+        ? ["Choose another item", "Prepare staff review summary"]
         : ["Try a smaller quantity", "Choose another item"],
   };
 }
@@ -1433,7 +1438,12 @@ async function addCutlerySetAvailabilityAnchor(reply: ChatReply, message: string
 }
 
 function explainUnavailableProducts(reply: ChatReply): ChatReply {
-  if (/alerted a human colleague/i.test(reply.message) && /out of stock/i.test(reply.message)) {
+  // Quantity enforcement has already produced the safest zero-stock response.
+  // Keep its saved quantity and honest manual next step instead of replacing
+  // it with a generic "want another option" message.
+  if (/out of stock/i.test(reply.message)
+    && /kept your requested quantity of\s+\d+/i.test(reply.message)
+    && /No sourcing request has been sent/i.test(reply.message)) {
     return reply;
   }
 
@@ -1568,11 +1578,11 @@ function ambiguousPhotoReply(input: ChatRequest): ChatReply {
   if (referencesTwoItems) {
     const quantityCopy = quantity === null ? "the requested quantity" : `${quantity} each`;
     return {
-      message: `I received the photo and kept ${quantityCopy} for items 1 and 2, but I can’t read their exact names or model numbers reliably. Type the two item names or model numbers shown in the picture, or choose Speak to a human. I won’t substitute a different product family.`,
+      message: `I received the photo and kept ${quantityCopy} for items 1 and 2, but I can’t read their exact names or model numbers reliably. Type the two item names or model numbers shown in the picture, or prepare a summary to share with sales manually. I won’t substitute a different product family.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,
-      suggestions: ["Type both item names", "Speak to a human", "Send a clearer photo"],
+      suggestions: ["Type both item names", "Prepare staff review summary", "Send a clearer photo"],
     };
   }
 
@@ -1590,7 +1600,7 @@ function ambiguousPhotoReply(input: ChatRequest): ChatReply {
     stage: "clarify",
     products: [],
     selectedProduct: null,
-    suggestions: ["Tell me the item name", "Send a clearer photo", "Speak to a human"],
+    suggestions: ["Tell me the item name", "Send a clearer photo", "Prepare staff review summary"],
   };
 }
 
@@ -1829,7 +1839,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       ? ""
       : riceDispenserModels.length > 1 ? ` at quantity ${modelQuantity} each` : ` at quantity ${modelQuantity}`;
     return {
-      message: `I’ve kept the rice dispenser ${riceDispenserModels.length === 1 ? "model" : "models"} ${modelCopy}${quantityCopy}. I can’t verify those exact models in the current online catalogue, so I won’t substitute a rice cooker or water dispenser. I’ve alerted a human colleague to source and confirm them. They’ll be here in about 5–10 minutes.`,
+      message: `I’ve kept the rice dispenser ${riceDispenserModels.length === 1 ? "model" : "models"} ${modelCopy}${quantityCopy}. I can’t verify those exact models in the current online catalogue, so I won’t substitute a rice cooker or water dispenser. No sourcing request has been sent. Download the PDF and ask Sia Huat sales to source and confirm them manually.`,
       stage: "clarify",
       products: [],
       selectedProduct: null,
@@ -2059,11 +2069,11 @@ async function processChat(input: ChatRequest) {
     if (!selectedProduct) {
       const quantityCopy = input.context?.quantity ? ` I’ve kept your requested quantity of ${input.context.quantity}.` : "";
       const reply: ChatReply = {
-        message: `None of the displayed results can be selected because they are completely out of stock.${quantityCopy} Human sourcing is already in progress. You can ask for a different specification or another item.`,
+        message: `None of the displayed results can be selected because they are completely out of stock.${quantityCopy} No sourcing request has been sent. Ask for a different specification or another item, or prepare a summary to share with Sia Huat sales manually.`,
         stage: "clarify",
         products: displayedProducts,
         selectedProduct: null,
-        suggestions: ["Choose another item", "Speak to a human"],
+        suggestions: ["Choose another item", "Prepare staff review summary"],
       };
       return NextResponse.json(customerReply(reply, input));
     }
@@ -2085,11 +2095,11 @@ async function processChat(input: ChatRequest) {
       const requested = quantity.kind === "valid" ? quantity.value : input.context?.quantity;
       const quantityCopy = requested ? ` I’ve kept your requested quantity of ${requested}.` : "";
       const reply: ChatReply = {
-        message: `That result cannot be selected because the Sia Huat website shows it is completely out of stock.${quantityCopy} Human sourcing is already in progress. Choose another available item or tell me a different specification.`,
+        message: `That result cannot be selected because the Sia Huat website shows it is completely out of stock.${quantityCopy} No sourcing request has been sent. Choose another available item, tell me a different specification, or prepare a summary to share with Sia Huat sales manually.`,
         stage: "clarify",
         products: displayedProducts,
         selectedProduct: null,
-        suggestions: ["Choose another item", "Speak to a human"],
+        suggestions: ["Choose another item", "Prepare staff review summary"],
       };
       return NextResponse.json(customerReply(reply, input));
     }
@@ -2121,10 +2131,12 @@ async function processChat(input: ChatRequest) {
     return NextResponse.json(customerReply(reply, input));
   }
 
+  const hasExplicitPhotoProductClue = productCategory(input.message) !== null
+    || /\b(?:ya\s*kun|pop[ -]?up|slot\s+toaster|\d+\s*[ -]?slots?|(?:not|non[ -]?)\s*(?:a\s+)?conve(?:yor|yr))\b/i.test(input.message);
   const hasUnusablePhotoOnlyReference = Boolean(
     input.image
     && isObviouslyUnusableImage(input.image)
-    && !productCategory(input.message)
+    && !hasExplicitPhotoProductClue
     && exactCodeCandidates(input.message).length === 0,
   );
   if (hasUnusablePhotoOnlyReference) {
