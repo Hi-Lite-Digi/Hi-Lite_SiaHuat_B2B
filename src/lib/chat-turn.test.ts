@@ -5,6 +5,7 @@ import {
   declinesUnavailableItem,
   hasUnavailableProductContext,
   requestedQuantity,
+  requestsAnotherOption,
   shouldStartFreshAdditionalItem,
 } from "./chat-turn";
 
@@ -85,4 +86,34 @@ test("restarts a failed additional-item search without treating it as an alterna
 test("retains quantity when common need or plate words are misspelled", () => {
   assert.equal(requestedQuantity("i ned 2 blak dinnr plates"), 2);
   assert.equal(requestedQuantity("2 blak dinnr pltes"), 2);
+});
+
+test("recognises natural requests for a different product option", () => {
+  for (const message of [
+    "another option",
+    "Can I see another one?",
+    "show me other products",
+    "something else please",
+    "No thanks, show another one",
+    "查看其他商品",
+    "不要这个，查看其他商品",
+  ]) {
+    assert.equal(requestsAnotherOption(message), true, `expected alternative request: ${message}`);
+  }
+});
+
+test("does not treat declining more options as an alternative request", () => {
+  for (const message of [
+    "I do not want another option",
+    "no more options",
+    "No thanks, no more options",
+    "not another one",
+    "not interested in other options",
+    "I do not need to see any more options",
+    "不要查看其他商品",
+    "不想看其他商品",
+    "不需要其他选项",
+  ]) {
+    assert.equal(requestsAnotherOption(message), false, `expected alternative decline: ${message}`);
+  }
 });

@@ -252,11 +252,19 @@ export function isProductRefinementOnly(message: string) {
 
 export function requestsAnotherOption(message: string) {
   const normalized = message.trim();
+  if (/^(?:no\s+thanks?[,.!\s-]*)?(?:no|not)\s+(?:more|other|different|another)\s*(?:items?|options?|products?|ones?)?/i.test(normalized)
+    || /\b(?:do\s+not|don['’]?t|dont)\s+(?:want|need)(?:\s+to)?(?:\s+(?:see|view|show|find|have|look\s+at))?\s+(?:any\s+)?(?:more|other|different|another)\s+(?:items?|options?|products?|ones?)\b/i.test(normalized)
+    || /\bnot\s+(?:interested|looking)\s+(?:in|for)\s+(?:any\s+)?(?:more|other|different|another)\s+(?:items?|options?|products?|ones?)\b/i.test(normalized)
+    || /\bnot\s+(?:another|a\s+different|any\s+more)\b/i.test(normalized)
+    || /^(?:不用|不要|不想|不需要)(?:再)?(?:查看|选择|看|找|显示)?(?:任何)?(?:其他|别的|另一个)(?:商品|产品|选项)?/u.test(normalized)) {
+    return false;
+  }
   return /\b(?:another|different|other|more)\s+(?:similar\s+)?(?:items?|options?|products?|ones?)\b/i.test(normalized)
     || /\b(?:another|different)\s+(?:(?:dark|light)\s+)?(?:brand|colou?r|size|style|material)\b/i.test(normalized)
     || /\b(?:show|share|give|find)\b[\s\S]{0,40}\b(?:more|different|other)\b(?:[\s\S]{0,20}\b(?:options?|ones?|items?|products?)\b)?/i.test(normalized)
     || /^(?:(?:i don'?t know[, ]*)?(?:(?:can|could|would) you\s+)?)?(?:recommend|recommend something|share (?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:a )?few(?:\s+more)?(?:\s+(?:options?|items?|products?))?|show (?:me )?(?:some )?(?:more )?options?|are there (?:any )?(?:more |other )?(?:options?|items?|products?|ones?)|got (?:any )?(?:more |other )?(?:options?|items?|products?|ones?))\??$/i.test(normalized)
     || /\b(?:show|give|find|see|look at|want|prefer)(?:\s+me)?\s+(?:something|anything)\s+(?:else|different)\b/i.test(normalized)
+    || /^(?:something|anything)\s+(?:else|different)(?:\s+please)?[.!?\s]*$/i.test(normalized)
     || /(?:选择|查看|显示|找)(?:另一个|其他|别的)(?:商品|产品|选项)?/u.test(normalized);
 }
 

@@ -193,9 +193,10 @@ function availableLimit(product: Product) {
     : null;
 }
 
-function quantitySuggestions(limit: number | null) {
+function quantitySuggestions(limit: number | null, language: ChatLanguage = "en") {
   const suggestions = [1, 6, 12, 24].filter((quantity) => limit === null || quantity <= limit);
-  return suggestions.length > 0 ? suggestions.map(String) : ["Choose another item"];
+  const anotherItem = language === "zh" ? "选择其他商品" : "Choose another item";
+  return [...suggestions.map(String), anotherItem];
 }
 
 function productOptionSuggestions(products: Product[]) {
@@ -316,6 +317,7 @@ export function ChatDemo() {
   const lastQuotedProductRef = useRef<Product | null>(null);
   const queuedAdditionalProductRef = useRef<string | null>(null);
   const lastUnavailableProductRef = useRef<Product | null>(null);
+  const replacingQuoteCodeRef = useRef<string | null>(null);
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -709,11 +711,13 @@ export function ChatDemo() {
 
   function showOrderReview(quantity: number, product: Product, userText?: string) {
     const quote = quoteFor(quantity, product);
+    const replacingQuoteCode = replacingQuoteCodeRef.current;
     const nextOrder = [
-      ...orderLinesRef.current.filter((line) => line.code !== quote.code),
+      ...orderLinesRef.current.filter((line) => line.code !== quote.code && line.code !== replacingQuoteCode),
       quote,
     ];
     orderLinesRef.current = nextOrder;
+    replacingQuoteCodeRef.current = null;
     additionalItemInProgressRef.current = false;
     awaitingAdditionalProductRef.current = false;
     lastQuotedProductRef.current = product;
@@ -857,6 +861,7 @@ export function ChatDemo() {
         }
       }
       queuedAdditionalProductRef.current = null;
+      replacingQuoteCodeRef.current = null;
       const latestQuote = orderLinesRef.current.at(-1) ?? pendingQuote;
       const latestProduct = lastQuotedProductRef.current;
       syncHandledTurnWithN8n(clean);
@@ -878,11 +883,14 @@ export function ChatDemo() {
     }
 
     const consumesAwaitingAdditionalProduct = awaitingAdditionalProduct && !returnsToExistingSummary;
+    const explicitlyAddsSeparateProduct = /\b(?:add|also|too|as well)\b|(?:再加|也要|还要)/iu.test(clean);
     const startingAdditionalProduct = !returnsToExistingSummary && (awaitingAdditionalProduct
       || queuedRequestIndex >= 0
       || ((pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
-        && requestsAdditionalProduct(clean)));
+        && requestsAdditionalProduct(clean)
+        && (replacingQuoteCodeRef.current === null || explicitlyAddsSeparateProduct)));
     if (startingAdditionalProduct) {
+      replacingQuoteCodeRef.current = null;
       additionalItemInProgressRef.current = true;
       if (queuedRequestIndex >= 0) {
         queuedRequestToConsume = pendingOrderRequestsRef.current[queuedRequestIndex];
@@ -928,6 +936,7 @@ export function ChatDemo() {
       additionalItemInProgressRef.current = false;
       lastQuotedProductRef.current = null;
       queuedAdditionalProductRef.current = null;
+      replacingQuoteCodeRef.current = null;
       setStage("submitted");
       setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "开始新的询价"] : ["Download enquiry PDF", "Start another enquiry"]);
       setQuery("");
@@ -957,6 +966,7 @@ export function ChatDemo() {
         setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "取消"] : ["Finish enquiry summary", "Cancel additional item"]);
         return;
       }
+      const quantityProduct = confirmedProduct ?? pendingProduct;
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean, voiceNote },
         {
@@ -972,7 +982,9 @@ export function ChatDemo() {
         },
       ]);
       setQuery("");
-      setSuggestions(confirmedProduct || pendingProduct ? ["1", "6", "12", "24"] : []);
+      setSuggestions(quantityProduct
+        ? quantitySuggestions(availableLimit(quantityProduct), replyLanguage)
+        : []);
       return;
     }
     if (pendingQuote && !startingAdditionalProduct && confirmedProduct && confirmedQuantity !== null) {
@@ -1037,7 +1049,7 @@ export function ChatDemo() {
       syncHandledTurnWithN8n(clean);
       setPendingQuote(null);
       setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }, { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `好的，您需要多少 ${confirmedProduct.uom_id} 的 ${confirmedProduct.name}？` : `Sure. How many ${confirmedProduct.uom_id} of ${confirmedProduct.name} do you need?`, selectedProduct: confirmedProduct }]);
-      setStage("quantity"); setSuggestions(["1", "6", "12", "24"]); return;
+      setStage("quantity"); setSuggestions(quantitySuggestions(availableLimit(confirmedProduct), replyLanguage)); return;
     }
 
     if (shouldStartFreshAdditionalItem({
@@ -1066,9 +1078,20 @@ export function ChatDemo() {
       return;
     }
 
-    if (clean === "Choose another item" || clean === "选择其他商品") {
+    const hasAlternativeProductContext = Boolean(
+      confirmedProduct
+      || pendingProduct
+      || lastUnavailableProductRef.current
+      || lastProducts.length > 0,
+    );
+    if (clean === "Choose another item"
+      || clean === "选择其他商品"
+      || (hasAlternativeProductContext && requestsAnotherOption(clean))) {
       syncHandledTurnWithN8n(clean);
       const currentProduct = confirmedProduct ?? pendingProduct ?? lastUnavailableProductRef.current ?? lastProducts[0] ?? null;
+      if (currentProduct && orderLinesRef.current.some((line) => line.code === currentProduct.stock_id)) {
+        replacingQuoteCodeRef.current = currentProduct.stock_id;
+      }
       const sourceWasCompletelyOutOfStock = currentProduct?.stock_status === "out_of_stock"
         || (currentProduct ? availableLimit(currentProduct) === 0 : false);
       const excludedStockIds = new Set(shownProductIdsRef.current);
@@ -1175,6 +1198,7 @@ export function ChatDemo() {
           : "No problem. Thank you for checking with Sia Huat. If you need another item later, I’ll be happy to help." },
       ]);
       lastUnavailableProductRef.current = null;
+      replacingQuoteCodeRef.current = null;
       setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setLastProducts([]);
       setQuery(""); setSuggestions([]); setStage("complete"); return;
     }
@@ -1206,7 +1230,7 @@ export function ChatDemo() {
         { id: nextId.current++, role: "user", text: clean },
         { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `好的，网站无法确认这件商品的库存，最终数量需要销售人员核实。您需要多少 ${confirmedProduct.uom_id}？` : `Okay. The website does not confirm stock for this item, so the final quantity will require staff verification. How many ${confirmedProduct.uom_id} do you need?`, selectedProduct: confirmedProduct },
       ]);
-      setSuggestions(["1", "6", "12", "24"]); return;
+      setSuggestions(quantitySuggestions(availableLimit(confirmedProduct), replyLanguage)); return;
     }
 
     const changedItem = clean.match(/\b(?:actually|instead|switch|change|rather|different|another).*?\b(knife|pan|glassware|tableware|coffee)\b/i);
@@ -1243,7 +1267,7 @@ export function ChatDemo() {
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100_000) {
         setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }, { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `请输入 ${confirmedProduct.uom_id} 的整数数量，例如 6 或 12。` : `Please enter a whole-number quantity in ${confirmedProduct.uom_id}, for example 6 or 12.`, selectedProduct: confirmedProduct }]);
         setQuery("");
-        setSuggestions(["1", "6", "12", "24"]); return;
+        setSuggestions(quantitySuggestions(availableLimit(confirmedProduct), replyLanguage)); return;
       }
 
       const limit = availableLimit(confirmedProduct);
@@ -1469,7 +1493,7 @@ export function ChatDemo() {
             ? "The website shows it as in stock, but did not return an exact quantity."
             : `Available: ${check.availableQuantity} ${product.uom_id}.`;
         setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `${availableText}\n\n您需要多少 ${product.uom_id}？` : `${availableText}\n\nHow many ${product.uom_id} do you need?`, selectedProduct: liveProduct }]);
-        setSuggestions(quantitySuggestions(check.availableQuantity));
+        setSuggestions(quantitySuggestions(check.availableQuantity, conversationLanguage));
       } else if (check.stockStatus === "out_of_stock") {
         setStage("clarify");
         setPendingQuantity(quantity);
@@ -1497,7 +1521,7 @@ export function ChatDemo() {
       } else {
         setStage("quantity");
         setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时无法确认库存，但我仍保留了已选商品。\n\n您需要多少 ${product.uom_id}？完成摘要后，请手动发给销售人员确认。` : `I couldn’t confirm the live stock just now, but I still have the selected item.\n\nHow many ${product.uom_id} do you need? After the summary is ready, share it with sales manually for verification.`, selectedProduct: product }]);
-        setSuggestions(["1", "6", "12", "24"]);
+        setSuggestions(quantitySuggestions(availableLimit(product), conversationLanguage));
       }
     } finally {
       setCheckingStock(false);
@@ -1536,6 +1560,7 @@ export function ChatDemo() {
     lastQuotedProductRef.current = null;
     queuedAdditionalProductRef.current = null;
     lastUnavailableProductRef.current = null;
+    replacingQuoteCodeRef.current = null;
     setMessages([firstMessage]);
     setConversationLanguage("en");
     setStage("discover");
