@@ -312,6 +312,8 @@ export function ChatDemo() {
   const submitRef = useRef<((value: string, voiceNote?: VoiceNote) => Promise<void>) | null>(null);
   const orderLinesRef = useRef<QuoteSummary[]>([]);
   const pendingOrderRequestsRef = useRef<string[]>([]);
+  const awaitingAdditionalProductRef = useRef(false);
+  const lastQuotedProductRef = useRef<Product | null>(null);
   const messagesRef = useRef(messages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -653,6 +655,7 @@ export function ChatDemo() {
       quote,
     ];
     orderLinesRef.current = nextOrder;
+    lastQuotedProductRef.current = product;
     const nextQueuedRequest = pendingOrderRequestsRef.current[0] ?? null;
     const nextQueuedLabel = nextQueuedRequest ? queuedRequestLabel(nextQueuedRequest) : null;
     setMessages((current) => [...current,
@@ -732,6 +735,16 @@ export function ChatDemo() {
 
     let messageForApi = clean;
     let newlyQueuedRequests: string[] = [];
+    let queuedRequestToConsume: string | null = null;
+    const consumeQueuedRequest = () => {
+      if (!queuedRequestToConsume) return;
+      const index = pendingOrderRequestsRef.current.indexOf(queuedRequestToConsume);
+      if (index >= 0) {
+        pendingOrderRequestsRef.current = pendingOrderRequestsRef.current.filter(
+          (_, requestIndex) => requestIndex !== index,
+        );
+      }
+    };
     const multiProductRequests = orderLinesRef.current.length === 0
       && pendingOrderRequestsRef.current.length === 0
       ? splitMultipleProductRequest(clean)
@@ -756,22 +769,50 @@ export function ChatDemo() {
       (request) => request.toLocaleLowerCase() === clean.toLocaleLowerCase()
         || (canMatchQueuedCategory && cleanCategory !== null && productCategory(request) === cleanCategory),
     );
-    const startingAdditionalProduct = queuedRequestIndex >= 0
-      || ((pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
-        && requestsAdditionalProduct(clean));
-    if (startingAdditionalProduct) {
-      if (queuedRequestIndex >= 0) {
-        messageForApi = pendingOrderRequestsRef.current[queuedRequestIndex];
-        pendingOrderRequestsRef.current = pendingOrderRequestsRef.current.filter((_, index) => index !== queuedRequestIndex);
-      }
+    const awaitingAdditionalProduct = awaitingAdditionalProductRef.current;
+    const hasExistingOrderSummary = pendingQuote !== null || orderLinesRef.current.length > 0;
+    const returnsToExistingSummary = awaitingAdditionalProduct
+      && hasExistingOrderSummary
+      && (confirmsOrderRequest(clean) || clean === "Change quantity" || clean === "更改数量");
+    if (returnsToExistingSummary) awaitingAdditionalProductRef.current = false;
+
+    const cancelsAdditionalProduct = hasExistingOrderSummary
+      && (awaitingAdditionalProduct || pendingQuote === null)
+      && /^(?:cancel(?:\s+(?:the\s+)?additional\s+item)?|never\s*mind|no thanks|no thank you|不用了|取消|算了)[.!。！\s]*$/iu.test(clean);
+    if (cancelsAdditionalProduct) {
+      awaitingAdditionalProductRef.current = false;
+      const latestQuote = orderLinesRef.current.at(-1) ?? pendingQuote;
+      const latestProduct = lastQuotedProductRef.current;
+      syncHandledTurnWithN8n(clean);
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        { id: nextId.current++, role: "assistant", text: replyLanguage === "zh"
+          ? "好的，我已保留现有询价摘要。您可以完成摘要、更改数量或稍后再添加商品。"
+          : "No problem. I’ve kept the existing enquiry summary. You can finish it, change the quantity, or add another item later." },
+      ]);
       setPendingProduct(null);
       setPendingQuantity(null);
-      setPendingQuote(null);
-      setConfirmedProduct(null);
-      setLastProducts([]);
-      setStage("discover");
+      setPendingQuote(latestQuote);
+      setConfirmedProduct(latestProduct);
+      setLastProducts(latestProduct ? [latestProduct] : []);
+      setStage("complete");
+      setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "更改数量", "选择其他商品"] : ["Finish enquiry summary", "Change quantity", "Add another item"]);
+      setQuery("");
+      return;
+    }
 
+    const consumesAwaitingAdditionalProduct = awaitingAdditionalProduct && !returnsToExistingSummary;
+    const startingAdditionalProduct = !returnsToExistingSummary && (awaitingAdditionalProduct
+      || queuedRequestIndex >= 0
+      || ((pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
+        && requestsAdditionalProduct(clean)));
+    if (startingAdditionalProduct) {
+      if (queuedRequestIndex >= 0) {
+        queuedRequestToConsume = pendingOrderRequestsRef.current[queuedRequestIndex];
+        messageForApi = queuedRequestToConsume;
+      }
       if (isGenericAddAnotherItem(clean)) {
+        awaitingAdditionalProductRef.current = true;
         setMessages((current) => [...current,
           { id: nextId.current++, role: "user", text: clean },
           { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "好的，您还要找什么商品？" : "Sure, what else would you like to add?" },
@@ -780,23 +821,33 @@ export function ChatDemo() {
         setQuery("");
         return;
       }
+
     }
 
-    if (pendingQuote && !startingAdditionalProduct && confirmsOrderRequest(clean)) {
+    if (hasExistingOrderSummary && !startingAdditionalProduct && confirmsOrderRequest(clean)) {
       syncHandledTurnWithN8n(clean);
-      const confirmedQuotes = orderLinesRef.current.length > 0 ? orderLinesRef.current : [pendingQuote];
+      const confirmedQuotes = orderLinesRef.current.length > 0
+        ? orderLinesRef.current
+        : pendingQuote ? [pendingQuote] : [];
+      const latestQuote = pendingQuote ?? confirmedQuotes.at(-1);
+      if (!latestQuote || confirmedQuotes.length === 0) return;
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
         {
           id: nextId.current++, role: "assistant",
           text: whatsAppQuoteMessage(confirmedQuotes, true, replyLanguage),
-          quoteSummary: pendingQuote,
+          quoteSummary: latestQuote,
           quoteSummaries: confirmedQuotes,
         },
       ]);
       setPendingQuote(null);
+      setPendingProduct(null);
+      setPendingQuantity(null);
+      setConfirmedProduct(null);
+      setLastProducts([]);
       pendingOrderRequestsRef.current = [];
       orderLinesRef.current = [];
+      lastQuotedProductRef.current = null;
       setStage("submitted");
       setSuggestions(replyLanguage === "zh" ? ["下载询价 PDF", "开始新的询价"] : ["Download enquiry PDF", "Start another enquiry"]);
       setQuery("");
@@ -806,6 +857,26 @@ export function ChatDemo() {
     const parsedQuantity = parseRequestedQuantity(messageForApi);
     const confirmedQuantity = parsedQuantity.kind === "valid" ? parsedQuantity.value : null;
     if (parsedQuantity.kind === "invalid") {
+      if (startingAdditionalProduct && hasExistingOrderSummary) {
+        awaitingAdditionalProductRef.current = true;
+        consumeQueuedRequest();
+        setMessages((current) => [...current,
+          { id: nextId.current++, role: "user", text: clean, voiceNote },
+          {
+            id: nextId.current++, role: "assistant",
+            text: replyLanguage === "zh"
+              ? parsedQuantity.reason === "fractional"
+                ? "请使用整数数量，并再次写出完整的商品要求，例如“3 个红酒杯”。我已保留现有询价摘要。"
+                : "请输入 1 到 100,000 之间的数量，并再次写出完整的商品要求。我已保留现有询价摘要。"
+              : parsedQuantity.reason === "fractional"
+                ? "Please use a whole-number quantity and include the product again, for example “3 wine glasses”. I’ve kept your existing enquiry summary."
+                : "Please use a quantity from 1 to 100,000 and include the product again. I’ve kept your existing enquiry summary.",
+          },
+        ]);
+        setQuery("");
+        setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "取消"] : ["Finish enquiry summary", "Cancel additional item"]);
+        return;
+      }
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean, voiceNote },
         {
@@ -1099,9 +1170,22 @@ export function ChatDemo() {
             role: "assistant",
             text: reply.error ?? (replyLanguage === "zh" ? "请求内容无效。请检查后再试。" : "That request is not valid. Please check it and try again."),
           }]);
+          if (startingAdditionalProduct && hasExistingOrderSummary) {
+            awaitingAdditionalProductRef.current = true;
+            setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "更改数量", "选择其他商品"] : ["Finish enquiry summary", "Change quantity", "Add another item"]);
+          }
           return;
         }
         throw new Error(reply.error ?? "The assistant could not answer right now.");
+      }
+      consumeQueuedRequest();
+      if (consumesAwaitingAdditionalProduct) awaitingAdditionalProductRef.current = false;
+      if (startingAdditionalProduct) {
+        setPendingProduct(null);
+        setPendingQuantity(null);
+        setPendingQuote(null);
+        setConfirmedProduct(null);
+        setLastProducts([]);
       }
       const products = reply.products ?? [];
       // Product cards remain the active choices until Claire displays a new
@@ -1140,6 +1224,10 @@ export function ChatDemo() {
         role: "assistant",
         text: safeChatFailureMessage(replyLanguage, timedOut, hasProductContext),
       }]);
+      if (startingAdditionalProduct && hasExistingOrderSummary) {
+        awaitingAdditionalProductRef.current = true;
+        setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "更改数量", "选择其他商品"] : ["Finish enquiry summary", "Change quantity", "Add another item"]);
+      }
     } finally {
       if (sessionId.current !== requestSession) return;
       loadingRef.current = false;
@@ -1299,6 +1387,8 @@ export function ChatDemo() {
     setQueuedMessages([]);
     orderLinesRef.current = [];
     pendingOrderRequestsRef.current = [];
+    awaitingAdditionalProductRef.current = false;
+    lastQuotedProductRef.current = null;
     setMessages([firstMessage]);
     setConversationLanguage("en");
     setStage("discover");

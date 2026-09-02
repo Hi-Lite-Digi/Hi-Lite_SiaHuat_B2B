@@ -1823,6 +1823,23 @@ await check("CTX-021", "Multi-item category switch", "What about the 6 wine glas
   quantity: 4,
   displayedProducts: [],
 });
+await check("CTX-022", "Fresh additional-item search", "3 wine glasses", (reply) => {
+  const products = reply.products ?? [];
+  if (products.length === 0) return "Expected wine-glass options for the fresh additional-item search";
+  const invalid = products.find((product) =>
+    !/\bwine\b.*\b(?:glass|stemglass)\b/i.test(product.name)
+    || /\b(?:decanter|teapot|knife)\b/i.test(product.name)
+    || product.stock_status !== "in_stock"
+    || Number(product.available_quantity ?? 0) < 3,
+  );
+  if (invalid) return `The fresh additional-item search returned an unrelated or unavailable product: ${invalid.name}`;
+  return /\b3\b/.test(reply.message) ? null : "The fresh additional-item search lost the requested quantity of 3";
+}, [], 20_000, {
+  stage: "discover",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: [],
+});
 await checkMalformedJson();
 await checkMalformedJsonEndpoint("API-002", "/api/stock-check");
 await checkMalformedJsonEndpoint("API-003", "/api/alternatives");
