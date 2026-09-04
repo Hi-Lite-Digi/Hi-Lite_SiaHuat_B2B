@@ -171,13 +171,23 @@ async function validateComparisonScreenshot(message: string, expectedQuantity: R
   const responseMessage = body.message ?? "";
   const productText = (body.products ?? []).map((product) => `${product.stock_id} ${product.name}`).join(" ");
   const combined = `${responseMessage} ${productText}`;
+  const requiredDetails = ["WF-RD-10", "WF-RD-30", "10 kg", "30 kg"];
   const failures = [
-    durationMs < 30_000 ? null : `Reply took ${durationMs}ms; expected under 30000ms`,
+    durationMs < 10_000 ? null : `Reply took ${durationMs}ms; expected under 10000ms`,
     status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
     expectedQuantity.test(responseMessage) ? null : "The comparison screenshot lost the requested quantity",
-    /rice\s+disp(?:ens|enc)er|model|item name|key detail|closer crop|clearer/i.test(responseMessage)
+    /automatic rice dispensers/i.test(responseMessage)
       ? null
-      : "The response did not give a useful product-identification next step",
+      : "The clear comparison screenshot was not identified as automatic rice dispensers",
+    ...requiredDetails.map((detail) => responseMessage.includes(detail)
+      ? null
+      : `The comparison response omitted the visible detail: ${detail}`),
+    label === "comparison-numbered" && /WF-RD-60/i.test(responseMessage)
+      ? "The numbered request for items 1 and 2 incorrectly included item 3 (WF-RD-60)"
+      : null,
+    /can['’]?t reliably read|closer crop|unreadable/i.test(responseMessage)
+      ? "The bot asked for another image even though this verified fixture is readable"
+      : null,
     !/utility box|cambox|storage box/i.test(combined)
       ? null
       : "The rice-dispenser comparison screenshot was misclassified as a utility/storage box",

@@ -229,16 +229,23 @@ export function riceDispenserImageClarification(input: RiceDispenserClarificatio
   const comparisonLanguage = /\b(?:compar(?:e|ison)|options?|models?|rows?|table|item\s*1)\b/i.test(input.visionText);
   if (options.length < 2 && !(identifiesRiceDispenser && comparisonLanguage)) return null;
 
-  const visibleOptions = options.slice(0, 4);
+  const referencedRows = referencedComparisonItems(input.userMessage);
+  const selectedOptions = referencedRows.length > 0
+    ? referencedRows.map((row) => options[row - 1]).filter((option): option is RiceDispenserComparisonOption => Boolean(option))
+    : options;
+  const visibleOptions = selectedOptions.slice(0, 4);
   const optionLines = visibleOptions.map(optionDescription);
   const hasQuantity = input.quantity !== null;
+  const quantityCopy = hasQuantity && visibleOptions.length > 1 && referencedRows.length > 1
+    ? `${input.quantity} each for the selected models`
+    : `${input.quantity}`;
 
   if (input.language === "zh") {
     const intro = optionLines.length > 0
       ? `这张图片看起来是在比较自动米饭分配机。可读取的选项如下：\n${optionLines.join("\n")}`
       : "这张图片看起来是在比较自动米饭分配机，但我无法可靠读取所有型号和容量。";
     return {
-      message: `${intro}\n\n${hasQuantity ? `我已保留数量 ${input.quantity}。${optionLines.length > 0 ? "请选择要继续查询的型号。" : "请发送更清楚的型号/容量截图，或输入所需的型号和容量。"}` : optionLines.length > 0 ? "请选择型号，并告诉我需要多少台。" : "请发送更清楚的型号/容量截图，或输入所需的型号、容量和数量。"}这些型号尚未在当前 Sia Huat 网上目录中核实，因此目前不能确认库存、价格或订单。`,
+      message: `${intro}\n\n${hasQuantity ? `我已保留数量 ${quantityCopy}。${optionLines.length > 0 ? "请选择要继续查询的型号。" : "请发送更清楚的型号/容量截图，或输入所需的型号和容量。"}` : optionLines.length > 0 ? "请选择型号，并告诉我需要多少台。" : "请发送更清楚的型号/容量截图，或输入所需的型号、容量和数量。"}这些型号尚未在当前 Sia Huat 网上目录中核实，因此目前不能确认库存、价格或订单。`,
       suggestions: visibleOptions.length > 0
         ? visibleOptions.map(optionSuggestion)
         : ["输入型号", "输入容量", "发送更清楚的图片"],
@@ -249,7 +256,7 @@ export function riceDispenserImageClarification(input: RiceDispenserClarificatio
     ? `This photo appears to compare automatic rice dispensers. I could read these options:\n${optionLines.join("\n")}`
     : "This photo appears to compare automatic rice dispensers, but I can’t reliably read every model and capacity.";
   return {
-    message: `${intro}\n\n${hasQuantity ? `I’ve kept quantity ${input.quantity}. ${optionLines.length > 0 ? "Choose the model you want me to continue with." : "Send a closer crop of the model/capacity rows, or type the model and capacity you want."}` : optionLines.length > 0 ? "Choose a model and tell me how many units you need." : "Send a closer crop of the model/capacity rows, or type the model, capacity and quantity you want."} I haven’t verified these exact models in the current Sia Huat online catalogue, so stock, price and any order are not confirmed yet.`,
+    message: `${intro}\n\n${hasQuantity ? `I’ve kept quantity ${quantityCopy}. ${optionLines.length > 0 ? "Choose the model you want me to continue with." : "Send a closer crop of the model/capacity rows, or type the model and capacity you want."}` : optionLines.length > 0 ? "Choose a model and tell me how many units you need." : "Send a closer crop of the model/capacity rows, or type the model, capacity and quantity you want."} I haven’t verified these exact models in the current Sia Huat online catalogue, so stock, price and any order are not confirmed yet.`,
     suggestions: visibleOptions.length > 0
       ? visibleOptions.map(optionSuggestion)
       : ["Type the model", "Tell me the capacity", "Send a clearer photo"],

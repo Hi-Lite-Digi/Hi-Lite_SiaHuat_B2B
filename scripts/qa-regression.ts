@@ -84,12 +84,13 @@ async function checkAlternatives(
   quantity: number,
   validate: (products: ReplyProduct[]) => string | null,
   excludeStockIds: string[] = [],
+  requirements?: string,
 ) {
   const started = performance.now();
   const response = await fetch(`${qaBaseUrl}/api/alternatives`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ stockId, quantity, excludeStockIds }),
+    body: JSON.stringify({ stockId, quantity, excludeStockIds, ...(requirements ? { requirements } : {}) }),
   });
   const body = await response.json() as { products?: ReplyProduct[]; error?: string };
   const durationMs = Math.round(performance.now() - started);
@@ -98,7 +99,7 @@ async function checkAlternatives(
   results.push({
     id,
     area: "Stock-qualified alternatives",
-    prompt: `${stockId}, minimum quantity ${quantity}${excludeStockIds.length > 0 ? `, excluding ${excludeStockIds.join(", ")}` : ""}`,
+    prompt: `${stockId}, minimum quantity ${quantity}${excludeStockIds.length > 0 ? `, excluding ${excludeStockIds.join(", ")}` : ""}${requirements ? `, preserving ${requirements}` : ""}`,
     pass: !failure,
     reason: failure ?? "Matched expected behaviour",
     durationMs,
@@ -2791,6 +2792,88 @@ await check("CASE-042", "Typo-tolerant plate buying request", "i ned 2 blak dinn
     ? null
     : "Expected black dinner-plate options or an honest constraint-preserving no-match reply";
 }, [], 20_000);
+await check("CASE-043", "Human noodle-draining clarification", "i need to dry noodles", (reply) => {
+  if ((reply.products?.length ?? 0) > 0) return "An ambiguous noodle request should be clarified before products are shown";
+  if (!/drain the cooking water/i.test(reply.message) || !/dry uncooked\/fresh noodles/i.test(reply.message)) {
+    return "The reply did not offer the two practical meanings of 'dry noodles'";
+  }
+  return null;
+}, [], 5_000);
+await check("CASE-044", "Human cooked-noodle buying intent", "i cook my maggie then need to throw the water", (reply) => {
+  if (/only help with Sia Huat products/i.test(reply.message)) return "A normal cooked-noodle request was rejected as off-topic";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "The cooked-noodle request did not produce a purchasable food-strainer shortlist";
+  const unrelated = products.find((product) => !/strainer|skimmer|colander/i.test(product.name) || /cocktail|bar\s+strainer/i.test(product.name));
+  return unrelated ? `Returned an unrelated draining product: ${unrelated.name}` : null;
+}, [
+  { role: "user", content: "i need to dry noodles" },
+  { role: "assistant", content: "Do you mean drain the cooking water from cooked noodles, or dry uncooked/fresh noodles for storage? Those need different equipment." },
+], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: [],
+});
+
+const gasCartridgeContext = contextProducts([{
+  stock_id: "GAS",
+  name: "IWATANI GAS CARTRIDGE 250gm/can, 3pcs/pkt, 48pcs/ctn, IWATANI",
+  list_price: 3.85,
+  uom_id: "PC",
+  stock_status: "in_stock",
+  available_quantity: 4130,
+}]);
+await check("CASE-045", "Trade-price follow-up", "Can I have the trade price?", (reply) => {
+  if (!/\$3\.85/.test(reply.message) || !/not a confirmed trade price/i.test(reply.message)) {
+    return "The trade-price reply should distinguish the displayed list price from an unconfirmed trade quote";
+  }
+  return /quantity/i.test(reply.message) && /business|account/i.test(reply.message)
+    ? null
+    : "The trade-price reply did not collect the details sales needs to quote";
+}, [], 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasCartridgeContext,
+});
+await check("CASE-046", "Exact-stock follow-up", "how many stock you have?", (reply) => {
+  if (!/fresh listing check shows \d+ PC available/i.test(reply.message)) return "A fresh exact stock count was not stated";
+  if (JSON.stringify(reply.suggestions ?? []) !== JSON.stringify(["1"])) {
+    return "An unselected single product must offer only option 1, not quantity-looking product indexes";
+  }
+  return null;
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasCartridgeContext,
+});
+
+for (const [id, prompt] of [
+  ["CASE-047", "CASSETTE GAS TORCH BURNER"],
+  ["CASE-048", "IWATANI, GAS TORCH BURNER"],
+  ["CASE-049", "TORCH BURNER, IWATAN"],
+] as const) {
+  await check(id, "Switch from cartridge to torch burner", prompt, (reply) => {
+    const products = reply.products ?? [];
+    if (products.length === 0) return "A concrete torch-burner request did not return a purchasable burner";
+    const wrong = products.find((product) => !/torch.*burner|burner.*torch/i.test(product.name) || /cartridge/i.test(product.name));
+    if (wrong) return `The torch request stayed on or returned the wrong product: ${wrong.name}`;
+    if (/IWATAN/i.test(prompt) && !products.some((product) => /IWATANI/i.test(product.name))) {
+      return "The Iwatani brand request was not preserved";
+    }
+    return null;
+  }, [
+    { role: "user", content: "GAS CARTRIDGE" },
+    { role: "assistant", content: "This looks like the closest match: IWATANI GAS CARTRIDGE." },
+  ], 20_000, {
+    stage: "clarify",
+    activeProduct: null,
+    quantity: null,
+    displayedProducts: gasCartridgeContext,
+  });
+}
+
 await check("HUM-001", "Human handoff", "Can I speak to a person?", (reply) => noProducts(reply) ?? honestManualGuidance(reply));
 await check("HUM-002", "Human handoff", "Get me a human man", (reply) => noProducts(reply) ?? honestManualGuidance(reply), knifeHistory);
 await check("HUM-004", "Human handoff", "can i speak to a humand please", (reply) => noProducts(reply) ?? honestManualGuidance(reply));

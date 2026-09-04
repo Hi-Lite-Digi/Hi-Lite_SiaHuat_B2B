@@ -3,7 +3,11 @@ import {
   catalogueHistoryWithClarification,
   extractExplicitShoeSize,
   extractShoeStyle,
+  isAmbiguousNoodleDryingRequest,
   isCatalogueRequest,
+  isCookedNoodleDrainingIntent,
+  isExactStockQuestion,
+  isTradePriceQuestion,
   productCategories,
   productCategory,
   productWords,
@@ -13,7 +17,7 @@ import {
   type FastChatInput,
   type FastReply,
 } from "@/lib/chat-intent";
-import { requestedQuantity } from "@/lib/chat-turn";
+import { requestedDisplayedProductIndex, requestedQuantity } from "@/lib/chat-turn";
 
 export { isCatalogueRequest } from "@/lib/chat-intent";
 
@@ -67,6 +71,91 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     || /\b(real person|human agent|customer service)\b/i.test(message);
   const asksOperationalFollowup = /\b(?:quote|qoute|quotation|invoice|email|e-mail|payment|bank\s+transfer|payment\s+advice|delivery|order)\b/i.test(message)
     && /\b(?:status|update|check|chk|chek|follow\s*up|not\s+(?:received|arrived|here)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
+  const displayedProducts = input.context?.displayedProducts ?? [];
+  const explicitlyReferencedIndex = requestedDisplayedProductIndex(message, displayedProducts);
+  const referencedProduct = (explicitlyReferencedIndex === null ? null : displayedProducts[explicitlyReferencedIndex])
+    ?? input.context?.activeProduct
+    ?? (displayedProducts.length === 1 ? displayedProducts[0] : null);
+  const referencedIsActive = Boolean(
+    referencedProduct
+    && input.context?.activeProduct?.stock_id === referencedProduct.stock_id,
+  );
+  const referencedOptionIndex = referencedProduct
+    ? displayedProducts.findIndex((product) => product.stock_id === referencedProduct.stock_id)
+    : -1;
+  const referencedOptionNumber = referencedOptionIndex >= 0 ? String(referencedOptionIndex + 1) : "1";
+  const referencedSelectionLabel = displayedProducts.length === 1
+    ? "this item"
+    : `option ${referencedOptionNumber}`;
+
+  if (isTradePriceQuestion(message) && !input.image) {
+    if (!referencedProduct) {
+      return reply(
+        "Trade pricing depends on the exact item, quantity and customer account. Choose the product first, then tell me the quantity and business/account name. The catalogue price shown is not a confirmed trade price.",
+        displayedProducts.length > 0 ? displayedProducts.map((_, index) => String(index + 1)) : ["Find a product"],
+        input.context?.stage ?? "clarify",
+      );
+    }
+    const listPrice = typeof referencedProduct.list_price === "number"
+      ? `The $${referencedProduct.list_price.toFixed(2)} / ${referencedProduct.uom_id ?? "unit"} shown is the catalogue list price before GST, not a confirmed trade price. `
+      : "The price shown in this demo is catalogue pricing, not a confirmed trade price. ";
+    const tradeNextStep = referencedIsActive
+      ? "Tell me how many you need and your business/account name"
+      : `Select ${referencedSelectionLabel} first, then tell me the quantity and your business/account name`;
+    return reply(
+      `${listPrice}Trade pricing for ${referencedProduct.name} can depend on your quantity and customer account. ${tradeNextStep}; I’ll keep those details in the enquiry PDF for Sia Huat sales to quote manually.`,
+      referencedIsActive ? ["1", "6", "12", "24"] : [referencedOptionNumber, "Prepare staff review summary"],
+      referencedIsActive ? input.context?.stage ?? "quantity" : "clarify",
+    );
+  }
+
+  if (isExactStockQuestion(message) && !input.image) {
+    if (!referencedProduct) {
+      return reply(
+        "Which product do you want the stock count for? Choose one of the displayed options first, and I’ll run a fresh check on that exact Sia Huat listing.",
+        displayedProducts.map((_, index) => String(index + 1)),
+        input.context?.stage ?? "clarify",
+      );
+    }
+    if (referencedProduct.stock_status === "out_of_stock" || referencedProduct.available_quantity === 0) {
+      return reply(
+        `${referencedProduct.name} is currently out of stock, so it cannot be selected. Choose another option or tell me which detail can change.`,
+        ["Choose another item", "Prepare staff review summary"],
+        "clarify",
+      );
+    }
+    if (typeof referencedProduct.available_quantity === "number" && referencedProduct.available_quantity > 0) {
+      const requested = referencedIsActive ? input.context?.quantity ?? null : null;
+      if (requested !== null && requested > referencedProduct.available_quantity) {
+        return reply(
+          `The fresh listing check shows only ${referencedProduct.available_quantity} ${referencedProduct.uom_id ?? "units"} available for ${referencedProduct.name}, which is below your requested ${requested}. Choose the available quantity or another item.`,
+          [String(referencedProduct.available_quantity), "Choose another item"],
+          "quantity",
+        );
+      }
+      if (requested !== null) {
+        return reply(
+          `The fresh listing check shows ${referencedProduct.available_quantity} ${referencedProduct.uom_id ?? "units"} available for ${referencedProduct.name}. Your requested ${requested} is within the current availability.`,
+          input.context?.stage === "clarify"
+            ? ["Finish enquiry summary", "Change quantity"]
+            : [String(requested), "Change quantity"],
+          input.context?.stage ?? "quantity",
+        );
+      }
+      return reply(
+        `The fresh listing check shows ${referencedProduct.available_quantity} ${referencedProduct.uom_id ?? "units"} available for ${referencedProduct.name}. ${referencedIsActive ? "How many do you need?" : `Select ${referencedSelectionLabel}, then tell me how many you need.`}`,
+        referencedIsActive
+          ? ["1", "6", "12", "24"].filter((value) => Number(value) <= Number(referencedProduct.available_quantity))
+          : [referencedOptionNumber],
+        referencedIsActive ? input.context?.stage ?? "quantity" : "clarify",
+      );
+    }
+    return reply(
+      `The current result for ${referencedProduct.name} does not provide an exact stock count. ${referencedIsActive ? "Tell me the quantity you need and I’ll keep it for staff verification." : `Choose option ${referencedOptionNumber} and I’ll run a fresh Add to cart check on that exact listing.`}`,
+      referencedIsActive ? ["1", "6", "12", "24"] : [referencedOptionNumber],
+      referencedIsActive ? input.context?.stage ?? "quantity" : "clarify",
+    );
+  }
 
   if (/\b(?:call(?:ing)?|contact|get)\s+(?:the\s+)?police\b|\bhello\s+police\b/i.test(message)) {
     return reply(
@@ -121,13 +210,35 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
   if (followsAmbiguousPhotoClarification && currentCategory === "toaster" && !specifiesToasterStyle) {
+    const rejectsConveyor = [...input.history.filter((item) => item.role === "user").map((item) => item.content), message]
+      .some((content) => /\b(?:not|no|non[ -]?|without|don['’]?t\s+want|do\s+not\s+want)\b[^.!?]{0,18}\bconve(?:yor|yr)\b|\bya\s*kun\b/i.test(content));
     const savedQuantity = input.context?.quantity
       ? ` I’ve kept quantity ${input.context.quantity}.`
       : "";
     return reply(
       `Thanks—that’s a toaster.${savedQuantity} Which style do you need? For the pictured pop-up type, choose 4 or 6 slots. I’ll then check the closest catalogue option, availability and price.`,
-      ["4-slot pop-up toaster", "6-slot pop-up toaster", "Conveyor toaster"],
+      rejectsConveyor
+        ? ["4-slot pop-up toaster", "6-slot pop-up toaster"]
+        : ["4-slot pop-up toaster", "6-slot pop-up toaster", "Conveyor toaster"],
     );
+  }
+
+  if (/^dry uncooked(?: or fresh)? noodles? for storage$/.test(simple)) {
+    return reply(
+      "Got it—you need noodle-drying equipment, not a cooking-water strainer. Is this for a small drying rack or a commercial dehydrating/drying machine, and roughly how many kilograms per batch?",
+      ["Small drying rack", "Commercial drying machine"],
+    );
+  }
+
+  if (isAmbiguousNoodleDryingRequest(message)) {
+    return reply(
+      "Do you mean drain the cooking water from cooked noodles, or dry uncooked/fresh noodles for storage? Those need different equipment.",
+      ["Drain cooked noodles", "Dry uncooked noodles for storage"],
+    );
+  }
+
+  if (isCookedNoodleDrainingIntent(message) && !/\b(?:strainer|skimmer|colander|sieve)\b/i.test(message)) {
+    return null;
   }
 
   // If the customer attached an image, references to "this picture" describe
@@ -391,9 +502,45 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  const requestsPairedPotAndStrainer = /\b(?:stock\s*pots?|pots?)\b/i.test(message)
-    && /\b(?:strainers?|strainners?|straners?|skimmers?|colanders?)\b/i.test(message)
-    && /\b(?:both|matching|fit|inside|same)\b/i.test(message);
+  const hasStrainerCompatibilityContext = input.history.some((item) =>
+    /strainer[^.!?]{0,80}(?:fits?|fitted|compatib)|strainer-only compatib/i.test(item.content),
+  );
+  const suppliesPotCompatibilityDetails = /\b(?:inner(?:[ -]?rim)?\s+)?diameter\b|\busable\s+depth\b|^\s*pot\s+(?:brand\s*\/\s*model|brand|model)\s*:/i.test(message);
+  if (hasStrainerCompatibilityContext && suppliesPotCompatibilityDetails) {
+    const measurements = [...message.matchAll(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/gi)]
+      .slice(0, 2)
+      .map((match) => match[0]);
+    const model = message.match(/\bpot\s+(?:brand\s*\/\s*model|brand|model)\s*:\s*([a-z0-9][a-z0-9 ./_-]{1,40})/i)?.[1]?.trim() ?? null;
+    const details = model
+      ? `pot brand/model ${model}`
+      : measurements.length > 0
+        ? `pot measurements ${measurements.join(" by ")}`
+        : "pot compatibility details";
+    return reply(
+      `I’ve kept the ${details} for the strainer-only request. I won’t add another pot. Because catalogue dimensions alone may not guarantee a safe fit, download the PDF and ask Sia Huat sales to verify the compatible food strainer before purchase.`,
+      ["Prepare staff review summary"],
+      "clarify",
+    );
+  }
+
+  const mentionsPotAndStrainer = /\b(?:stock\s*pots?|pots?)\b/i.test(message)
+    && /\b(?:strainers?|strainners?|straners?|skimmers?|colanders?)\b/i.test(message);
+  const requestsPairedPotAndStrainer = mentionsPotAndStrainer
+    && /\b(?:both|matching|fits?|fitted|fitting|inside|same)\b/i.test(message);
+  const ownsReferencePot = /\b(?:my|existing|current)\s+(?:12\s*QT\s+)?(?:stock\s*)?pot\b|\b(?:already|currently)\s+(?:have|own)\b[^.!?]{0,30}\bpot\b|\bthis\s+(?:12\s*QT\s+)?(?:stock\s*)?pot\b[^.!?]{0,60}\bonly\s+(?:need|want|buy|order)\b|\bstrainer\s+only\b|\bonly\s+(?:need|want|buy|order)[^.!?]{0,24}\bstrainer\b/i.test(message);
+  if (mentionsPotAndStrainer && ownsReferencePot) {
+    const requestedSize = message.match(/\b\d+(?:\.\d+)?\s*QT\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
+    return reply(
+      `Understood—you already have the ${requestedSize ? `${requestedSize} ` : ""}pot and only want a strainer that fits it. A capacity label alone does not guarantee fit. Send the pot’s inner-rim diameter and usable depth in cm, or its brand/model code, and I’ll look for a food strainer or colander without adding another pot.`,
+      ["Enter pot measurements", "Use pot brand or model", "Prepare staff review summary"],
+    );
+  }
+  if (/^(?:share|enter|add)(?: the| my)? pot (?:dimensions|measurements)$|^use pot (?:brand|model|brand or model|brand or model code)$/i.test(message)) {
+    return reply(
+      "Please type the pot’s inner-rim diameter and usable depth in cm (for example, “30 cm diameter, 18 cm deep”), or send its brand/model code. I’ll keep this as a strainer-only compatibility request.",
+      ["Prepare staff review summary"],
+    );
+  }
   if (requestsPairedPotAndStrainer) {
     const pairQuantity = /\b(?:two|2)\b/i.test(message) ? 2 : input.context?.quantity ?? null;
     const requestedSize = message.match(/\b\d+(?:\.\d+)?\s*QT\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
@@ -519,6 +666,13 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     // Explicit corrections such as "I was thinking more of spoons and forks"
     // replace the prior category. Let the grounded catalogue route answer
     // instead of asking the customer to confirm the switch they already made.
+    return null;
+  }
+
+  if (currentCategory === "gas torch burner" && lastCategory === "gas cartridge") {
+    // Customers often discover that the burner, not its fuel cartridge, is the
+    // item they meant. A concrete burner name is enough to start that search;
+    // do not make them answer an add-versus-switch question first.
     return null;
   }
 

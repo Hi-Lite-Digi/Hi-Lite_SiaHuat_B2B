@@ -8,6 +8,7 @@ const requestSchema = z.object({
   stockId: z.string().trim().min(1).max(100),
   quantity: z.coerce.number().int().positive().max(100_000).optional(),
   excludeStockIds: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+  requirements: z.string().trim().min(2).max(500).optional(),
 });
 
 export async function POST(request: Request) {
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
       12,
       minimumQuantity,
       new Set(input.data.excludeStockIds ?? []),
+      input.data.requirements,
     );
     const liveChecks = await Promise.allSettled(
       candidates.map(async (product) => {

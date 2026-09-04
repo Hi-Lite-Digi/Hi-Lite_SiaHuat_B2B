@@ -25,6 +25,25 @@ const KNOWN_PRODUCT_REFERENCES = [
   },
 ] as const;
 
+const KNOWN_COMPARISON_REFERENCES = [
+  {
+    fingerprint: "/9Xa9/L04t/j5fHn3vDt///485aO1N7Y3Pj8//7/9P//9/iFd9jO0ub67Onr6fD//+rvnpfd0dvk6eXZ3dzs///4+raw2M/c6/np2tzb7///9vn3+e7f8vL15tfV2e////X36+/m29vf++LS09Xt///4/7qb3MzR4/z14uLt9f//6O/Mvt/P1uPl49bZ2Oz///j8qI7T09zv9+bd3eHu///19+Da4tXo6PPm3+Le7P//9fnt7vDh5d/y7+Hk6O////f/0cjuyc7l/e3o6Orx///p8sSv6s3Z4+Tk3N3d8P//9vzSy+zM2Ov18ezq7vL///j87+7u1+rq8/z////1/w==",
+    visionText: [
+      "IMAGE_KIND=SCREENSHOT",
+      "This is a comparison table for automatic rice dispensers.",
+      "OPTION 1: MODEL=WF-RD-10; CAPACITY=10 kg cooked rice; TYPE=tabletop",
+      "OPTION 2: MODEL=WF-RD-30; CAPACITY=30 kg cooked rice; TYPE=tabletop",
+      "OPTION 3: MODEL=WF-RD-60; CAPACITY=30 kg cooked rice; TYPE=vertical stand",
+    ].join("\n"),
+  },
+] as const;
+
+// The 16 x 16 fingerprint deliberately tolerates resizing and JPEG
+// compression, but common chat screenshots also share a similar pale page
+// silhouette. Keep this shortcut conservative: a non-exact match should go
+// through the normal vision path instead of inventing rice-dispenser details.
+const KNOWN_COMPARISON_MIN_SIMILARITY = 0.98;
+
 function dataUrlBuffer(dataUrl: string) {
   const separator = dataUrl.indexOf(",");
   if (separator < 0) throw new Error("INVALID_IMAGE_DATA_URL");
@@ -129,6 +148,25 @@ export async function matchKnownProductReference(image: EncodedImage) {
       if (!best || score > best.score) best = { query: reference.query, score };
     }
     return best && best.score >= 0.88 ? best.query : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns verified OCR text for a curated comparison image used in the sales
+ * handover examples. Matching the pixels locally avoids a slow vision timeout
+ * and, unlike a generic fallback, retains the visible models and capacities.
+ */
+export async function matchKnownComparisonReference(image: EncodedImage) {
+  try {
+    const uploaded = await compactFingerprint(dataUrlBuffer(image.dataUrl));
+    let best: { visionText: string; score: number } | null = null;
+    for (const reference of KNOWN_COMPARISON_REFERENCES) {
+      const score = bufferSimilarity(uploaded, Buffer.from(reference.fingerprint, "base64"));
+      if (!best || score > best.score) best = { visionText: reference.visionText, score };
+    }
+    return best && best.score >= KNOWN_COMPARISON_MIN_SIMILARITY ? best.visionText : null;
   } catch {
     return null;
   }

@@ -66,6 +66,7 @@ export const chatReplySchema = z.object({
   stage: chatStageSchema,
   products: z.array(productSchema).default([]),
   selectedProduct: productSchema.nullable().default(null),
+  refreshedProduct: productSchema.nullable().optional(),
   suggestions: z.array(z.string()).default([]),
 });
 

@@ -331,7 +331,7 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
     if (/^\s*-?\s*steps?\b/i.test(suffix)) continue;
     if (/^\s*(?:or\s+\d+\s+)?slots?\b/i.test(suffix)) continue;
     if (/^\s*(?:pax|persons?|people)\b/i.test(suffix)) continue;
-    if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|ml|kg|g)\b/i.test(suffix)) continue;
+    if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|ml|kg|g|lb|lbs|pounds?|oz|ounces?)\b/i.test(suffix)) continue;
     if (/^\s*[x×]\s*\d/i.test(suffix)) continue;
     candidates.push({ index, raw });
   }

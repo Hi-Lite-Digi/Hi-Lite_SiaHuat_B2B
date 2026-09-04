@@ -43,8 +43,10 @@ test("builds a quantity-preserving clarification without availability claims", (
   });
 
   assert.ok(reply);
-  assert.match(reply.message, /kept quantity 2/i);
+  assert.match(reply.message, /kept quantity 2 each for the selected models/i);
   assert.match(reply.message, /WF-RD-10/);
+  assert.match(reply.message, /WF-RD-30/);
+  assert.doesNotMatch(reply.message, /WF-RD-60/);
   assert.match(reply.message, /stock, price and any order are not confirmed/i);
   assert.deepEqual(reply.suggestions.slice(0, 2), ["WF-RD-10 (10 kg)", "WF-RD-30 (30 kg)"]);
 });

@@ -4,11 +4,10 @@ import { chatReplySchema, type ChatRequest } from "@/lib/chat-contract";
 // These leave time for catalogue grounding and response formatting while
 // keeping the complete customer-facing turn below 30 seconds.
 const TEXT_TIMEOUT_MS = 18_000;
-// The image workflow now normally finishes in under 20 seconds, but the first
-// request after an idle period can take a little longer. Keep the ceiling below
-// the 30-second customer target while avoiding a false "couldn't identify"
-// fallback for an otherwise successful recognition.
-const IMAGE_TIMEOUT_MS = 28_000;
+// Leave enough of the customer deadline for a useful local recovery reply.
+// Curated training images take the deterministic local path; novel images get
+// one bounded vision attempt instead of making the customer wait ~30 seconds.
+const IMAGE_TIMEOUT_MS = 18_000;
 const IMAGE_ATTEMPTS = 1;
 
 async function postWorkflow(

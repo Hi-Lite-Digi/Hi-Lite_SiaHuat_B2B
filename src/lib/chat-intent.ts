@@ -1,4 +1,4 @@
-import type { HistoryItem, ImageAttachment } from "@/lib/chat-contract";
+import type { ChatStage, HistoryItem, ImageAttachment, Product } from "@/lib/chat-contract";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { resolveRiceDispenserModels } from "@/lib/image-comparison";
 
@@ -8,14 +8,16 @@ export type FastChatInput = {
   history: HistoryItem[];
   image?: ImageAttachment;
   context?: {
-    activeProduct?: { name: string } | null;
+    stage?: ChatStage;
+    activeProduct?: Product | null;
     quantity?: number | null;
+    displayedProducts?: Product[];
   };
 };
 
 export type FastReply = {
   message: string;
-  stage: "discover";
+  stage: ChatStage;
   products: [];
   selectedProduct: null;
   suggestions: string[];
@@ -34,6 +36,8 @@ export function normalizeCommonProductTypos(message: string) {
     .replace(/\b(?:ned|nead|nedd)\b/gi, "need")
     .replace(/\b(?:blak|balck|blakc)\b/gi, "black")
     .replace(/\b(?:dinnr|dinr)\b/gi, "dinner")
+    .replace(/\b(?:maggie|magy)\b/gi, "maggi")
+    .replace(/\b(?:noodal|noodel)\b/gi, "noodle")
     .replace(/\b(?:pltes|paltes)\b/gi, "plates")
     .replace(/\b(?:plte|palte)\b/gi, "plate");
 }
@@ -59,6 +63,7 @@ export const productCategories = [
   { pattern: /\b(blender|blenders|blending machine)\b/i, label: "blender" },
   { pattern: /\b(?:toasters?|toasers?|ya\s+kun)\b|\b(?:not|non[ -]?)\s*(?:a\s+)?conve(?:yor|yr)\b/i, label: "toaster" },
   { pattern: /\b(?:step\s+)?(?:ladders?|stools?)\b/i, label: "ladder" },
+  { pattern: /\b(?:cassette\s+)?gas\s+torch(?:\s+burners?)?\b|\btorch\s+burners?\b|\biwatani?\b[\s,/-]*(?:gas\s+)?torch(?:\s+burners?)?\b|\b(?:gas\s+)?torch\s+burners?\b[\s,/-]*iwatani?\b/i, label: "gas torch burner" },
   { pattern: /\b(?:butane\s+|gas\s+)?cartridges?\b/i, label: "gas cartridge" },
   { pattern: /\b(?:scrub\s+)?sponges?\b/i, label: "cleaning sponge" },
   { pattern: /\b(?:kitchen\s+|paper\s+)?towels?\b/i, label: "paper towel" },
@@ -67,9 +72,38 @@ export const productCategories = [
   { pattern: /\bcoffee(?:\s+beans?)?\b(?!\s*grinders?)/i, label: "coffee product" },
   { pattern: /\b(shoe|shoes|shows|footwear)\b/i, label: "shoe" },
   { pattern: /\b(?:chef\s+)?(?:pants|trousers)\b/i, label: "chef pants" },
+  { pattern: /\b(?:camtainer|insulated\s+beverage\s+(?:dispenser|server)|(?:beverage|drink|tea)\s+(?:dispenser|server))s?\b/i, label: "beverage dispenser" },
   { pattern: /\brice\s+disp(?:ens|enc)ers?\b|\bWF[\s_-]*RD[\s_-]*\d{1,3}\b/i, label: "rice dispenser" },
   { pattern: /\b(?:water\s+(?:dispenser|urn|boiler)|(?:electric|thermal)\s+airpot|drinking\s+fountain)\b/i, label: "water dispenser" },
 ] as const;
+
+export function isCookedNoodleDrainingIntent(message: string) {
+  const normalized = normalizeCommonProductTypos(message).toLowerCase();
+  const hasNoodleFood = /\b(?:noodles?|maggi|mee|pasta)\b/.test(normalized);
+  if (!hasNoodleFood) return false;
+
+  const directlyDrains = /\b(?:drain|draining|strain|straining)\b/.test(normalized);
+  const removesLiquid = /\b(?:water|liquid|broth|soup)\b/.test(normalized)
+    && /\b(?:throw|pour|remove|discard|empty|get\s+rid|take|separate)\b/.test(normalized);
+  const afterCooking = /\b(?:after|once|when)\s+(?:i\s+|we\s+)?(?:cook|boil|cooked|boiled)\b/.test(normalized)
+    && /\b(?:water|liquid|drain|strain|pour|throw|remove|discard|empty)\b/.test(normalized);
+  return directlyDrains || removesLiquid || afterCooking;
+}
+
+export function isAmbiguousNoodleDryingRequest(message: string) {
+  const normalized = normalizeCommonProductTypos(message).toLowerCase();
+  return /\b(?:dry|drying)\b/.test(normalized)
+    && /\b(?:noodles?|maggi|mee|pasta)\b/.test(normalized)
+    && !isCookedNoodleDrainingIntent(normalized);
+}
+
+export function isTradePriceQuestion(message: string) {
+  return /\b(?:trade|wholesale|account|contract)\s+(?:price|pricing|rate)\b|\bprice\s+for\s+(?:trade|wholesale|account)\b/i.test(message);
+}
+
+export function isExactStockQuestion(message: string) {
+  return /\b(?:how\s+(?:many|much)\s+(?:stock|stocks?|pieces?|pcs?|units?)|(?:exact|actual|current|available|live)\s+(?:stock|stocks?|quantity|qty)|(?:stock|stocks?)\s+(?:balance|level|count|quantity|qty|left|available)|(?:available|remaining)\s+(?:stock|quantity|qty|pieces?|pcs?|units?)|(?:quantity|qty)\s+(?:available|left|in\s+stock))\b/i.test(message);
+}
 
 export function simplifyMessage(message: string) {
   return normalizeCommonProductTypos(message)
@@ -99,6 +133,10 @@ export function isCatalogueRequest(message: string) {
 
 export function productCategory(message: string) {
   const normalizedMessage = normalizeCommonProductTypos(message);
+  if (/^\s*pot\s+(?:inner(?:[ -]?rim)?\s+)?(?:diameter|measurements?|dimensions?|brand\s*\/\s*model|brand|model)\s*:/i.test(normalizedMessage)) {
+    return null;
+  }
+  if (isCookedNoodleDrainingIntent(normalizedMessage)) return "strainer";
   const matches = productCategories.filter((category) => category.pattern.test(normalizedMessage));
   if (matches.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(normalizedMessage)) {
     return matches.at(-1)?.label ?? null;
@@ -303,7 +341,22 @@ export function catalogueMessageWithContext(message: string, userHistory: string
       /\bplastic\b/i.test(materialSource) ? "plastic" : null,
       /\bbamboo\b/i.test(materialSource) ? "bamboo" : null,
     ].filter(Boolean).join(" ");
-    return [handheld, mesh, materials || null, foodDraining ? "noodle strainer colander" : "strainer skimmer"].filter(Boolean).join(" ");
+    const compatibilitySource = [...customerMessages].reverse().find((content) =>
+      /\b(?:inner(?:[ -]?rim)?\s+)?diameter\b|\busable\s+depth\b|\bpot\s+(?:brand\s*\/\s*model|brand|model)\s*:/i.test(content),
+    ) ?? "";
+    const measurements = [...compatibilitySource.matchAll(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/gi)]
+      .slice(0, 2)
+      .map((match) => match[0])
+      .join(" x ");
+    const potModel = compatibilitySource.match(/\bpot\s+(?:brand\s*\/\s*model|brand|model)\s*:\s*([a-z0-9][a-z0-9 ./_-]{1,40})/i)?.[1]?.trim() ?? null;
+    return [
+      handheld,
+      mesh,
+      materials || null,
+      foodDraining ? "noodle strainer colander" : "strainer skimmer",
+      measurements ? `for pot ${measurements}` : null,
+      potModel ? `pot model ${potModel}` : null,
+    ].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "tableware") {
@@ -349,35 +402,82 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   }
 
   if (activeCategory === "toaster") {
-    const latestSlotCount = [...customerMessages].reverse()
-      .map((content) => content.match(/\b(\d+)\s*[ -]?slots?\b/i)?.[1])
-      .find(Boolean) ?? null;
+    const latestSlotRequest = [...customerMessages].reverse()
+      .find((content) => /\b(?:\d+\s+or\s+\d+|\d+)\s*[ -]?slots?\b/i.test(content)) ?? "";
+    const slotChoice = latestSlotRequest.match(/\b(\d+)\s+or\s+(\d+)\s*[ -]?slots?\b/i);
+    const latestSlotCount = latestSlotRequest.match(/\b(\d+)\s*[ -]?slots?\b/i)?.[1] ?? null;
+    const slotRequirement = slotChoice
+      ? `${slotChoice[1]} or ${slotChoice[2]} slot`
+      : latestSlotCount
+        ? `${latestSlotCount}-slot`
+        : null;
     const isPopUp = /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|ya\s+kun|pop[ -]?up|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(joinedMessages);
-    return [latestSlotCount ? `${latestSlotCount}-slot` : null, isPopUp ? "commercial pop-up toaster" : "commercial toaster"]
+    return [slotRequirement, isPopUp ? "commercial pop-up toaster" : "commercial toaster"]
       .filter(Boolean)
       .join(" ");
   }
 
+  if (activeCategory === "beverage dispenser") {
+    const brand = /\bcambro\b/i.test(joinedMessages) ? "Cambro" : null;
+    const insulated = /\binsulated\b/i.test(joinedMessages) ? "insulated" : null;
+    const colour = [...customerMessages].reverse()
+      .map((content) => content.match(/\b(?:black|white|grey|gray|brown|blue|red|green)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    const capacity = [...customerMessages].reverse()
+      .map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:l|litres?|liters?)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    return [brand, insulated, colour, capacity, "beverage dispenser Camtainer"].filter(Boolean).join(" ");
+  }
+
   if (activeCategory === "utility box") {
-    const latestDetails = [...customerMessages].reverse().find((content) =>
-      /\b(?:black|white|grey|gray|brown|blue|red|rectangular|square|plastic|polyethylene)\b|\b\d+(?:\.\d+)?\s*(?:x|by|×)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(content),
-    ) ?? "";
-    const colour = [...latestDetails.matchAll(/\b(black|white|grey|gray|brown|blue|red)\b/gi)].at(-1)?.[0] ?? null;
-    const shape = /\brectangular\b/i.test(latestDetails) ? "rectangular" : null;
-    const material = /\b(?:plastic|polyethylene)\b/i.test(latestDetails) ? "plastic" : null;
-    const dimensions = latestDetails.match(/\b\d+(?:\.\d+)?\s*(?:x|by|×)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0] ?? null;
+    const latestMatching = (pattern: RegExp) => [...customerMessages].reverse()
+      .map((content) => content.match(pattern)?.[0])
+      .find(Boolean) ?? null;
+    const colour = latestMatching(/\b(?:black|white|grey|gray|brown|blue|red)\b/i);
+    const shape = latestMatching(/\b(?:rectangular|rectangle|square)\b/i);
+    const material = latestMatching(/\b(?:plastic|polyethylene)\b/i);
+    const dimensions = latestMatching(/\b\d+(?:\.\d+)?\s*(?:x|by|×)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i);
     return [colour, shape, material, "utility box Cambox storage box", dimensions].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "ladder") {
     const steps = joinedMessages.match(/\b(\d+)\s*[ -]?steps?\b/i)?.[1] ?? null;
-    return [steps ? `${steps} step` : null, "folding stool ladder"].filter(Boolean).join(" ");
+    const loadCapacity = [...customerMessages].reverse()
+      .map((content) => content.match(/\b\d+(?:\.\d+)?\s*(?:lb|lbs|pounds?|kg)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    const colour = [...customerMessages].reverse()
+      .map((content) => content.match(/\b(?:grey|gray|black|white|blue|red|silver)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    const reference = /\bCOSCO\b/i.test(joinedMessages)
+      ? `COSCO${joinedMessages.match(/\b11839[A-Z0-9-]*\b/i)?.[0] ? ` ${joinedMessages.match(/\b11839[A-Z0-9-]*\b/i)?.[0]}` : ""}`
+      : null;
+    const handrail = /\b(?:safety\s+)?handrail\b/i.test(joinedMessages) ? "safety handrail" : null;
+    const material = /\b(?:not|no|don['’]?t|do\s+not|must\s+not)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum|alum)\b/i.test(joinedMessages)
+      ? "not all aluminium"
+      : null;
+    return [
+      steps ? `${steps} step` : null,
+      /\bfolding\b/i.test(joinedMessages) ? "folding" : null,
+      handrail,
+      loadCapacity,
+      colour,
+      reference,
+      material,
+      "stool ladder",
+    ].filter(Boolean).join(" ");
   }
 
   if (activeCategory === "shot glass") {
     return [/\bpolycarbonate\b/i.test(joinedMessages) ? "polycarbonate" : null, "shot glass"].filter(Boolean).join(" ");
   }
 
+  if (activeCategory === "gas torch burner") {
+    const latestBrand = [...customerMessages].reverse()
+      .map((content) => content.match(/\b(?:iwatani?|safico(?:\s+pro)?)\b/i)?.[0])
+      .find(Boolean) ?? null;
+    const normalizedBrand = latestBrand && /\biwatani?\b/i.test(latestBrand) ? "Iwatani" : latestBrand;
+    return [normalizedBrand, "gas torch burner"].filter(Boolean).join(" ");
+  }
   if (activeCategory === "gas cartridge") return "gas cartridge";
   if (activeCategory === "cleaning sponge") return "scrub sponge";
   if (activeCategory === "paper towel") return "kitchen paper towel";
@@ -590,6 +690,10 @@ export function rememberedActiveCategories(messages: string[]) {
     let categories = productCategories
       .filter((category) => category.pattern.test(content))
       .map((category) => category.label);
+    if (categories.length === 0) {
+      const inferredCategory = productCategory(content);
+      if (inferredCategory) categories = [inferredCategory];
+    }
     if (["knife sharpener", "wok lid", "shot glass", "stockpot", "rice dispenser", "trolley"].includes(categories[0] ?? "")) {
       categories = [categories[0]];
     }
@@ -610,10 +714,10 @@ export function rememberedActiveCategories(messages: string[]) {
   return active;
 }
 
-export function createFastReply(message: string, suggestions: string[]): FastReply {
+export function createFastReply(message: string, suggestions: string[], stage: ChatStage = "discover"): FastReply {
   return {
     message: normalizeClaireMessage(message),
-    stage: "discover",
+    stage,
     products: [],
     selectedProduct: null,
     suggestions,

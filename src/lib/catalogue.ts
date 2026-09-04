@@ -1,6 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { productSchema, type Product } from "@/lib/chat-contract";
+import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
 
 const productSearchSchema = productSchema.extend({ score: z.coerce.number() });
 
@@ -194,6 +195,10 @@ function matchesExplicitConstraints(query: string, product: Product) {
     const rejectsConveyor = /\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor|\d+(?:\s+or\s+\d+)?\s*slots?)\b/.test(requested);
     if (rejectsConveyor && /\bconveyor\b/.test(candidate)) return false;
   }
+  if (/\b(?:cassette\s+)?gas\s+torch(?:\s+burners?)?\b|\btorch\s+burners?\b/.test(requested)) {
+    if (!/\b(?:gas\s+)?torch\s+burners?\b|\btorch\b[\s\S]*\bburner\b/.test(candidate)) return false;
+    if (/\bcartridges?\b/.test(productName)) return false;
+  }
   if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/.test(requested)
     && (!/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/.test(productName)
       || /\b(?:pail|bucket)\b/.test(productName))) return false;
@@ -226,6 +231,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\bcoffee\b.*\bbeans?\b/, candidate: /\bcoffee beans\b/ },
     { requested: /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/, candidate: /\bgrinders?\b/ },
     { requested: /\b(?:stockpot|stockpots|stock\s+pots?)\b/, candidate: /\b(?:stockpot|stockpots|stock\s+pots?)\b/ },
+    { requested: /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/, candidate: /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/ },
     { requested: /\bhelmets?\b/, candidate: /\bhelmets?\b/ },
     { requested: /\b(?:electrical|electric|power)\s+(?:cable|wire)s?\b/, candidate: /\b(?:cable|wire)s?\b/ },
     { requested: /\bsafety\s+vests?\b/, candidate: /\bvests?\b/ },
@@ -241,13 +247,18 @@ function matchesExplicitConstraints(query: string, product: Product) {
   if (/\bknife\b/.test(requested) && !requestsKnifeSharpening && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
   if (/\b(?:japan|japanese)\b/.test(requested) && !/\b(?:japan|japanese)\b/.test(candidate)) return false;
 
+  const rejectsAllAluminium = /\b(?:not|no|don['’]?t|do\s+not|must\s+not)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum)\b/.test(requested);
+  if (rejectsAllAluminium
+    && /\b(?:aluminium|aluminum)\b/.test(candidate)
+    && !/\b(?:steel|plastic|fibreglass|fiberglass|wood|rubber)\b/.test(candidate)) return false;
+
   const requestedMaterials = [
     /\bstainless(?:\s+steel)?\b/.test(requested) ? /\bstainless(?:\s+steel)?\b/ : null,
     /\bblack\s+steel\b/.test(requested) ? /\bblack\s+steel\b/ : null,
     /\bcarbon\s+steel\b/.test(requested) ? /\bcarbon\s+steel\b/ : null,
     /\bcast\s+iron\b/.test(requested) ? /\bcast\s+iron\b/ : null,
     /\biron\b/.test(requested) && !/\bcast\s+iron\b/.test(requested) ? /\biron\b/ : null,
-    /\baluminium|aluminum\b/.test(requested) ? /\baluminium|aluminum\b/ : null,
+    /\baluminium|aluminum\b/.test(requested) && !rejectsAllAluminium ? /\baluminium|aluminum\b/ : null,
     /\bnon[ -]?stick\b/.test(requested) ? /\bnon[ -]?stick\b/ : null,
   ].filter((pattern): pattern is RegExp => pattern !== null);
   if (requestedMaterials.length > 0 && !requestedMaterials.some((pattern) => pattern.test(candidate))) return false;
@@ -255,9 +266,31 @@ function matchesExplicitConstraints(query: string, product: Product) {
   if (/\bdark\s+colou?r\b/.test(requested) && !/\b(?:black|brown|grey|gray|charcoal)\b/.test(candidate)) return false;
 
   const requestedColour = [...requested.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/g)].at(-1)?.[1];
-  if (requestedColour && !new RegExp(`\\b${requestedColour}\\b`).test(candidate)) return false;
+  const requestedColourPattern = requestedColour && /gr[ae]y/.test(requestedColour)
+    ? /\bgr(?:e|a)y\b/
+    : requestedColour
+      ? new RegExp(`\\b${requestedColour}\\b`)
+      : null;
+  if (requestedColourPattern && !requestedColourPattern.test(candidate)) return false;
 
-  const requestedMetricSize = requested.match(/\b(\d+(?:\.\d+)?)\s*(cm|mm)\b/);
+  if (/\b(?:ladders?|step\s+stools?)\b/.test(requested)) {
+    if (!/\b(?:ladders?|step\s+stools?|folding\s+stools?)\b/.test(candidate)) return false;
+    const steps = requested.match(/\b(\d+)\s*[ -]?steps?\b/)?.[1];
+    if (steps && !new RegExp(`\\b${steps}\\s*[ -]?steps?\\b`).test(candidate)) return false;
+    if (/\bsafety\s+handrail\b/.test(requested) && !/\b(?:safety\s+)?handrail\b/.test(candidate)) return false;
+    const load = requested.match(/\b(\d+(?:\.\d+)?)\s*(lb|lbs|pounds?|kg)\b/);
+    if (load) {
+      const alternateUnit = /^kg$/.test(load[2]) ? "kilograms?" : "pounds?";
+      if (!new RegExp(`\\b${load[1]}\\s*(?:${load[2]}|${alternateUnit})\\b`).test(candidate)) return false;
+    }
+  }
+
+  const metricDimensionsMatch = metricDimensionConstraintsMatch(requested, candidate);
+  if (metricDimensionsMatch === false) return false;
+
+  const requestedMetricSize = metricDimensionsMatch === null
+    ? requested.match(/\b(\d+(?:\.\d+)?)\s*(cm|mm)\b/)
+    : null;
   if (requestedMetricSize) {
     const [, size, unit] = requestedMetricSize;
     const metricPattern = unit === "cm"
@@ -417,6 +450,7 @@ function broadProductTypePattern(product: Product) {
     /\b(?:glass|glasses|glassware)\b/i,
     /\b(?:cup|cups|mug|mugs)\b/i,
     /\b(?:tray|trays)\b/i,
+    /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/i,
     /\b(?:pot|pots)\b/i,
   ];
   return patterns.find((pattern) => pattern.test(text)) ?? null;
@@ -437,6 +471,7 @@ function strictAlternativeTypePattern(product: Product) {
     /\bgrill\s+pan\b/i,
     /\bwok\s+(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/i,
     /\bstock\s*pot\b/i,
+    /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/i,
   ];
   return patterns.find((pattern) => pattern.test(text)) ?? null;
 }
@@ -450,6 +485,7 @@ function broadProductTypeSearch(product: Product) {
   if (/\b(?:fry|frying|omelette|crepe|grill|sauce)?\s*pan\b/i.test(text)) return "pan";
   if (/\b(?:knife|knives|cleaver)\b/i.test(text)) return "knife";
   if (/\b(?:pot|pots|stockpot|stockpots)\b/i.test(text)) return "pot";
+  if (/\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/i.test(text)) return "beverage dispenser";
   return null;
 }
 
@@ -458,6 +494,7 @@ export async function findAvailableCatalogueAlternatives(
   limit = 3,
   minimumQuantity = 1,
   excludedStockIds: ReadonlySet<string> = new Set(),
+  requirements?: string | null,
 ) {
   const source = await findProductForStockCheck(stockId);
   if (!source) return [];
@@ -498,6 +535,7 @@ export async function findAvailableCatalogueAlternatives(
         || product.available_quantity === undefined
         || product.available_quantity < minimumQuantity) continue;
       if (typePattern && !typePattern.test(searchableProductText(product))) continue;
+      if (requirements && !matchesExplicitConstraints(requirements, product)) continue;
       candidates.set(product.stock_id, product);
     }
   }
@@ -514,6 +552,7 @@ export async function findAvailableCatalogueAlternatives(
         || product.available_quantity === undefined
         || product.available_quantity < minimumQuantity) continue;
       if (typePattern && !typePattern.test(searchableProductText(product))) continue;
+      if (requirements && !matchesExplicitConstraints(requirements, product)) continue;
       candidates.set(product.stock_id, product);
     }
   }
