@@ -2475,9 +2475,10 @@ async function processChat(input: ChatRequest) {
   }
 
   const displayedProducts = input.context?.displayedProducts ?? [];
+  const asksProductInformation = isTradePriceQuestion(input.message) || isExactStockQuestion(input.message);
   const selectionNumber = input.message.trim().match(/^(\d+)$/)?.[1]
     ?? input.message.match(/\b(?:option|choice|item|number|no\.?)\s*#?\s*(\d+)\b/i)?.[1];
-  if (!input.image && displayedProducts.length > 0 && input.context?.stage !== "quantity" && selectionNumber) {
+  if (!input.image && !asksProductInformation && displayedProducts.length > 0 && input.context?.stage !== "quantity" && selectionNumber) {
     const selected = Number.parseInt(selectionNumber, 10);
     if (selected < 1 || selected > displayedProducts.length) {
       const reply: ChatReply = {
@@ -2490,7 +2491,7 @@ async function processChat(input: ChatRequest) {
       return NextResponse.json(customerReply(reply, input));
     }
   }
-  if (!input.image && displayedProducts.length > 0 && asksForRecommendation(input.message)) {
+  if (!input.image && !asksProductInformation && displayedProducts.length > 0 && asksForRecommendation(input.message)) {
     const selectedProduct = displayedProducts.find((product) => product.stock_status !== "out_of_stock") ?? null;
     if (!selectedProduct) {
       const quantityCopy = input.context?.quantity ? ` I’ve kept your requested quantity of ${input.context.quantity}.` : "";
@@ -2512,7 +2513,6 @@ async function processChat(input: ChatRequest) {
     };
     return NextResponse.json(customerReply(reply, input));
   }
-  const asksProductInformation = isTradePriceQuestion(input.message) || isExactStockQuestion(input.message);
   const rawDisplayedProductIndex = input.image || asksProductInformation || requestsAnotherOption(input.message) || isProductRefinementOnly(input.message)
     ? null
     : requestedDisplayedProductIndex(input.message, displayedProducts);

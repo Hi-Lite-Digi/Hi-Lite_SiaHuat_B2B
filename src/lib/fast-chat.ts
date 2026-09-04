@@ -396,6 +396,14 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     return reply("Sorry, we don’t carry that. We only handle products listed in the Sia Huat catalogue.", []);
   }
 
+  if (/\bbanana\s+peels?\b/.test(simple)
+    && !/\b(?:compost|composting|food\s+waste|discard(?:ing)?\s+food|dispose\s+of\s+food)\b/.test(simple)) {
+    return reply(
+      "We don't carry banana peels in the current Sia Huat catalogue. Tell me the commercial-kitchen or F&B item you need instead, and I'll check real catalogue products.",
+      [],
+    );
+  }
+
   const unsupportedProductFamilies = [
     { pattern: /\b(ppe|personal protective equipment|safety helmets?|hard hats?|safety vests?|safety boots?)\b/, label: "PPE" },
     { pattern: /\b(electrical cable|electric cable|power cable|electrical wire|electric wire|circuit breaker|switchgear)\b/, label: "electrical supplies" },

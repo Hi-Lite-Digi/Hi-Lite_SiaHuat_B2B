@@ -2849,6 +2849,53 @@ await check("CASE-046", "Exact-stock follow-up", "how many stock you have?", (re
   displayedProducts: gasCartridgeContext,
 });
 
+const gasTorchContext = contextProducts([
+  {
+    stock_id: "CB-TC-CKWH",
+    name: "Iwatani Cassette Gas Torch Burner L16cm,White",
+    list_price: 57.71,
+    uom_id: "PC",
+    stock_status: "in_stock",
+    available_quantity: 12,
+  },
+  {
+    stock_id: "BTS-8026D",
+    name: "CASSETTE GAS TORCH BURNER L15.6xW5.8xH5cm, BLUE, SAFICO PRO",
+    list_price: 23.36,
+    uom_id: "PC",
+    stock_status: "in_stock",
+    available_quantity: 426,
+  },
+]);
+await check("CASE-050", "Option-specific trade-price routing", "trade price for option 2?", (reply) => {
+  if (reply.stage !== "clarify" || reply.selectedProduct) return "A trade-price question was incorrectly converted into product selection";
+  if (!/BTS-8026D|SAFICO PRO/i.test(reply.message) || !/not a confirmed trade price/i.test(reply.message)) {
+    return "The reply did not answer the trade-price question for option 2";
+  }
+  return JSON.stringify(reply.suggestions ?? []) === JSON.stringify(["2", "Prepare staff review summary"])
+    ? null
+    : `The option-2 trade-price CTA was incorrect: ${JSON.stringify(reply.suggestions ?? [])}`;
+}, [], 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasTorchContext,
+});
+await check("CASE-051", "Option-specific exact-stock routing", "exact stock of item 2?", (reply) => {
+  if (reply.stage !== "clarify" || reply.selectedProduct) return "An exact-stock question was incorrectly converted into product selection";
+  if (!/BTS-8026D|SAFICO PRO/i.test(reply.message) || !/fresh listing check shows \d+ PC available/i.test(reply.message)) {
+    return "The reply did not provide fresh stock for option 2";
+  }
+  return JSON.stringify(reply.suggestions ?? []) === JSON.stringify(["2"])
+    ? null
+    : `The option-2 stock CTA was incorrect: ${JSON.stringify(reply.suggestions ?? [])}`;
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasTorchContext,
+});
+
 for (const [id, prompt] of [
   ["CASE-047", "CASSETTE GAS TORCH BURNER"],
   ["CASE-048", "IWATANI, GAS TORCH BURNER"],
