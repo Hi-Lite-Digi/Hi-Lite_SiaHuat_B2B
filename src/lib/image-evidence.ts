@@ -5,6 +5,23 @@ type EncodedImage = {
   mimeType: string;
 };
 
+export type KnownProductReferenceMatch = {
+  query: string;
+  exactStockId?: string;
+  capacityLitres?: number;
+  capacityGallons?: number;
+  capacityLabel?: string;
+};
+
+export type ProductSpecificationCandidate = {
+  stock_id: string;
+  name: string;
+  description?: string | null;
+  size?: string | null;
+  dimensions?: string | null;
+  model?: string | null;
+};
+
 export type RasterImageKind = "product-like" | "document-like" | "flat-graphic" | "unknown";
 
 type RasterMetrics = {
@@ -16,11 +33,22 @@ type RasterMetrics = {
 
 const KNOWN_PRODUCT_REFERENCES = [
   {
-    query: "Cambro Camtainer insulated beverage dispenser",
+    // This fixture is the full-size 1000LCD, not the visually similar 500LCD.
+    // Keep the exact code and capacities attached to the pixels so a broad
+    // Camtainer search cannot silently turn an 18 L model into a photo match.
+    match: {
+      query: "Cambro Camtainer 1000LCD-131 44.5 L 10 Gal insulated beverage dispenser",
+      exactStockId: "1000LCD-131",
+      capacityLitres: 44.5,
+      capacityGallons: 10,
+      capacityLabel: "44.5 L / 10 Gal",
+    },
     fingerprint: "//////f19/rhr7+88/3/////9d6hnaesobXGqYiF/////5aKlZWXorS7jWZfcv////+Ngo2TmZ6gpIx0fIf/////m4CNk5ibnJ+XgX2H/////6J7i5GSmJueloN9iv////+pdJDPyZqZm5aGgI3/////snOKnq+alpmXiYWS/////7p2g0tQi5aVl4qJmP/////EeIRRQnuZlJeKi5z/////0HqEVjZpmZKWioqa/////91/g14fU5mOlIuGqv/////ogoRnqaqNjpWGmPT/////8oRtcP/TiI+Rien///////7gxdn/6H9/kMv//v/////////////NmrX//v///w==",
   },
   {
-    query: "plastic utility box Cambox storage box",
+    match: {
+      query: "plastic utility box Cambox storage box",
+    },
     fingerprint: "///////////////////////////////////////////9rlpNSlJjYGFfS0RDUKz+30YOFhUVFRUVFRYWFxFQ6sw9FhkWFhUWFRUVFRgXRNW5Kw4VFRUVFxcXFxgXDTHAoyYVS1FQUVNUVFNYThYpqY0sJjpBNDM9PDM1QTcqLpB3JR4kKCEfJCMhJSwjGiZ4UzQuLzEvLikpMjM1MjAyVqo8Njs5OkFAQEA4OTw3Pbj/hycyLy0sLCwtLjEzKX3//5chMi0tLCwsLCwsLx+G///aRSwwMTIzNDQ2Oz5K0f///////////////////////////////////////////w==",
   },
 ] as const;
@@ -142,15 +170,64 @@ function bufferSimilarity(left: Buffer, right: Buffer) {
 export async function matchKnownProductReference(image: EncodedImage) {
   try {
     const uploaded = await compactFingerprint(dataUrlBuffer(image.dataUrl));
-    let best: { query: string; score: number } | null = null;
+    let best: { match: KnownProductReferenceMatch; score: number } | null = null;
     for (const reference of KNOWN_PRODUCT_REFERENCES) {
       const score = bufferSimilarity(uploaded, Buffer.from(reference.fingerprint, "base64"));
-      if (!best || score > best.score) best = { query: reference.query, score };
+      if (!best || score > best.score) best = { match: reference.match, score };
     }
-    return best && best.score >= 0.88 ? best.query : null;
+    return best && best.score >= 0.88 ? best.match : null;
   } catch {
     return null;
   }
+}
+
+function normalizedStockId(value: string) {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function productSpecificationText(product: ProductSpecificationCandidate) {
+  return [product.name, product.description, product.size, product.dimensions, product.model]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Checks catalogue facts against facts tied to a curated reference image.
+ * Visual similarity is deliberately not enough here: different-capacity
+ * variants in the same mould can otherwise look like the pictured SKU.
+ */
+export function matchesKnownProductReferenceSpecification(
+  reference: KnownProductReferenceMatch,
+  product: ProductSpecificationCandidate,
+) {
+  if (reference.exactStockId) {
+    const expected = normalizedStockId(reference.exactStockId);
+    const actual = normalizedStockId(product.stock_id);
+    return actual === expected || actual.endsWith(expected);
+  }
+
+  const text = productSpecificationText(product);
+  const matchesLitres = reference.capacityLitres !== undefined
+    && [...text.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:l|litres?|liters?)\b/gi)]
+      .some((match) => Math.abs(Number.parseFloat(match[1]) - reference.capacityLitres!) <= 0.05);
+  const matchesGallons = reference.capacityGallons !== undefined
+    && [...text.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:gal|gallons?)\b/gi)]
+      .some((match) => Math.abs(Number.parseFloat(match[1]) - reference.capacityGallons!) <= 0.05);
+
+  if (reference.capacityLitres !== undefined || reference.capacityGallons !== undefined) {
+    return matchesLitres || matchesGallons;
+  }
+  return true;
+}
+
+export function knownProductReferenceMismatchMessage(reference: KnownProductReferenceMatch) {
+  const picturedSpecification = reference.capacityLabel
+    ? `${reference.capacityLabel} capacity`
+    : reference.exactStockId
+      ? `model ${reference.exactStockId}`
+      : "specification";
+  const exactModel = reference.exactStockId ? ` (${reference.exactStockId})` : "";
+  return `I recognized the pictured product family, but the exact pictured ${picturedSpecification}${exactModel} was not confirmed in the current catalogue results. I won’t present a materially different capacity as a match. I can prepare a staff-review summary so Sia Huat sales can source the pictured specification manually. If you intentionally want another capacity instead, tell me that capacity and I’ll search it only as a clearly labelled alternative.`;
 }
 
 /**

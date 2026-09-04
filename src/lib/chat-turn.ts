@@ -337,7 +337,54 @@ const wordQuantities: Record<string, number> = {
   ten: 10,
   eleven: 11,
   twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
 };
+
+const englishQuantityPattern = "(?:one\\s+hundred|a\\s+hundred|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\\s]+(?:one|two|three|four|five|six|seven|eight|nine))?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)";
+
+function parseEnglishQuantity(value: string) {
+  const normalized = value.toLowerCase().replace(/-/g, " ").replace(/\s+/g, " ").trim();
+  if (normalized === "a hundred" || normalized === "one hundred") return 100;
+  const parts = normalized.split(" ");
+  if (parts.length === 1) return wordQuantities[parts[0]] ?? null;
+  if (parts.length === 2) {
+    const tens = wordQuantities[parts[0]];
+    const ones = wordQuantities[parts[1]];
+    if (tens && tens >= 20 && tens % 10 === 0 && ones && ones < 10) return tens + ones;
+  }
+  return null;
+}
+
+function collectEnglishQuantityCandidates(message: string, pattern: RegExp, group = 1) {
+  const candidates: QuantityCandidate[] = [];
+  for (const match of message.matchAll(pattern)) {
+    const raw = match[group];
+    if (!raw) continue;
+    const quantity = parseEnglishQuantity(raw);
+    if (quantity === null) continue;
+    const index = (match.index ?? 0) + match[0].lastIndexOf(raw);
+    const suffix = message.slice(index + raw.length);
+    // Keep product specifications such as "four slot", "three step" and
+    // "eight inch" out of the order-quantity state.
+    if (/^\s*-?\s*(?:steps?|slots?|cm|mm|inches?|inch|litres?|liters?|l|ml|qt|kg|g|lb|lbs|pounds?|oz|ounces?)\b/i.test(suffix)) continue;
+    candidates.push({ index, raw: String(quantity) });
+  }
+  return candidates;
+}
 
 const chineseQuantityDigits: Record<string, number> = {
   零: 0,
@@ -421,6 +468,24 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
     ...collectQuantityCandidates(
       message,
       /\b(?:knife|knives|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\b[^.!?\n]{0,20}\balso\b[\s,:-]*(?:x\s*)?(-?\d(?:\.\d+)?)\s*(?:(?:please|pls|plz|thanks?|thank\s+you)\s*)?[.!?]*$/gi,
+    ),
+    // Natural customer wording often omits the unit: "need three", "want
+    // twenty five", or simply "three" when Claire has just asked how many.
+    ...collectEnglishQuantityCandidates(
+      message,
+      new RegExp(`\\b(?:get|want|need|order|buy|take|give(?:\\s+me)?|qty|quantity(?:\\s+of)?)(?:\\s+(?:no\\.?|number))?\\s+(${englishQuantityPattern})\\b`, "gi"),
+    ),
+    ...collectEnglishQuantityCandidates(
+      message,
+      new RegExp(`\\b(${englishQuantityPattern})\\s+(?:(?:\\w[\\w'-]*)\\s+){0,3}(?:knives?|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\\b`, "gi"),
+    ),
+    ...collectEnglishQuantityCandidates(
+      message,
+      new RegExp(`\\b(?:need|want|order|buy|get|add)\\b[^.!?\\n]{0,90}\\b(?:knife|knives|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\\b[\\s,:-]+(${englishQuantityPattern})\\s*(?:(?:please|pls|plz|thanks?|thank\\s+you)\\s*)?[.!?]*$`, "gi"),
+    ),
+    ...collectEnglishQuantityCandidates(
+      message,
+      new RegExp(`^\\s*(${englishQuantityPattern})\\s*(?:(?:please|pls|plz|thanks?|thank\\s+you)\\s*)?[.!?]*$`, "gi"),
     ),
   ];
 

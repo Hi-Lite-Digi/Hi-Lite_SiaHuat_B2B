@@ -93,6 +93,14 @@ test("retains quantity when common need or plate words are misspelled", () => {
 });
 
 test("recognises human quantities after a product name and before each", () => {
+  assert.equal(requestedQuantity("got oyster knife plastic handle? need three"), 3);
+  assert.equal(requestedQuantity("three"), 3);
+  assert.equal(requestedQuantity("three please"), 3);
+  assert.equal(requestedQuantity("need twenty-five"), 25);
+  assert.equal(requestedQuantity("twenty five oyster knives"), 25);
+  assert.equal(requestedQuantity("need oyster knife twenty five"), 25);
+  assert.equal(requestedQuantity("want one hundred"), 100);
+  assert.equal(requestedQuantity("a hundred plates"), 100);
   assert.equal(requestedQuantity("also need bread knife 3"), 3);
   assert.equal(requestedQuantity("also need bread knife 3 please"), 3);
   assert.equal(requestedQuantity("also need bread knife, 3 pls"), 3);
@@ -127,6 +135,10 @@ test("recognises human quantities after a product name and before each", () => {
   assert.equal(requestedQuantity("need chef knife 8 inch"), null);
   assert.equal(requestedQuantity("need ladder 3 steps"), null);
   assert.equal(requestedQuantity("need 4-slot toaster"), null);
+  assert.equal(requestedQuantity("need chef knife eight inch"), null);
+  assert.equal(requestedQuantity("need ladder three steps"), null);
+  assert.equal(requestedQuantity("need four-slot toaster"), null);
+  assert.equal(requestedQuantity("option three"), null);
 });
 
 test("keeps pot compatibility wording as one browser request", () => {

@@ -24,7 +24,15 @@ import {
   riceDispenserImageClarification,
   visionImageKind,
 } from "@/lib/image-comparison";
-import { classifyImageRaster, imageMatchesCandidate, matchKnownComparisonReference, matchKnownProductReference } from "@/lib/image-evidence";
+import {
+  classifyImageRaster,
+  imageMatchesCandidate,
+  knownProductReferenceMismatchMessage,
+  matchKnownComparisonReference,
+  matchKnownProductReference,
+  matchesKnownProductReferenceSpecification,
+  type KnownProductReferenceMatch,
+} from "@/lib/image-evidence";
 import {
   catalogueHistoryWithClarification,
   catalogueMessageWithContext,
@@ -1529,6 +1537,35 @@ function enforceRequestedQuantityOptions(reply: ChatReply, message: string): Cha
   const uom = quantity === 1 && /^units$/i.test(candidateUom) ? "unit" : candidateUom;
   const alreadyDisclosesAlternative = /\bnon-Damascus\b/i.test(reply.message);
   const foundAvailableMatch = products.length > 0 || Boolean(selectedProduct);
+  const insufficientAvailable = [...new Map(
+    catalogueCandidates
+      .filter((product) =>
+        product.stock_status === "in_stock"
+        && typeof product.available_quantity === "number"
+        && product.available_quantity > 0
+        && product.available_quantity < quantity)
+      .sort((left, right) => Number(right.available_quantity ?? 0) - Number(left.available_quantity ?? 0))
+      .map((product) => [product.stock_id, product]),
+  ).values()].slice(0, 3);
+
+  // Keep a genuinely matching item visible when it has some stock but not
+  // enough for the customer's requested quantity. The customer can confirm
+  // the exact item and trigger a fresh listing check, while the UI retains the
+  // original quantity and prevents an over-stock enquiry from being reviewed.
+  if (!foundAvailableMatch && insufficientAvailable.length > 0) {
+    const availability = insufficientAvailable
+      .map((product) => `${product.name} has ${product.available_quantity} ${product.uom_id}`)
+      .join("; ");
+    return {
+      ...reply,
+      message: `I found ${insufficientAvailable.length === 1 ? "this matching item" : "these matching items"}, but the current listing does not have enough for your requested ${quantity}: ${availability}. I’ve kept your requested quantity of ${quantity}. Select the exact item if you want me to recheck its live stock, or choose another item.`,
+      stage: "clarify",
+      products: insufficientAvailable,
+      selectedProduct: null,
+      suggestions: [],
+    };
+  }
+
   return {
     ...reply,
     message: foundAvailableMatch
@@ -2116,6 +2153,30 @@ async function requireVisualCatalogueEvidence(
   };
 }
 
+function enforceKnownProductReferenceSpecification(
+  reply: ChatReply,
+  reference: KnownProductReferenceMatch,
+): ChatReply {
+  const products = reply.products.filter((product) =>
+    matchesKnownProductReferenceSpecification(reference, product),
+  );
+  const selectedProduct = reply.selectedProduct
+    && matchesKnownProductReferenceSpecification(reference, reply.selectedProduct)
+    ? reply.selectedProduct
+    : null;
+  return { ...reply, products, selectedProduct };
+}
+
+function unconfirmedKnownPhotoSpecificationReply(reference: KnownProductReferenceMatch): ChatReply {
+  return {
+    message: knownProductReferenceMismatchMessage(reference),
+    stage: "clarify",
+    products: [],
+    selectedProduct: null,
+    suggestions: ["Prepare staff review summary"],
+  };
+}
+
 function previouslyDisplayedStockIds(input: ChatRequest) {
   const stockIds = new Set<string>();
   for (const item of input.history) {
@@ -2147,7 +2208,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const rasterKindPromise = input.image
     ? classifyImageRaster(input.image)
     : Promise.resolve(null);
-  const knownProductQueryPromise = input.image
+  const knownProductReferencePromise = input.image
     ? matchKnownProductReference(input.image)
     : Promise.resolve(null);
   const knownComparisonVisionPromise = input.image
@@ -2340,12 +2401,16 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     ), input.message, catalogueMessage);
   }
 
-  const knownProductQuery = input.image && !isImageComparisonRequest(input.message)
-    ? await knownProductQueryPromise
+  const knownProductReference = input.image && !isImageComparisonRequest(input.message)
+    ? await knownProductReferencePromise
     : null;
-  if (input.image && knownProductQuery) {
+  if (input.image && knownProductReference) {
+    const knownProductQuery = knownProductReference.query;
+    const lookupQuery = requestsAnotherOption(input.message) && knownProductReference.exactStockId
+      ? knownProductQuery.replace(new RegExp(`\\b${knownProductReference.exactStockId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"), " ")
+      : knownProductQuery;
     const visibleConstraints = imageCatalogueConstraints(input.message);
-    const constrainedKnownQuery = [knownProductQuery, visibleConstraints].filter(Boolean).join(" ");
+    const constrainedKnownQuery = [lookupQuery, visibleConstraints].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     const queryWithQuantity = contextualQuantity === null
       ? constrainedKnownQuery
       : `${constrainedKnownQuery} ${contextualQuantity} units`;
@@ -2358,8 +2423,11 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       console.error("[api/chat] known image reference lookup failed", { knownProductQuery, error });
       return null;
     });
-    const visuallyVerified = knownReply
-      ? await requireVisualCatalogueEvidence(input.image, knownReply)
+    const specificationVerifiedReply = knownReply
+      ? enforceKnownProductReferenceSpecification(knownReply, knownProductReference)
+      : null;
+    const visuallyVerified = specificationVerifiedReply
+      ? await requireVisualCatalogueEvidence(input.image, specificationVerifiedReply)
       : null;
     if (visuallyVerified) {
       rememberGrounded(visuallyVerified);
@@ -2397,11 +2465,12 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
           && /\b(?:cambox|utility\s+box|storage\s+box)\b/i.test(productText);
         return (matchesRequestedBrand(constrainedKnownQuery, product) || trustedCambroCambox)
           && (!trustedFamily || trustedFamily.test(productText))
+          && matchesKnownProductReferenceSpecification(knownProductReference, product)
           && !/\b(?:accessor(?:y|ies)|replacement|spare\s+part|cooling\s+tube)\b/i.test(product.name);
       });
       if (safePhotoAlternatives.length > 0) {
         const alternativeReply: ChatReply = {
-          message: `I used the photo as the reference and found ${safePhotoAlternatives.length} other available ${safePhotoAlternatives.length === 1 ? "option" : "options"} from the same product family. Check the capacity, colour and dimensions before choosing.`,
+          message: `I used the photo as the reference and found ${safePhotoAlternatives.length} other available ${safePhotoAlternatives.length === 1 ? "option" : "options"} that ${knownProductReference.capacityLabel ? `retain its ${knownProductReference.capacityLabel} capacity` : "match its known specification"}. These are alternatives, not the exact pictured SKU; check the colour and dimensions before choosing.`,
           stage: "clarify",
           products: safePhotoAlternatives,
           selectedProduct: null,
@@ -2414,7 +2483,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       return {
         message: photoAlternativeLookupFailed
           ? "I recognized the product family from your photo, but the live catalogue check for another option did not complete. Please try again, tell me which detail can change (such as size, colour or capacity), or prepare a staff review summary."
-          : "I recognized the product family from your photo, but I couldn’t find another currently available catalogue option that keeps your requested details after excluding the options already shown. Tell me which detail can change (such as size, colour or capacity), or prepare a staff review summary for Sia Huat sales.",
+          : knownProductReference.capacityLabel
+            ? `I recognized the pictured ${knownProductReference.capacityLabel} product, but I couldn’t find another available option with that same capacity after excluding the options already shown. I won’t present a materially different capacity as a match. I can show other capacities only as clearly labelled alternatives, or prepare a staff-review summary for Sia Huat sales to source the pictured capacity manually.`
+            : "I recognized the product family from your photo, but I couldn’t find another currently available catalogue option that keeps your requested details after excluding the options already shown. Tell me which detail can change (such as size, colour or capacity), or prepare a staff review summary for Sia Huat sales.",
         stage: "clarify",
         products: [],
         selectedProduct: null,
@@ -2422,6 +2493,11 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
           ? ["Try again", "Prepare staff review summary"]
           : ["Prepare staff review summary"],
       };
+    }
+    if (knownProductReference.capacityLabel || knownProductReference.exactStockId) {
+      const safeFallback = unconfirmedKnownPhotoSpecificationReply(knownProductReference);
+      rememberGrounded(safeFallback);
+      return safeFallback;
     }
   }
 

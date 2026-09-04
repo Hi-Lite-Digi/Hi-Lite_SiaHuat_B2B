@@ -2082,6 +2082,18 @@ await check("QTY-006", "Latest quantity correction", "I want 5 chef knives, actu
     ? null
     : "The latest corrected quantity (10) must win over the earlier quantity (5)";
 }, [], 20_000);
+await check("QTY-006A", "Word-number quantity memory", "got oyster knife plastic handle? need three", (reply) => {
+  const candidates = [reply.selectedProduct, ...(reply.products ?? [])]
+    .filter((product): product is ReplyProduct => Boolean(product));
+  const oysterKnife = candidates.find((product) => product.stock_id === "8247" && /oyster/i.test(product.name));
+  if (!oysterKnife) return "The exact plastic/POM-handle oyster knife was not retained as a selectable match";
+  if (!/\b3\b/.test(reply.message)) return "The word-number quantity 'three' was not retained in the customer-facing response";
+  if (typeof oysterKnife.available_quantity === "number" && oysterKnife.available_quantity < 3
+    && !/not enough|only|below|requested 3/i.test(reply.message)) {
+    return "The reply did not clearly flag that live stock is below the remembered quantity of 3";
+  }
+  return null;
+}, [], 20_000);
 await check("QTY-007", "Latest quantity and colour correction", "I need 5 black dinner plates, sorry, make that 10 white dinner plates", (reply) => {
   const products = reply.products ?? [];
   if (products.length === 0) return "Expected white dinner plates with at least 10 units";

@@ -3,7 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import sharp from "sharp";
-import { classifyImageRaster, imageSimilarity, matchKnownComparisonReference, matchKnownProductReference } from "./image-evidence";
+import {
+  classifyImageRaster,
+  imageSimilarity,
+  knownProductReferenceMismatchMessage,
+  matchKnownComparisonReference,
+  matchKnownProductReference,
+  matchesKnownProductReferenceSpecification,
+} from "./image-evidence";
 
 const fixtureDir = path.resolve("test-fixtures", "images");
 
@@ -41,11 +48,49 @@ test("recognises only the verified local product references", async () => {
   const utilityBox = await encoded("101CA-1520CBP-110.jpg");
   const comparison = await encoded("rice-dispenser-comparison.png");
   const random = await encoded("random-non-product.png");
-  assert.match(await matchKnownProductReference(product.image) ?? "", /Camtainer/);
-  assert.match(await matchKnownProductReference(portraitProduct.image) ?? "", /Camtainer/);
-  assert.match(await matchKnownProductReference(utilityBox.image) ?? "", /utility box/);
+  const camtainer = await matchKnownProductReference(product.image);
+  const portraitCamtainer = await matchKnownProductReference(portraitProduct.image);
+  const cambox = await matchKnownProductReference(utilityBox.image);
+  assert.match(camtainer?.query ?? "", /Camtainer/);
+  assert.equal(camtainer?.exactStockId, "1000LCD-131");
+  assert.equal(camtainer?.capacityLabel, "44.5 L / 10 Gal");
+  assert.equal(portraitCamtainer?.exactStockId, "1000LCD-131");
+  assert.match(cambox?.query ?? "", /utility box/);
   assert.equal(await matchKnownProductReference(comparison.image), null);
   assert.equal(await matchKnownProductReference(random.image), null);
+});
+
+test("does not accept a different-capacity Camtainer as the known photo specification", async () => {
+  const product = await encoded("101CA-1000LCD.jpg");
+  const reference = await matchKnownProductReference(product.image);
+  assert.ok(reference);
+
+  assert.equal(matchesKnownProductReferenceSpecification(reference, {
+    stock_id: "1000LCD-131",
+    name: "Cambro Camtainer, 44.5L / 10Gal, Dark Brown",
+  }), true);
+  assert.equal(matchesKnownProductReferenceSpecification(reference, {
+    stock_id: "101CA-1000LCD-131",
+    name: "Cambro Camtainer",
+  }), true);
+  assert.equal(matchesKnownProductReferenceSpecification(reference, {
+    stock_id: "500LCD-131",
+    name: "Cambro Camtainer, 18L / 4.75Gal, Dark Brown",
+  }), false);
+  assert.equal(matchesKnownProductReferenceSpecification(reference, {
+    stock_id: "500LCD-157",
+    name: "Cambro Camtainer, 18L / 4.75Gal, Coffee Beige",
+  }), false);
+  assert.equal(matchesKnownProductReferenceSpecification(reference, {
+    stock_id: "ANOTHER-44L",
+    name: "Cambro Camtainer, 44.5L / 10Gal, Dark Brown",
+  }), false);
+
+  const mismatchReply = knownProductReferenceMismatchMessage(reference);
+  assert.match(mismatchReply, /exact pictured 44\.5 L \/ 10 Gal capacity[^.]*was not confirmed/i);
+  assert.match(mismatchReply, /materially different capacity[^.]*match/i);
+  assert.match(mismatchReply, /source[^.]*manually/i);
+  assert.match(mismatchReply, /clearly labelled alternative/i);
 });
 
 test("reads the verified rice-dispenser comparison without a remote vision round trip", async () => {

@@ -10,19 +10,25 @@ function expectedStockId(filePath: string) {
 type ProductImageFixture = {
   filePath: string;
   expected: string;
+  requireExactStockId?: boolean;
   message?: string;
   maximumDurationMs?: number;
 };
 
 const imageFixtureDir = path.resolve("test-fixtures", "images");
 const defaultFixtures: ProductImageFixture[] = [
-  { filePath: path.join(imageFixtureDir, "101CA-1000LCD.jpg"), expected: "101CA-1000LCD" },
+  {
+    filePath: path.join(imageFixtureDir, "101CA-1000LCD.jpg"),
+    expected: "101CA-1000LCD-131",
+    requireExactStockId: true,
+  },
   { filePath: path.join(imageFixtureDir, "101CA-1520CBP-110.jpg"), expected: "101CA-1520CBP-110" },
   // The same product on a phone-portrait canvas ensures a tall product photo
   // is not rejected merely because it has screenshot-like dimensions.
   {
     filePath: path.join(imageFixtureDir, "101CA-1000LCD-portrait.jpg"),
-    expected: "101CA-1000LCD",
+    expected: "101CA-1000LCD-131",
+    requireExactStockId: true,
     message: "Do you sell this beverage dispenser? Need 1.",
     // A curated fingerprint should use the deterministic catalogue path. If it
     // falls through to the vision workflow, it typically reaches the 26-second
@@ -69,11 +75,15 @@ function isSameProductFamily(expectedName: string, candidateName: string) {
   return [...words(candidateName)].filter((word) => expectedWords.has(word)).length >= 2;
 }
 
-function fallbackFamilyForFixture(expected: string) {
-  if (/1000LCD$/i.test(expected)) {
-    return /camtainer|beverage dispenser|drink dispenser|tea dispenser|beverage server|drink server/i;
-  }
-  return null;
+function stockIdMatchesExpected(actual: string, expected: string) {
+  const normalize = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const normalizedActual = normalize(actual);
+  const normalizedExpectedIds = oracleStockIds(expected).map(normalize);
+  return normalizedExpectedIds.some((expectedId) =>
+    normalizedActual === expectedId
+    || normalizedActual.endsWith(expectedId)
+    || expectedId.endsWith(normalizedActual),
+  );
 }
 
 async function getOracleProduct(expected: string) {
@@ -102,7 +112,6 @@ async function validateImage(fixture: ProductImageFixture, index: number) {
   const sentMessage = fixture.message ?? "Do you sell this? Please identify it and show the SKU and catalogue price.";
   const bytes = await fs.readFile(filePath);
   const oracle = await getOracleProduct(expected);
-  const fallbackFamily = fallbackFamilyForFixture(expected);
   const { status, body, durationMs } = await postChat({
     message: sentMessage,
     image: {
@@ -118,12 +127,13 @@ async function validateImage(fixture: ProductImageFixture, index: number) {
     ...(body.selectedProduct ? [body.selectedProduct] : []),
     ...(body.products ?? []),
   ];
-  const relevant = oracle
-    ? returned.filter((product) =>
-        product.stock_id.toUpperCase() === oracle.stock_id.toUpperCase()
-        || isSameProductFamily(oracle.name, product.name))
-    : fallbackFamily
-      ? returned.filter((product) => fallbackFamily.test(product.name))
+  const exact = returned.filter((product) => stockIdMatchesExpected(product.stock_id, expected));
+  const relevant = fixture.requireExactStockId
+    ? exact
+    : oracle
+      ? returned.filter((product) =>
+          product.stock_id.toUpperCase() === oracle.stock_id.toUpperCase()
+          || isSameProductFamily(oracle.name, product.name))
       : [];
   const responseMessage = typeof body.message === "string" ? body.message : "";
   const positiveExactClaim = /\b(this is|identified as|exactly matches|confirmed as|definitely)\b/i.test(responseMessage);
@@ -134,11 +144,15 @@ async function validateImage(fixture: ProductImageFixture, index: number) {
       ? null
       : `Reply took ${durationMs}ms; expected under ${fixture.maximumDurationMs ?? 30_000}ms`,
     status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
-    oracle || fallbackFamily ? null : `Could not load the catalogue oracle for ${expected}`,
+    oracle ? null : `Could not load the catalogue oracle for ${expected}`,
     returned.length > 0 ? null : "The image produced no catalogue suggestions",
     relevant.length > 0 ? null : `No returned item was relevant to ${oracle?.name ?? expected}`,
     relevant.every((product) => product.list_price > 0) ? null : "A returned item has no positive catalogue price",
-    returned.length === relevant.length ? null : "The response included a different product family",
+    returned.length === relevant.length
+      ? null
+      : fixture.requireExactStockId
+        ? `The exact-photo response included a non-matching SKU; expected only ${expected}`
+        : "The response included a different product family",
     claimsExactWithoutEvidence ? "The response claimed an exact identification without a visible verified SKU" : null,
     responseMessage ? null : `The response did not match the chat contract: ${body.error ?? "missing message"}`,
     responseMessage.toLowerCase().includes("qa-pixel-only") ? "The response leaked or used the neutral upload filename" : null,
