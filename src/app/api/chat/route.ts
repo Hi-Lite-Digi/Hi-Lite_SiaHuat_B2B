@@ -2269,6 +2269,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     }
     const knownPhotoSource = input.context?.activeProduct ?? input.context?.displayedProducts?.[0] ?? null;
     if (requestsAnotherOption(input.message) && excludedStockIds && knownPhotoSource) {
+      let photoAlternativeLookupFailed = false;
       const photoAlternatives = await findAvailableCatalogueAlternatives(
         knownPhotoSource.stock_id,
         3,
@@ -2277,6 +2278,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
         constrainedKnownQuery,
       ).catch((error) => {
         console.error("[api/chat] known photo alternative lookup failed", { stockId: knownPhotoSource.stock_id, error });
+        photoAlternativeLookupFailed = true;
         return [];
       });
       const trustedFamily = /\bcamtainer\b/i.test(knownProductQuery)
@@ -2308,6 +2310,17 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
         const liveReply = await addLiveCatalogueState(alternativeReply);
         return deduplicateReplyProducts(enforceLiveCheckoutGate(explainUnavailableProducts(liveReply)));
       }
+      return {
+        message: photoAlternativeLookupFailed
+          ? "I recognized the product family from your photo, but the live catalogue check for another option did not complete. Please try again, tell me which detail can change (such as size, colour or capacity), or prepare a staff review summary."
+          : "I recognized the product family from your photo, but I couldn’t find another currently available catalogue option that keeps your requested details after excluding the options already shown. Tell me which detail can change (such as size, colour or capacity), or prepare a staff review summary for Sia Huat sales.",
+        stage: "clarify",
+        products: [],
+        selectedProduct: null,
+        suggestions: photoAlternativeLookupFailed
+          ? ["Try again", "Prepare staff review summary"]
+          : ["Prepare staff review summary"],
+      };
     }
   }
 

@@ -210,6 +210,82 @@ async function validateComparisonScreenshot(message: string, expectedQuantity: R
   };
 }
 
+async function validateExhaustedKnownPhotoAlternatives() {
+  const filePath = path.join(imageFixtureDir, "101CA-1520CBP-110.jpg");
+  const bytes = await fs.readFile(filePath);
+  const image = {
+    dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`,
+    mimeType: "image/jpeg" as const,
+    name: "qa-exhausted-utility-box-options.jpg",
+  };
+  const sessionId = `image-exhausted-${crypto.randomUUID()}`;
+  const firstTurn = await postChat({
+    sessionId,
+    message: "Do you sell this? I need 1.",
+    image,
+  });
+  const displayedProducts = [
+    ...(firstTurn.body.selectedProduct ? [firstTurn.body.selectedProduct] : []),
+    ...(firstTurn.body.products ?? []),
+  ].filter((product, index, products) =>
+    products.findIndex((candidate) => candidate.stock_id === product.stock_id) === index,
+  );
+  const { status, body, durationMs } = await postChat({
+    sessionId,
+    message: "another option black 53 x 38 cm",
+    history: [
+      { role: "user", content: "Do you sell this? I need 1." },
+      { role: "assistant", content: firstTurn.body.message || "I found utility box options from your photo." },
+    ],
+    context: {
+      stage: "clarify",
+      activeProduct: displayedProducts[0] ?? null,
+      quantity: 1,
+      displayedProducts,
+    },
+    image,
+  });
+  const responseMessage = body.message ?? "";
+  const requiredDisplayedStockIds = ["1520CBP-110", "21155CBP-110", "21157CBP-110"];
+  const displayedStockIds = new Set(displayedProducts.map((product) => product.stock_id));
+  const failures = [
+    firstTurn.status === 200 ? null : `Initial photo turn returned HTTP ${firstTurn.status}`,
+    requiredDisplayedStockIds.every((stockId) => displayedStockIds.has(stockId))
+      ? null
+      : `The initial photo turn did not expose every option required for this test: ${requiredDisplayedStockIds.join(", ")}`,
+    status === 200 ? null : `HTTP ${status}: ${body.error ?? "unknown error"}`,
+    durationMs < 12_000 ? null : `Follow-up took ${durationMs}ms; expected under 12000ms`,
+    /recogniz(?:e|ed)[\s\S]*product family[\s\S]*couldn['’]?t find another currently available[\s\S]*excluding the options already shown/i.test(responseMessage)
+      ? null
+      : "The response did not clearly distinguish exhausted known-photo alternatives from failed identification",
+    /size|colour|color|capacity|staff review/i.test(responseMessage)
+      ? null
+      : "The response did not offer a useful way to continue buying",
+    !/did not complete|try again|can['’]?t (?:identify|recognize)|unable to (?:identify|recognize)/i.test(responseMessage)
+      ? null
+      : "The exhausted-success response was replaced by an identification or catalogue-check failure",
+    (body.products?.length ?? 0) === 0 && !body.selectedProduct
+      ? null
+      : "The exhausted state returned an already-shown or unverified product card",
+    JSON.stringify(body.suggestions ?? []) === JSON.stringify(["Prepare staff review summary"])
+      ? null
+      : "The exhausted state did not provide the single reliable staff-review action",
+  ].filter(Boolean);
+
+  return {
+    file: filePath,
+    sentName: image.name,
+    expected: "recognized photo with exhausted safe alternatives",
+    oracle: displayedProducts.map((product) => product.stock_id),
+    pass: failures.length === 0,
+    failures,
+    durationMs: firstTurn.durationMs + durationMs,
+    message: responseMessage,
+    selectedProduct: body.selectedProduct,
+    products: body.products,
+  };
+}
+
 async function validateRandomNonProduct() {
   const bytes = await fs.readFile(randomNonProductImage);
   const { status, body, durationMs } = await postChat({
@@ -354,6 +430,7 @@ async function main() {
   results.push(await validateRandomNonProduct());
   results.push(await validateRandomNonProductWithNamedCategory());
   results.push(await validateRandomNonProductWithRememberedCategory());
+  results.push(await validateExhaustedKnownPhotoAlternatives());
 
   const pass = results.filter((result) => result.pass).length;
   const report = {
