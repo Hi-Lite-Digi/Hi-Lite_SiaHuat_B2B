@@ -51,6 +51,21 @@ test("builds a quantity-preserving clarification without availability claims", (
   assert.deepEqual(reply.suggestions.slice(0, 2), ["WF-RD-10 (10 kg)", "WF-RD-30 (30 kg)"]);
 });
 
+test("keeps word-number quantity for imperfect comparison wording", () => {
+  const reply = riceDispenserImageClarification({
+    visionText: comparisonVisionText,
+    userMessage: "can chk item 1 n 2? need two each",
+    quantity: 2,
+  });
+
+  assert.ok(reply);
+  assert.match(reply.message, /kept quantity 2 each for the selected models/i);
+  assert.match(reply.message, /WF-RD-10/);
+  assert.match(reply.message, /WF-RD-30/);
+  assert.doesNotMatch(reply.message, /WF-RD-60/);
+  assert.doesNotMatch(reply.message, /tell me how many|choose a quantity/i);
+});
+
 test("does not intercept a single-product rice-dispenser photo", () => {
   assert.equal(riceDispenserImageClarification({
     visionText: "This appears to be one WF-RD-10 rice dispenser.",

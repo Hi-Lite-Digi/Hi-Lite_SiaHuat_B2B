@@ -2814,6 +2814,13 @@ await check("CASE-044", "Human cooked-noodle buying intent", "i cook my maggie t
   quantity: null,
   displayedProducts: [],
 });
+await check("CASE-052", "Severe-typo cooked-noodle buying intent", "cook meggemi already, water how to throw ah", (reply) => {
+  if (/only help with Sia Huat products/i.test(reply.message)) return "A human typo in a normal cooked-noodle request was rejected as off-topic";
+  const products = reply.products ?? [];
+  if (products.length === 0) return "The typo-heavy cooked-noodle request did not produce a purchasable food-strainer shortlist";
+  const unrelated = products.find((product) => !/strainer|skimmer|colander/i.test(product.name) || /cocktail|bar\s+strainer/i.test(product.name));
+  return unrelated ? `Returned an unrelated draining product: ${unrelated.name}` : null;
+}, [], 20_000);
 
 const gasCartridgeContext = contextProducts([{
   stock_id: "GAS",
@@ -2918,6 +2925,244 @@ for (const [id, prompt] of [
     activeProduct: null,
     quantity: null,
     displayedProducts: gasCartridgeContext,
+  });
+}
+
+for (const [id, prompt] of [
+  ["CASE-053", "actually need the torch head also got?"],
+  ["CASE-054", "burner head, not gas can"],
+  ["CASE-055", "no lah. i want the metal torch burner attachment, not cartridge"],
+  ["CASE-061", "not gas can, burner head"],
+  ["CASE-062", "not cartridge. need burner head"],
+  ["CASE-063", "i don't need cartridge, give burner head"],
+] as const) {
+  await check(id, "Human correction from cartridge to torch burner", prompt, (reply) => {
+    const products = reply.products ?? [];
+    if (products.length === 0) return "The corrected torch-burner request did not return a purchasable burner";
+    const wrong = products.find((product) => !/torch.*burner|burner.*torch/i.test(product.name) || /cartridge/i.test(product.name));
+    if (wrong) return `The correction remained stuck on the gas cartridge or returned an unrelated item: ${wrong.name}`;
+    if (/what kind|which product|search again/i.test(reply.message)) return "The bot asked an unnecessary clarification after the customer clearly corrected the product";
+    return null;
+  }, [
+    { role: "user", content: "GAS CARTRIDGE" },
+    { role: "assistant", content: "This looks like the closest match: IWATANI GAS CARTRIDGE." },
+  ], 20_000, {
+    stage: "clarify",
+    activeProduct: null,
+    quantity: 2,
+    displayedProducts: gasCartridgeContext,
+  });
+}
+
+await check("CASE-056", "Combined option price and availability question", "2nd one how much for us? got 5 or not", (reply) => {
+  if (reply.stage !== "clarify" || reply.selectedProduct) return "A price-and-stock question was incorrectly converted into product selection";
+  if (!/BTS-8026D|SAFICO PRO/i.test(reply.message)) return "The reply did not identify option 2";
+  if (!/\$23\.36\s*\/\s*PC/i.test(reply.message) || !/catalogue list price before GST/i.test(reply.message) || !/not a confirmed trade price/i.test(reply.message)) {
+    return "The reply did not clearly explain option 2's catalogue price and trade-price limitation";
+  }
+  if (!/fresh listing check shows \d+ PC available/i.test(reply.message)) return "The reply did not provide a fresh exact stock count for option 2";
+  if (!/(?:5 are currently available|requested 5 are not all available|5 are not available)/i.test(reply.message)) {
+    return "The reply did not directly answer whether five units are available";
+  }
+  if (!/Take 5 of option 2/i.test((reply.suggestions ?? []).join(" "))) return "The reply did not offer a clear purchase action for five of option 2";
+  return null;
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasTorchContext,
+});
+
+await check("CASE-069", "Word-number option price and availability question", "2nd one how much for us? got five or not", (reply) => {
+  if (reply.stage !== "clarify" || reply.selectedProduct) return "A word-number price-and-stock question was incorrectly converted into product selection";
+  if (!/BTS-8026D|SAFICO PRO/i.test(reply.message)) return "The reply did not identify option 2";
+  if (!/fresh listing check shows \d+ PC available/i.test(reply.message) || !/5 are currently available/i.test(reply.message)) {
+    return "The reply did not directly answer whether five units are available";
+  }
+  return /Take 5 of option 2/i.test((reply.suggestions ?? []).join(" "))
+    ? null
+    : "The word-number question did not offer a clear purchase action for five of option 2";
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasTorchContext,
+});
+
+await check("CASE-070", "Short exact-stock quantity question", "have 5?", (reply) => {
+  if (!/fresh listing check shows \d+ PC available/i.test(reply.message) || !/5 are currently available/i.test(reply.message)) {
+    return "The short stock question did not directly answer whether five units are available";
+  }
+  return /Take 5 of option 1/i.test((reply.suggestions ?? []).join(" "))
+    ? null
+    : "The short stock question did not offer a clear purchase action";
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasCartridgeContext,
+});
+
+const existingPotStrainerHistory: HistoryItem[] = [
+  { role: "user", content: "got 12qt pot alr. only need the basket inside fit one" },
+  { role: "assistant", content: "Understood—you already have the 12QT pot and only want a strainer that fits it. Send the pot's inner-rim diameter and usable depth in cm." },
+  { role: "user", content: "no pot i have. need strainer fit inside" },
+  { role: "assistant", content: "I’ll keep this as a strainer-only compatibility request. Please send the inner-rim diameter and usable depth." },
+];
+await check("CASE-057", "Existing-pot strainer request", "got 12qt pot alr. only need the basket inside fit one", (reply) => {
+  if (!/already have the 12QT pot/i.test(reply.message) || !/only want a strainer/i.test(reply.message)) {
+    return "The bot did not preserve that the customer owns the pot and needs only the insert";
+  }
+  if (!/inner-rim diameter/i.test(reply.message) || !/usable depth/i.test(reply.message)) return "The bot did not ask for the two fit-critical measurements";
+  if ((reply.products?.length ?? 0) > 0) return "The bot showed unverified product cards before collecting compatibility measurements";
+  return null;
+}, [], 5_000);
+await check("CASE-058", "Existing-pot human correction", "no pot i have. need strainer fit inside", (reply) => {
+  if (!/already have the 12QT pot|already have the pot/i.test(reply.message) || !/only want a strainer/i.test(reply.message)) {
+    return "The colloquial correction was misread as a request to buy another pot";
+  }
+  if ((reply.products ?? []).some((product) => /\bpot\b/i.test(product.name) || /cocktail|bar\s+strainer/i.test(product.name))) {
+    return "The correction returned another pot or a bar strainer";
+  }
+  return null;
+}, existingPotStrainerHistory.slice(0, 2), 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: [],
+});
+await check("CASE-059", "Existing-pot fit measurements", "inside 30cm, deep 18. strainer only ok", (reply) => {
+  if (!/inner diameter 30 cm/i.test(reply.message) || !/usable depth 18 cm/i.test(reply.message)) {
+    return "The bot did not retain both pot measurements or inherit the cm unit";
+  }
+  if (!/strainer-only/i.test(reply.message) || !/won.?t add another pot/i.test(reply.message)) return "The reply did not preserve the strainer-only request";
+  if (!/verify the compatible food strainer before purchase/i.test(reply.message)) return "The reply did not provide a safe, useful fit-verification next step";
+  if ((reply.products?.length ?? 0) > 0) return "The compatibility reply returned unverified product cards";
+  return null;
+}, existingPotStrainerHistory, 5_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: [],
+});
+
+for (const [id, prompt] of [
+  ["CASE-071", "I need a strainer for my 12qt pot"],
+  ["CASE-072", "strainer for my existing pot"],
+  ["CASE-073", "got pot already. need basket"],
+  ["CASE-074", "need basket for pot i already have"],
+  ["CASE-075", "I have 12qt pot. don't want another pot, need strainer fits inside"],
+  ["CASE-076", "got pot already. do not need new pot, basket only"],
+] as const) {
+  await check(id, "Human existing-pot strainer direction", prompt, (reply) => {
+    if (!/already have the (?:12QT )?pot/i.test(reply.message) || !/only want a strainer/i.test(reply.message)) {
+      return "The bot did not preserve that the customer owns the pot and wants only the insert";
+    }
+    if (/both items|switch to a pot/i.test(reply.message)) return "The bot reversed or broadened the customer's request";
+    return (reply.products?.length ?? 0) === 0 ? null : "The bot showed an unverified fit before collecting measurements";
+  }, [], 5_000);
+}
+
+await check("CASE-077", "Correction plus stock wording must leave a stale card", "not cartridge. need burner head. got five or not", (reply) => {
+  if (/IWATANI GAS CARTRIDGE|4130 PC available|Take 5 of option 1/i.test(`${reply.message} ${(reply.suggestions ?? []).join(" ")}`)) {
+    return "The reply answered or acted on the rejected gas-cartridge card";
+  }
+  const wrong = (reply.products ?? []).find((product) => !/torch.*burner|burner.*torch/i.test(product.name) || /cartridge/i.test(product.name));
+  if (wrong) return `The corrected request returned an unrelated product: ${wrong.name}`;
+  return (reply.products?.length ?? 0) > 0 || /burner/i.test(reply.message)
+    ? null
+    : "The reply did not continue the requested burner-head buying path";
+}, [], 20_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasCartridgeContext,
+});
+
+await check("CASE-078", "Word stock count before option reference", "got five of option 2 or not?", (reply) => {
+  if (!/BTS-8026D|SAFICO PRO/i.test(reply.message)) return "The stock reply did not resolve option 2";
+  if (!/5 are currently available/i.test(reply.message)) return "The stock reply did not answer whether five are available";
+  return /Take 5 of option 2/i.test((reply.suggestions ?? []).join(" "))
+    ? null
+    : "The reply did not provide the safe option-2 purchase action";
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: null,
+  quantity: null,
+  displayedProducts: gasTorchContext,
+});
+
+for (const [id, prompt] of [
+  ["CASE-079", "I have a pot and need a basket for bread"],
+  ["CASE-080", "I have a pot and need a basket for the deep fryer"],
+] as const) {
+  await check(id, "Non-food basket must not become a pot strainer", prompt, (reply) => {
+    return /already have the pot|food strainer|strainer that fits|inner-rim diameter/i.test(reply.message)
+      ? "The basket purpose was misread as a food-strainer compatibility request"
+      : null;
+  }, [], 10_000);
+}
+
+for (const [id, prompt, wanted] of [
+  ["CASE-081", "I already have a pot and strainer; need replacement lid", /lid/i],
+  ["CASE-082", "I have pot + strainer. need 2 ladles", /ladle|utensil/i],
+] as const) {
+  await check(id, "New item after owned cookware", prompt, (reply) => {
+    if (/already have the (?:pot|strainer).*only want|both a pot and a strainer/i.test(reply.message)) {
+      return "The reply ignored the newly requested item and revived owned cookware";
+    }
+    const productText = (reply.products ?? []).map((product) => product.name).join(" ");
+    return wanted.test(`${reply.message} ${productText}`)
+      ? null
+      : "The reply did not continue the newly requested product path";
+  }, [], 20_000);
+}
+
+await check("CASE-083", "Model number must not become order quantity", "Model 5 in stock?", (reply) => {
+  return /so 5 are currently available|Take 5|Choose [“\"]?5/i.test(`${reply.message} ${(reply.suggestions ?? []).join(" ")}`)
+    ? "The model number was incorrectly treated as an order quantity"
+    : null;
+}, [], 10_000, {
+  stage: "clarify",
+  activeProduct: gasCartridgeContext[0],
+  quantity: null,
+  displayedProducts: gasCartridgeContext,
+});
+
+await check("CASE-064", "Existing-strainer pot-only direction", "I already have the strainer; only need the pot it fits inside.", (reply) => {
+  if (!/already have the strainer/i.test(reply.message) || !/only want a pot/i.test(reply.message)) {
+    return "The bot did not preserve that the customer owns the strainer and needs only the pot";
+  }
+  if (/already have the (?:12QT )?pot|only want a strainer/i.test(reply.message)) return "The ownership direction was reversed";
+  if (!/outer-rim diameter/i.test(reply.message) || !/usable height/i.test(reply.message)) return "The bot did not ask for fit-safe strainer measurements";
+  return (reply.products?.length ?? 0) === 0 ? null : "The bot showed unverified pots before collecting fit measurements";
+}, [], 5_000);
+
+for (const [id, prompt] of [
+  ["CASE-060", "also need bread knife 3"],
+  ["CASE-065", "also need bread knife 3 please"],
+  ["CASE-066", "also need bread knife, 3 pls"],
+  ["CASE-067", "also need bread knife x3"],
+  ["CASE-068", "bread knife also 3"],
+] as const) {
+  await check(id, "Additional product with human trailing quantity", prompt, (reply) => {
+    const products = reply.products ?? [];
+    if (products.length > 0) {
+      const wrong = products.find((product) => !/bread.*knife|knife.*bread/i.test(product.name));
+      if (wrong) return `The additional-item request returned an unrelated product: ${wrong.name}`;
+      return /\b3\b/.test(reply.message) ? null : "The available bread-knife response lost quantity 3";
+    }
+    return /\b3\b/.test(reply.message) && /bread knife/i.test(reply.message) && /out of stock|couldn.?t confirm|another|manual/i.test(reply.message)
+      ? null
+      : "The no-match response did not preserve the bread-knife request and quantity 3";
+  }, [
+    { role: "user", content: "I need a chef knife" },
+    { role: "assistant", content: "I have added the chef knife to your enquiry summary. What else would you like?" },
+  ], 20_000, {
+    stage: "complete",
+    activeProduct: null,
+    quantity: null,
+    displayedProducts: [],
   });
 }
 

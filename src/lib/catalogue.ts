@@ -2,6 +2,12 @@ import "server-only";
 import { z } from "zod";
 import { productSchema, type Product } from "@/lib/chat-contract";
 import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
+import {
+  catalogueLookupOverride,
+  foodPanDepthConstraintMatches,
+  hasPlasticLikeHandle,
+  normalizeFoodPanCatalogueQuery,
+} from "@/lib/catalogue-query";
 
 const productSearchSchema = productSchema.extend({ score: z.coerce.number() });
 
@@ -131,11 +137,19 @@ export function normalizeCatalogueQuery(message: string) {
     .replace(/\bgrinders\b/gi, "grinder")
     .replace(/^\d+\s+(?=[a-z])/i, "");
 
+  const foodPanQuery = normalizeFoodPanCatalogueQuery(cleaned);
+  if (foodPanQuery) return foodPanQuery;
+
   if (/\bpan\b/i.test(cleaned)) {
     const kind = detectProductUseCase(cleaned)?.search ?? cleaned.match(/\b(non[ -]?stick|frying|sauce|grill)\b/i)?.[0] ?? "";
     const colour = cleaned.match(/\b(red|yellow|blue|black|white|green|silver)\b/i)?.[0] ?? "";
     const size = cleaned.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|in)\b/i)?.[0] ?? "";
     const material = cleaned.match(/\b(stainless(?:\s+steel)?|black\s+steel|carbon\s+steel|cast\s+iron|aluminium|aluminum|non[ -]?stick)\b/i)?.[0] ?? "";
+    const foodPanFraction = cleaned.match(/\b1\s*\/\s*(?:2|4)\b/)?.[0]?.replace(/\s+/g, "") ?? "";
+    const foodPanDepth = cleaned.match(/\b\d+(?:\.\d+)?\s*(?:inch|inches|in)\s*deep\b/i)?.[0] ?? "";
+    if (/\b(?:gn|gastronorm|food)\s*pan\b/i.test(cleaned) || (foodPanFraction && /\bdeep\b/i.test(cleaned))) {
+      return `${material} ${foodPanFraction} ${foodPanDepth} GN food pan`.replace(/\s+/g, " ").trim();
+    }
     return `${colour} ${size} ${material} ${kind}${kind.toLowerCase().endsWith("pan") ? "" : " pan"}`.replace(/\s+/g, " ").trim();
   }
 
@@ -143,6 +157,8 @@ export function normalizeCatalogueQuery(message: string) {
 }
 
 function catalogueLookupQuery(query: string) {
+  const override = catalogueLookupOverride(query);
+  if (override) return override;
   if (/\bcambox\b/i.test(query)) return "cambox";
   if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/i.test(query)) {
     return "utility box";
@@ -192,7 +208,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (/\bramekins?\b/.test(productName) && !/\b(?:plates?|bowls?)\b/.test(productName)) return false;
   }
   if (/\btoasters?\b/.test(requested)) {
-    const rejectsConveyor = /\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor|\d+(?:\s+or\s+\d+)?\s*slots?)\b/.test(requested);
+    const rejectsConveyor = /\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor|(?:\d+|four|six)(?:\s+or\s+(?:\d+|four|six))?\s*slots?)\b/.test(requested);
     if (rejectsConveyor && /\bconveyor\b/.test(candidate)) return false;
   }
   if (/\b(?:cassette\s+)?gas\s+torch(?:\s+burners?)?\b|\btorch\s+burners?\b/.test(requested)) {
@@ -207,6 +223,22 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!requestsUtensilAccessory && /\b(?:storage\s+stand|counter\s+organizer|wall\s+hanger|utensil\s+(?:holder|rack)|(?:holder|rack)\s+for\s+utensils?)\b/.test(productName)) return false;
   }
   if (/\bserving\s+spoons?\b/.test(requested) && !/\bserving\s+spoons?\b/.test(productName)) return false;
+  if (/\bladles?\b/.test(requested) && !/\bladles?\b/.test(productName)) return false;
+  if (/\b(?:gn\s+food\s+pan\s+)?(?:lids?|covers?)\b/.test(requested)) {
+    if (!/\b(?:lids?|covers?)\b/.test(productName)) return false;
+    const lidFraction = requested.match(/\b1\s*\/\s*([24])\b/)?.[1];
+    if (lidFraction && !new RegExp(`\\b1\\s*\\/\\s*${lidFraction}\\b`).test(candidate)) return false;
+    if (/\bslotted\b/.test(requested) && !/\b(?:slot(?:ted)?|notch(?:ed)?|cut[ -]?out)\b/.test(candidate)) return false;
+  }
+  const foodPanRequest = /\b(?:gn|gastronorm|food)\s*pan\b/.test(requested)
+    && !/\b(?:lids?|covers?)\b/.test(requested);
+  if (foodPanRequest) {
+    if (!/\b(?:gn|gastronorm|food)\s*pan\b|\bpan\b[\s\S]*\b(?:1\s*\/\s*[24]|100|150|200)\b/.test(candidate)) return false;
+    const fraction = requested.match(/\b1\s*\/\s*([24])\b/)?.[1];
+    if (fraction && !new RegExp(`\\b1\\s*\\/\\s*${fraction}\\b`).test(candidate)) return false;
+    const depthMatches = foodPanDepthConstraintMatches(requested, candidate);
+    if (depthMatches === false) return false;
+  }
   if (/\bwok\s+(?:lid|cover)s?\b|\b(?:lid|cover)s?\s+(?:for\s+)?(?:a\s+)?wok\b/.test(requested)
     && !/\bwok\b[\s\S]*\b(?:lid|cover)\b|\b(?:lid|cover)\b[\s\S]*\bwok\b/.test(productName)) return false;
   if (/\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/.test(requested)
@@ -217,6 +249,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
     { requested: /\bboning\b/, candidate: /\bboning\b/ },
     { requested: /\bparing\b/, candidate: /\bparing\b/ },
     { requested: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/, candidate: /\bbread\b.*\bknife\b|\bknife\b.*\bbread\b/ },
+    { requested: /\boyster\b.*\bknife\b|\bknife\b.*\boyster\b/, candidate: /\boyster\b.*\bknife\b|\bknife\b.*\boyster\b/ },
     { requested: /\bdamascus\b/, candidate: /\bdamascus\b/ },
     { requested: /\bknife\b(?!\s+(?:sharpener|sharpening|stone|steel))/, candidate: /\bknife|cleaver\b/ },
     { requested: /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/, candidate: /\b(?:sharpener|sharpening|whetstone|honing)\b/ },
@@ -245,6 +278,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
   if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
   const requestsKnifeSharpening = /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/.test(requested);
   if (/\bknife\b/.test(requested) && !requestsKnifeSharpening && /\b(bag|holder|guard|sharpener|sharpening|block|cover|case|screw|spare|machine|thermomix|mixing)\b/.test(productName)) return false;
+  if (/\bplastic\s+handles?\b/.test(requested) && !hasPlasticLikeHandle(candidate)) return false;
   if (/\b(?:japan|japanese)\b/.test(requested) && !/\b(?:japan|japanese)\b/.test(candidate)) return false;
 
   const rejectsAllAluminium = /\b(?:not|no|don['’]?t|do\s+not|must\s+not)\b[^.!?]{0,45}\b(?:all\s+)?(?:aluminium|aluminum)\b/.test(requested);
@@ -253,7 +287,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
     && !/\b(?:steel|plastic|fibreglass|fiberglass|wood|rubber)\b/.test(candidate)) return false;
 
   const requestedMaterials = [
-    /\bstainless(?:\s+steel)?\b/.test(requested) ? /\bstainless(?:\s+steel)?\b/ : null,
+    /\bstainless(?:\s+steel)?\b/.test(requested) ? /\b(?:stainless(?:\s+steel)?|s\s*\/\s*s)\b/ : null,
     /\bblack\s+steel\b/.test(requested) ? /\bblack\s+steel\b/ : null,
     /\bcarbon\s+steel\b/.test(requested) ? /\bcarbon\s+steel\b/ : null,
     /\bcast\s+iron\b/.test(requested) ? /\bcast\s+iron\b/ : null,
@@ -328,7 +362,10 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!measurementsCm.some((measurement) => measurement >= minimumCm - 1.1 && measurement <= maximumCm + 1.1)) return false;
   }
 
-  const requestedInchSize = requestedInchRange || requestedInchDimensions ? null : requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
+  const requestedFoodPanDepth = foodPanRequest ? foodPanDepthConstraintMatches(requested, candidate) : null;
+  const requestedInchSize = requestedInchRange || requestedInchDimensions || requestedFoodPanDepth !== null
+    ? null
+    : requested.match(/\b(\d+(?:\.\d+)?)\s*-?\s*(?:inch|in)\b/);
   if (requestedInchSize) {
     const inches = Number.parseFloat(requestedInchSize[1]);
     const directInches = new RegExp(`\\b${requestedInchSize[1]}\\s*-?\\s*(?:inch|in|\")`, "i");

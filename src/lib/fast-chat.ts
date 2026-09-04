@@ -1,22 +1,30 @@
 import {
   createFastReply as reply,
   catalogueHistoryWithClarification,
+  catalogueMessageWithContext,
+  extractPotFitMeasurements,
   extractExplicitShoeSize,
   extractShoeStyle,
+  explicitKnifeBrand,
+  hasUnrelatedPotOrBasketMeaning,
   isAmbiguousNoodleDryingRequest,
   isCatalogueRequest,
   isCookedNoodleDrainingIntent,
   isExactStockQuestion,
+  isExistingPotStrainerRequest,
   isTradePriceQuestion,
   productCategories,
   productCategory,
   productWords,
+  rejectsCurrentProductReference,
+  requestedProductCategory,
   rememberedActiveCategories,
   rememberedPurpose,
   simplifyMessage,
   type FastChatInput,
   type FastReply,
 } from "@/lib/chat-intent";
+import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
 import { requestedDisplayedProductIndex, requestedQuantity } from "@/lib/chat-turn";
 
 export { isCatalogueRequest } from "@/lib/chat-intent";
@@ -32,12 +40,43 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const previousCategories = rememberedActiveCategories(userHistory);
   const lastCategory = previousCategories.at(-1) ?? null;
   const purposeCategory = mentionedCategories[0] ?? null;
-  const currentCategory = productCategory(message);
+  const rawCurrentCategory = productCategory(message);
+  const positivelyRequestedCategory = requestedProductCategory(message);
+  const hasExplicitCategoryCorrection = rejectsCurrentProductReference(message)
+    || /\b(?:not|wrong|instead|rather\s+than|meant|switch|change|replace|but)\b/i.test(message);
+  const currentCategory = positivelyRequestedCategory ?? rawCurrentCategory;
   const correctsPreviousCategory = /\b(?:i\s+)?(?:was\s+)?thinking\s+(?:more\s+)?of\b|\b(?:i\s+)?meant\b|\bmore\s+like\b/i.test(message);
   let currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
-  if (currentCategories.includes("utensil") && currentCategories.includes("blender")
+  const requestsStrainerForPot = currentCategory === "strainer"
+    && /\b(?:strainers?|colanders?|baskets?|inserts?)\b[^.!?;]{0,50}\bfor\b[^.!?;]{0,35}\b(?:stock\s*)?pots?\b/i.test(message);
+  if (hasExplicitCategoryCorrection && currentCategory) {
+    currentCategories = [currentCategory];
+  } else if (positivelyRequestedCategory
+    && /\b(?:also\s+(?:need|want)|add(?:\s+me)?)\b/i.test(message)) {
+    currentCategories = [positivelyRequestedCategory];
+  } else if (requestsStrainerForPot) {
+    currentCategories = ["strainer"];
+  } else if (currentCategory === "lid"
+    && /\b(?:lids?|covers?)\b[^.!?;]{0,65}\b(?:notch|slot|cut[ -]?out)\b[^.!?;]{0,40}\b(?:for\s+)?(?:a\s+)?ladle\b/i.test(message)) {
+    currentCategories = ["lid"];
+  } else if (currentCategories.includes("utensil") && currentCategories.includes("blender")
     && /\b(?:3[ -]?in[ -]?1|three[ -]?in[ -]?one|blender[\s,/-]+whisk|whisk[\s,/-]+blender)\b/i.test(message)) {
     currentCategories = ["utensil"];
+  } else if (isExistingPotStrainerRequest(message)) {
+    currentCategories = ["strainer"];
+  } else if (currentCategories.includes("plant pot")) {
+    currentCategories = ["plant pot"];
+  } else if (hasUnrelatedPotOrBasketMeaning(message) && currentCategories.includes("basket")) {
+    currentCategories = ["basket"];
+  } else if (positivelyRequestedCategory
+    && !["pot", "stockpot", "strainer"].includes(positivelyRequestedCategory)
+    && currentCategories.some((category) => ["pot", "stockpot"].includes(category))
+    && currentCategories.includes("strainer")) {
+    currentCategories = [positivelyRequestedCategory];
+  } else if (currentCategories.includes("gas torch burner")
+    && currentCategories.includes("gas cartridge")
+    && /\b(?:no|not|without|don['’]?t\s+(?:need|want))\b[^.!?]{0,28}\b(?:gas\s+)?(?:can|canister|cartridge)\b/i.test(message)) {
+    currentCategories = ["gas torch burner"];
   } else if (["knife sharpener", "wok lid", "shot glass", "stockpot", "rice dispenser", "trolley"].includes(currentCategories[0] ?? "")) {
     currentCategories = [currentCategories[0]];
   } else if (currentCategories.length > 1 && /\b(?:forget|never\s*mind|instead|switch|change|replace)\b/i.test(message)) {
@@ -73,9 +112,67 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     && /\b(?:status|update|check|chk|chek|follow\s*up|not\s+(?:received|arrived|here)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
   const displayedProducts = input.context?.displayedProducts ?? [];
   const explicitlyReferencedIndex = requestedDisplayedProductIndex(message, displayedProducts);
-  const referencedProduct = (explicitlyReferencedIndex === null ? null : displayedProducts[explicitlyReferencedIndex])
-    ?? input.context?.activeProduct
-    ?? (displayedProducts.length === 1 ? displayedProducts[0] : null);
+  const referencedCandidate = (explicitlyReferencedIndex === null ? null : displayedProducts[explicitlyReferencedIndex])
+    ?? (displayedProducts.length === 1 ? displayedProducts[0] : null)
+    ?? input.context?.activeProduct;
+  const referencedCandidateCategory = referencedCandidate ? productCategory(referencedCandidate.name) : null;
+  const switchesFromDisplayedProduct = Boolean(
+    rejectsCurrentProductReference(message)
+    || (currentCategory
+      && referencedCandidateCategory
+      && currentCategory !== referencedCandidateCategory),
+  );
+  const referenceText = referencedCandidate ? [
+    referencedCandidate.name,
+    referencedCandidate.stock_id,
+    referencedCandidate.brand,
+    referencedCandidate.description,
+    referencedCandidate.size,
+    referencedCandidate.dimensions,
+  ].filter(Boolean).join(" ") : "";
+  const explicitCodes = message.toUpperCase().match(/\b(?=[A-Z0-9./-]*\d)[A-Z0-9]+(?:[./-][A-Z0-9]+)+\b/g) ?? [];
+  const codeMismatch = Boolean(referencedCandidate && explicitCodes.length > 0
+    && !explicitCodes.some((code) => code.toLowerCase() === referencedCandidate.stock_id.toLowerCase()));
+  const requestedOrigin = [...message.matchAll(/\b(japan(?:ese)?|taiwan(?:ese)?)\b/gi)].at(-1)?.[1] ?? null;
+  const originPattern = requestedOrigin
+    ? /^japan/i.test(requestedOrigin) ? /\bjapan(?:ese)?\b/i : /\btaiwan(?:ese)?\b/i
+    : null;
+  const originMismatch = Boolean(referencedCandidate && originPattern && !originPattern.test(referenceText));
+  const requestedColour = [...message.matchAll(/\b(red|yellow|blue|black|white|green|silver|grey|gray|brown)\b/gi)].at(-1)?.[1] ?? null;
+  const colourMismatch = Boolean(referencedCandidate && requestedColour
+    && !new RegExp(`\\b${/gr[ae]y/i.test(requestedColour) ? "gr(?:e|a)y" : requestedColour}\\b`, "i").test(referenceText));
+  const requestedMaterials = [
+    /\bstainless(?:\s+steel)?\b/i.test(message) ? /\bstainless(?:\s+steel)?\b/i : null,
+    /\bcarbon\s+steel\b/i.test(message) ? /\bcarbon\s+steel\b/i : null,
+    /\bcast\s+iron\b/i.test(message) ? /\bcast\s+iron\b/i : null,
+    /\baluminium|aluminum\b/i.test(message) ? /\baluminium|aluminum\b/i : null,
+    /\bnon[ -]?stick\b/i.test(message) ? /\bnon[ -]?stick\b/i : null,
+  ].filter((pattern): pattern is RegExp => pattern !== null);
+  const materialMismatch = Boolean(referencedCandidate && requestedMaterials.length > 0
+    && !requestedMaterials.some((pattern) => pattern.test(referenceText)));
+  const possibleKnifeBrand = explicitKnifeBrand(message);
+  const brandMismatch = Boolean(referencedCandidate && possibleKnifeBrand
+    && !new RegExp(`\\b${possibleKnifeBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(referenceText));
+  const subtypeMismatch = Boolean(referencedCandidate
+    && ((/\bbread\s+kn(?:ife|ives)\b/i.test(message) && !/\bbread\b[\s\S]*\bknife\b|\bknife\b[\s\S]*\bbread\b/i.test(referenceText))
+      || (/\boyster\s+kn(?:ife|ives)\b/i.test(message) && !/\boyster\b[\s\S]*\bknife\b|\bknife\b[\s\S]*\boyster\b/i.test(referenceText))));
+  const requestedMeasurement = [...message.matchAll(/\b(\d+(?:\.\d+)?)[\s-]*(cm|mm|inch|inches|in)\b/gi)].at(-1);
+  const measurementMismatch = Boolean(referencedCandidate && requestedMeasurement && (() => {
+    const requestedValue = Number.parseFloat(requestedMeasurement[1]);
+    const requestedCm = /^mm$/i.test(requestedMeasurement[2]) ? requestedValue / 10
+      : /^(?:inch|inches|in)$/i.test(requestedMeasurement[2]) ? requestedValue * 2.54 : requestedValue;
+    const candidateMeasurements = [...referenceText.matchAll(/\b(\d+(?:\.\d+)?)\s*(cm|mm|inch|inches|in|\")/gi)].map((match) => {
+      const value = Number.parseFloat(match[1]);
+      return /^mm$/i.test(match[2]) ? value / 10 : /^(?:inch|inches|in|\")$/i.test(match[2]) ? value * 2.54 : value;
+    });
+    return !candidateMeasurements.some((value) => Math.abs(value - requestedCm) <= 1.1);
+  })());
+  const metricDimensionsMismatch = Boolean(referencedCandidate
+    && metricDimensionConstraintsMatch(message, referenceText) === false);
+  const referencedProduct = switchesFromDisplayedProduct || codeMismatch || originMismatch || colourMismatch || materialMismatch || brandMismatch || subtypeMismatch || measurementMismatch || metricDimensionsMismatch
+    ? null
+    : referencedCandidate;
+  const hasNamedUnresolvedProduct = Boolean(currentCategory && !referencedProduct);
   const referencedIsActive = Boolean(
     referencedProduct
     && input.context?.activeProduct?.stock_id === referencedProduct.stock_id,
@@ -88,7 +185,57 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     ? "this item"
     : `option ${referencedOptionNumber}`;
 
-  if (isTradePriceQuestion(message) && !input.image) {
+  if (isTradePriceQuestion(message) && isExactStockQuestion(message) && !input.image && !switchesFromDisplayedProduct && !hasNamedUnresolvedProduct) {
+    if (!referencedProduct) {
+      return reply(
+        "Which product do you mean? Choose one of the displayed options first. I’ll check its current availability and explain the price basis without treating your question as an order.",
+        displayedProducts.map((_, index) => String(index + 1)),
+        "clarify",
+      );
+    }
+    const requestedCount = requestedQuantity(message);
+    const exactAvailable = referencedProduct.stock_status === "out_of_stock"
+      ? 0
+      : typeof referencedProduct.available_quantity === "number"
+        ? referencedProduct.available_quantity
+        : null;
+    const requestedCountIsAvailable = requestedCount !== null
+      && exactAvailable !== null
+      && exactAvailable >= requestedCount;
+    const listPrice = typeof referencedProduct.list_price === "number"
+      ? `The $${referencedProduct.list_price.toFixed(2)} / ${referencedProduct.uom_id ?? "unit"} shown is the catalogue list price before GST, not a confirmed trade price.`
+      : "The demo does not show a confirmed trade price.";
+    const stockCopy = referencedProduct.stock_status === "out_of_stock" || referencedProduct.available_quantity === 0
+      ? `${referencedProduct.name} is currently out of stock${requestedCount ? `, so ${requestedCount} are not available` : ""}.`
+      : typeof referencedProduct.available_quantity === "number"
+        ? `The fresh listing check shows ${referencedProduct.available_quantity} ${referencedProduct.uom_id ?? "units"} available${requestedCount === null ? "." : referencedProduct.available_quantity >= requestedCount ? `, so ${requestedCount} are currently available.` : `, so the requested ${requestedCount} are not all available.`}`
+        : `The current listing does not provide an exact stock count${requestedCount ? `, so I can’t confirm whether ${requestedCount} are available` : ""}.`;
+    const nextStep = requestedCount !== null && referencedOptionIndex >= 0
+      ? requestedCountIsAvailable
+        ? `If you want to proceed with ${requestedCount}, choose “Take ${requestedCount} of option ${referencedOptionNumber}.” Trade pricing still needs Sia Huat sales to quote for your quantity and account.`
+        : exactAvailable === 0
+          ? `You cannot take ${requestedCount} of this option while it is out of stock. Choose another item, or prepare a staff-review summary for manual sourcing.`
+          : exactAvailable !== null
+            ? `Only ${exactAvailable} can be confirmed right now. Choose “Take ${exactAvailable} of option ${referencedOptionNumber}” only if that smaller quantity works, or choose another item.`
+            : `I can’t safely confirm ${requestedCount} from the current listing. Prepare a staff-review summary or choose another item instead of placing an unverified request.`
+      : referencedIsActive
+        ? "Tell me the quantity and your business/account name so Sia Huat sales can quote manually."
+        : `Select ${referencedSelectionLabel}, then tell me the quantity and your business/account name so Sia Huat sales can quote manually.`;
+    const nextSuggestions = requestedCount !== null && referencedOptionIndex >= 0
+      ? requestedCountIsAvailable
+        ? [`Take ${requestedCount} of option ${referencedOptionNumber}`, "Prepare staff review summary"]
+        : exactAvailable !== null && exactAvailable > 0
+          ? [`Take ${exactAvailable} of option ${referencedOptionNumber}`, "Choose another item"]
+          : ["Choose another item", "Prepare staff review summary"]
+      : referencedIsActive ? ["1", "6", "12", "24"] : [referencedOptionNumber, "Prepare staff review summary"];
+    return reply(
+      `${referencedSelectionLabel[0].toUpperCase()}${referencedSelectionLabel.slice(1)} is ${referencedProduct.name} (code: ${referencedProduct.stock_id}). ${listPrice} ${stockCopy} ${nextStep}`,
+      nextSuggestions,
+      referencedIsActive ? input.context?.stage ?? "quantity" : "clarify",
+    );
+  }
+
+  if (isTradePriceQuestion(message) && !input.image && !switchesFromDisplayedProduct && !hasNamedUnresolvedProduct) {
     if (!referencedProduct) {
       return reply(
         "Trade pricing depends on the exact item, quantity and customer account. Choose the product first, then tell me the quantity and business/account name. The catalogue price shown is not a confirmed trade price.",
@@ -109,7 +256,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  if (isExactStockQuestion(message) && !input.image) {
+  if (isExactStockQuestion(message) && !input.image && !switchesFromDisplayedProduct && !hasNamedUnresolvedProduct) {
+    const explicitlyRequestedCount = requestedQuantity(message);
     if (!referencedProduct) {
       return reply(
         "Which product do you want the stock count for? Choose one of the displayed options first, and I’ll run a fresh check on that exact Sia Huat listing.",
@@ -119,12 +267,27 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     }
     if (referencedProduct.stock_status === "out_of_stock" || referencedProduct.available_quantity === 0) {
       return reply(
-        `${referencedProduct.name} is currently out of stock, so it cannot be selected. Choose another option or tell me which detail can change.`,
+        `${referencedProduct.name} is currently out of stock${explicitlyRequestedCount ? `, so ${explicitlyRequestedCount} are not available` : ""}. It cannot be selected. Choose another option or tell me which detail can change.`,
         ["Choose another item", "Prepare staff review summary"],
         "clarify",
       );
     }
     if (typeof referencedProduct.available_quantity === "number" && referencedProduct.available_quantity > 0) {
+      if (explicitlyRequestedCount !== null) {
+        const enough = referencedProduct.available_quantity >= explicitlyRequestedCount;
+        const action = referencedIsActive
+          ? enough
+            ? String(explicitlyRequestedCount)
+            : String(referencedProduct.available_quantity)
+          : `Take ${enough ? explicitlyRequestedCount : referencedProduct.available_quantity} of option ${referencedOptionNumber}`;
+        return reply(
+          enough
+            ? `The fresh listing check shows ${referencedProduct.available_quantity} ${referencedProduct.uom_id ?? "units"} available for ${referencedProduct.name}, so ${explicitlyRequestedCount} are currently available. ${referencedIsActive ? `Choose “${explicitlyRequestedCount}” to use that quantity.` : `Choose “Take ${explicitlyRequestedCount} of option ${referencedOptionNumber}” to proceed with this item.`}`
+            : `The fresh listing check shows only ${referencedProduct.available_quantity} ${referencedProduct.uom_id ?? "units"} available for ${referencedProduct.name}, so the requested ${explicitlyRequestedCount} are not all available. Choose the available quantity only if it works, or choose another item.`,
+          enough ? [action, "Change quantity"] : [action, "Choose another item"],
+          referencedIsActive ? input.context?.stage ?? "quantity" : "clarify",
+        );
+      }
       const requested = referencedIsActive ? input.context?.quantity ?? null : null;
       if (requested !== null && requested > referencedProduct.available_quantity) {
         return reply(
@@ -151,7 +314,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       );
     }
     return reply(
-      `The current result for ${referencedProduct.name} does not provide an exact stock count. ${referencedIsActive ? "Tell me the quantity you need and I’ll keep it for staff verification." : `Choose option ${referencedOptionNumber} and I’ll run a fresh Add to cart check on that exact listing.`}`,
+      `The current result for ${referencedProduct.name} does not provide an exact stock count${explicitlyRequestedCount ? `, so I can’t confirm whether ${explicitlyRequestedCount} are available` : ""}. ${referencedIsActive ? "Tell me the quantity you need and I’ll keep it for staff verification." : `Choose option ${referencedOptionNumber} and I’ll run a fresh Add to cart check on that exact listing.`}`,
       referencedIsActive ? ["1", "6", "12", "24"] : [referencedOptionNumber],
       referencedIsActive ? input.context?.stage ?? "quantity" : "clarify",
     );
@@ -186,14 +349,37 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     && /received the photo/i.test(item.content)
     && /identify the item confidently/i.test(item.content),
   );
-  const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conve(?:yor|yr)|slots?|conve(?:yor|yr))\b/i.test(message);
+  const toasterContext = [...input.history
+    .filter((item) => item.role === "user")
+    .slice(-4)
+    .map((item) => item.content), message].join(" ");
+  const specifiesToasterStyle = /\b(?:pop[ -]?up|non[ -]?conve(?:yor|yr)|slots?|conve(?:yor|yr)|(?:no|not|without)\s+(?:a\s+)?belt(?:\s+type)?|belt\s+type\s+(?:no|not))\b/i.test(toasterContext);
+  const followsManualToasterNoMatch = input.history.slice(-4).some((item) =>
+    item.role === "assistant"
+    && /couldn['’]?t find[^.!?]{0,100}\btoaster\b/i.test(item.content)
+    && /contact Sia Huat sales|manual/i.test(item.content),
+  );
+  if (!input.image && currentCategory === "toaster" && followsManualToasterNoMatch) {
+    const savedRequirement = catalogueMessageWithContext(message, userHistory);
+    const savedQuantity = input.context?.quantity ?? [...userHistory].reverse()
+      .map(requestedQuantity)
+      .find((value) => value !== null) ?? null;
+    return reply(
+      `Yes—I’ve kept this as a ${savedRequirement}${savedQuantity ? ` at quantity ${savedQuantity}` : ""}. The current online catalogue still has no safe exact match, so I won’t repeat the same search or show a conveyor/accessory. Prepare the staff-review summary if you want Sia Huat sales to source it manually.`,
+      ["Prepare staff review summary", "Choose another item"],
+      "clarify",
+    );
+  }
   const photoSuggestsYaKunToaster = Boolean(input.image)
-    && /\bya\s*kun\b|\b(?:not|non[ -]?)\s*conve(?:yor|yr)\b/i.test(message);
+    && /\bya\s*kun\b|\b(?:not|non[ -]?)\s*conve(?:yor|yr)\b|\b(?:no|not|without)\s+(?:a\s+)?belt(?:\s+type)?\b|\bbelt\s+type\s+(?:no|not)\b/i.test(message);
   // The customer's explicit product wording is more reliable than an uncertain
   // image label. This prevents a toaster photo from being routed to an
   // unrelated family when vision recognition guesses incorrectly.
   if (photoSuggestsYaKunToaster) {
-    const suppliedSlots = message.match(/\b(4|6)\s*[ -]?slots?\b/i)?.[1] ?? null;
+    const suppliedSlotsRaw = message.match(/\b(4|6|four|six)\s*[ -]?slots?\b/i)?.[1] ?? null;
+    const suppliedSlots = suppliedSlotsRaw
+      ? ({ four: "4", six: "6" }[suppliedSlotsRaw.toLowerCase()] ?? suppliedSlotsRaw)
+      : null;
     // Once the customer supplies the slot count, let the catalogue path run.
     // The toaster category recognises Ya Kun/non-conveyor wording even when
     // the customer omits the word "toaster".
@@ -221,6 +407,11 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
         ? ["4-slot pop-up toaster", "6-slot pop-up toaster"]
         : ["4-slot pop-up toaster", "6-slot pop-up toaster", "Conveyor toaster"],
     );
+  }
+  if (followsAmbiguousPhotoClarification && currentCategory === "toaster" && specifiesToasterStyle) {
+    // The earlier photo turn already supplied the slot/non-conveyor details.
+    // Continue to the grounded search instead of asking for them again.
+    return null;
   }
 
   if (/^dry uncooked(?: or fresh)? noodles? for storage$/.test(simple)) {
@@ -513,33 +704,72 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const hasStrainerCompatibilityContext = input.history.some((item) =>
     /strainer[^.!?]{0,80}(?:fits?|fitted|compatib)|strainer-only compatib/i.test(item.content),
   );
-  const suppliesPotCompatibilityDetails = /\b(?:inner(?:[ -]?rim)?\s+)?diameter\b|\busable\s+depth\b|^\s*pot\s+(?:brand\s*\/\s*model|brand|model)\s*:/i.test(message);
+  const potFitMeasurements = extractPotFitMeasurements(message);
+  const suppliesPotCompatibilityDetails = potFitMeasurements.innerDiameter !== null
+    || potFitMeasurements.usableDepth !== null
+    || /^\s*pot\s+(?:brand\s*\/\s*model|brand|model)\s*:/i.test(message);
   if (hasStrainerCompatibilityContext && suppliesPotCompatibilityDetails) {
-    const measurements = [...message.matchAll(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/gi)]
-      .slice(0, 2)
-      .map((match) => match[0]);
     const model = message.match(/\bpot\s+(?:brand\s*\/\s*model|brand|model)\s*:\s*([a-z0-9][a-z0-9 ./_-]{1,40})/i)?.[1]?.trim() ?? null;
     const details = model
       ? `pot brand/model ${model}`
-      : measurements.length > 0
-        ? `pot measurements ${measurements.join(" by ")}`
+      : potFitMeasurements.innerDiameter && potFitMeasurements.usableDepth
+        ? `pot inner diameter ${potFitMeasurements.innerDiameter} and usable depth ${potFitMeasurements.usableDepth}`
+        : potFitMeasurements.innerDiameter || potFitMeasurements.usableDepth
+          ? `partial pot measurement ${potFitMeasurements.innerDiameter ?? potFitMeasurements.usableDepth}`
         : "pot compatibility details";
+    const needsOtherMeasurement = !model
+      && (!potFitMeasurements.innerDiameter || !potFitMeasurements.usableDepth);
     return reply(
-      `I’ve kept the ${details} for the strainer-only request. I won’t add another pot. Because catalogue dimensions alone may not guarantee a safe fit, download the PDF and ask Sia Huat sales to verify the compatible food strainer before purchase.`,
-      ["Prepare staff review summary"],
+      needsOtherMeasurement
+        ? `I’ve kept the ${details} for the strainer-only request, and I won’t add another pot. Please add the ${potFitMeasurements.innerDiameter ? "usable depth" : "inner-rim diameter"} with its unit so sales can verify the fit safely.`
+        : `I’ve kept the ${details} for the strainer-only request. I won’t add another pot. Because catalogue dimensions alone may not guarantee a safe fit, download the PDF and ask Sia Huat sales to verify the compatible food strainer before purchase.`,
+      needsOtherMeasurement ? ["Enter the missing measurement", "Prepare staff review summary"] : ["Prepare staff review summary"],
       "clarify",
     );
   }
 
-  const mentionsPotAndStrainer = /\b(?:stock\s*pots?|pots?)\b/i.test(message)
-    && /\b(?:strainers?|strainners?|straners?|skimmers?|colanders?)\b/i.test(message);
-  const requestsPairedPotAndStrainer = mentionsPotAndStrainer
-    && /\b(?:both|matching|fits?|fitted|fitting|inside|same)\b/i.test(message);
-  const ownsReferencePot = /\b(?:my|existing|current)\s+(?:12\s*QT\s+)?(?:stock\s*)?pot\b|\b(?:already|currently)\s+(?:have|own)\b[^.!?]{0,30}\bpot\b|\bthis\s+(?:12\s*QT\s+)?(?:stock\s*)?pot\b[^.!?]{0,60}\bonly\s+(?:need|want|buy|order)\b|\bstrainer\s+only\b|\bonly\s+(?:need|want|buy|order)[^.!?]{0,24}\bstrainer\b/i.test(message);
-  if (mentionsPotAndStrainer && ownsReferencePot) {
-    const requestedSize = message.match(/\b\d+(?:\.\d+)?\s*QT\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
+  const hasSpecifiedFoodPanLid = /\b1\s*\/\s*(?:2|4)\b/.test(message)
+    && /\b(?:lids?|covers?)\b/i.test(message)
+    && /\b(?:notch|slot|cut[ -]?out)\b/i.test(message);
+  if (currentCategory === "lid" && !hasSpecifiedFoodPanLid && /\b(?:need|want|find|looking|replacement|lid|cover)\b/i.test(message)) {
     return reply(
-      `Understood—you already have the ${requestedSize ? `${requestedSize} ` : ""}pot and only want a strainer that fits it. A capacity label alone does not guarantee fit. Send the pot’s inner-rim diameter and usable depth in cm, or its brand/model code, and I’ll look for a food strainer or colander without adding another pot.`,
+      "Which item does the replacement lid need to fit? Send the pot, pan or container brand/model and the outer-rim diameter in cm. I’ll use those details to narrow the correct lid instead of guessing from the other items you already own.",
+      ["Enter brand or model", "Enter rim diameter", "Prepare staff review summary"],
+      "clarify",
+    );
+  }
+
+  const mentionsPotAndStrainer = !hasUnrelatedPotOrBasketMeaning(message)
+    && /\b(?:stock\s*pots?|pots?)\b/i.test(message)
+    && /\b(?:strainers?|strainners?|straners?|skimmers?|colanders?|baskets?|inserts?)\b/i.test(message);
+  const ownsStrainer = /\b(?:i|we)\s+(?:already|alr|currently)?\s*(?:have|got|own|bought|purchased)\b[^.!?;]{0,36}\b(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(message)
+    || /^\s*(?:already\s+)?(?:have|got|own|bought|purchased)\b[^.!?;]{0,36}\b(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(message)
+    || /^\s*(?:already|alr)\s+(?:have|got|own|bought|purchased)\b[^.!?;]{0,36}\b(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(message)
+    || /\b(?:strainers?|colanders?|baskets?|inserts?)\b[^.!?;]{0,20}\b(?:already|alr)\s+(?:have|got|own|bought|purchased)\b/i.test(message)
+    || /\b(?:my|our|existing|current)\s+(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(message);
+  const needsPotOnly = /\b(?:only|just)\s+(?:(?:need|want|buy|order|get|find)\s+)?(?:a|the|one|new)?\s*(?:stock\s*)?pots?\b/i.test(message);
+  const requestsPot = /\b(?:need(?:s)?|want|buy|order|get|find|looking\s+for)\b[^.!?;]{0,28}\b(?:stock\s*)?pots?\b/i.test(message)
+    || /\bwhich\s+(?:stock\s*)?pots?\b[^.!?;]{0,20}\bfit(?:s)?\b/i.test(message)
+    || /\b(?:stock\s*)?pots?\b[^.!?;]{0,16}\b(?:need(?:ed)?|want(?:ed)?|find)\b/i.test(message);
+  const requestsAnotherStrainer = /\b(?:need(?:s)?|want|buy|order|get|find|looking\s+for)\b[^.!?;]{0,28}\b(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(message);
+  const potFitIsCurrentRequest = !currentCategory || ["pot", "stockpot", "strainer"].includes(currentCategory);
+  if (potFitIsCurrentRequest && mentionsPotAndStrainer && ownsStrainer && (needsPotOnly || (requestsPot && !requestsAnotherStrainer))) {
+    return reply(
+      "Understood—you already have the strainer and only want a pot it fits inside. Send the strainer’s outer-rim diameter and usable height in cm, or its brand/model code, and I’ll help narrow the pot options without adding another strainer. A size label alone does not guarantee a safe fit.",
+      ["Enter strainer measurements", "Use strainer brand or model", "Prepare staff review summary"],
+    );
+  }
+  const requestsPairedPotAndStrainer = mentionsPotAndStrainer
+    && !isExistingPotStrainerRequest(message)
+    && (/\b(?:both|pair|sets?|together)\b/i.test(message)
+      || /\b(?:need|want|buy|order|get)\b[^.!?]{0,65}\b(?:stock\s*)?pots?\b[^.!?]{0,30}(?:\b(?:and|with|plus)\b|\+)[^.!?]{0,30}\b(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(message));
+  if (potFitIsCurrentRequest && (isExistingPotStrainerRequest(message) || requestsStrainerForPot)) {
+    const requestedSize = message.match(/\b\d+(?:\.\d+)?\s*QT\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
+    const ownsPot = isExistingPotStrainerRequest(message);
+    return reply(
+      ownsPot
+        ? `Understood—you already have the ${requestedSize ? `${requestedSize} ` : ""}pot and only want a strainer that fits it. A capacity label alone does not guarantee fit. Send the pot’s inner-rim diameter and usable depth in cm, or its brand/model code, and I’ll look for a food strainer or colander without adding another pot.`
+        : `Understood—you need a strainer that fits the ${requestedSize ? `${requestedSize} ` : ""}pot, not a handheld strainer or another pot. A capacity label alone does not guarantee fit. Send the pot’s inner-rim diameter and usable depth in cm, or its brand/model code, and I’ll narrow the compatible insert safely.`,
       ["Enter pot measurements", "Use pot brand or model", "Prepare staff review summary"],
     );
   }
@@ -549,7 +779,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       ["Prepare staff review summary"],
     );
   }
-  if (requestsPairedPotAndStrainer) {
+  if (potFitIsCurrentRequest && requestsPairedPotAndStrainer) {
     const pairQuantity = /\b(?:two|2)\b/i.test(message) ? 2 : input.context?.quantity ?? null;
     const requestedSize = message.match(/\b\d+(?:\.\d+)?\s*QT\b/i)?.[0]?.replace(/\s+/g, "") ?? null;
     const specification = [

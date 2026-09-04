@@ -1,5 +1,5 @@
 import type { Product } from "@/lib/chat-contract";
-import { normalizeCommonProductTypos } from "@/lib/chat-intent";
+import { hasUnrelatedPotOrBasketMeaning, normalizeCommonProductTypos, rejectsCurrentProductReference } from "@/lib/chat-intent";
 
 export function requestedProductIndex(message: string, productCount: number) {
   const numbered = message.trim().match(/^(\d+)$/)?.[1]
@@ -10,7 +10,13 @@ export function requestedProductIndex(message: string, productCount: number) {
     return index >= 0 && index < productCount ? index : null;
   }
 
-  const ordinal = message.match(/\b(first|1st|second|2nd|third|3rd|fourth|4th|last|top|bottom)(?:\s+one)?\b/i)?.[1].toLowerCase();
+  const wordNumber = message.match(/\b(?:option|choice|item|number|no\.?)\s+(one|two|three|four)\b/i)?.[1].toLowerCase();
+  if (wordNumber) {
+    const index = { one: 0, two: 1, three: 2, four: 3 }[wordNumber as "one" | "two" | "three" | "four"];
+    return index < productCount ? index : null;
+  }
+
+  const ordinal = message.match(/\b(first|1st|second|2nd|third|3rd|fourth|4th|last|top|bottom)(?:\s+(?:one|option|choice|item))?\b/i)?.[1].toLowerCase();
   if (!ordinal) return null;
   const indexes: Record<string, number> = {
     first: 0, "1st": 0, top: 0,
@@ -61,6 +67,9 @@ function productReferenceText(product: Product) {
  * silently select an arbitrary knife.
  */
 export function requestedDisplayedProductIndex(message: string, products: Product[]) {
+  const rejectionOnly = /^\s*(?:no|not|wrong)\b/i.test(message)
+    && !/[,.;]\s*(?:i\s+)?(?:take|choose|select|buy|order|get|give(?:\s+me)?|need|want|show|find|prefer)\b/i.test(message);
+  if (rejectsCurrentProductReference(message) || rejectionOnly) return null;
   const numbered = requestedProductIndex(message, products.length);
   if (numbered !== null) return numbered;
   if (referencesSingleDisplayedProduct(message, products.length)) return 0;
@@ -184,7 +193,7 @@ export function hasUnavailableProductContext(input: {
   ].some((product) => product?.stock_status === "out_of_stock" || product?.available_quantity === 0);
 }
 
-const PRODUCT_NOUN = /\b(?:apron|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;
+const PRODUCT_NOUN = /\b(?:apron|basket|baskets|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cover|covers|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|lid|lids|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;
 const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-]+)+\b/i;
 
 /**
@@ -196,9 +205,27 @@ export function requestsAdditionalProduct(message: string) {
   const normalized = message.trim();
   if (/^(?:add another item|start another enquiry|new item|next item|添加其他商品|再加一件商品|开始新的询价)$/iu.test(normalized)) return true;
   if (!PRODUCT_NOUN.test(normalized) && !PRODUCT_CODE_REFERENCE.test(normalized)) return false;
-  if (/\b(?:this|that|it|same one)\b/i.test(normalized) && !/\b(?:also|too|another|add)\b/i.test(normalized)) return false;
-  return /\b(?:add|also|another|too|as well|i (?:also )?(?:want|need)|we (?:also )?(?:want|need)|get me|give me)\b/i.test(normalized)
+  const additiveToo = /\btoo\b\s*[.!?]*$/i.test(normalized);
+  if (/\b(?:this|that|it|same one)\b/i.test(normalized)
+    && !(/\b(?:also|another|add|keep|as\s+well)\b/i.test(normalized) || additiveToo)) return false;
+  return /\b(?:add|also|another|as well|i (?:also )?(?:want|need)|we (?:also )?(?:want|need)|get me|give me)\b/i.test(normalized)
+    || /\bkeep\b[^.!?;]{0,80}[,;]\s*(?:need|want)\b/i.test(normalized)
+    || additiveToo
     || /(?:还要|也要|再加|另外要|加上)/u.test(normalized);
+}
+
+/**
+ * Extracts the newly added product from human phrases that also mention an
+ * existing item, so only the new requirement is sent to catalogue search.
+ */
+export function additionalProductTarget(message: string) {
+  const normalized = message.trim();
+  return normalized.match(/\b(?:also\s+(?:need|want)|add|get\s+me|give\s+me)\s+(.+)$/i)?.[1]?.trim()
+    ?? normalized.match(/\b(?:need|want)\s+(.+?)\s+too[.!?]*$/i)?.[1]?.trim()
+    ?? normalized.match(/\b(?:i|we)\s+(?:need|want)\s+(.+?)(?:\s+as\s+well)?[.!?]*$/i)?.[1]?.trim()
+    ?? normalized.match(/\bkeep\b[^.!?;]{0,80}[,;]\s*(?:need|want)\s+(.+?)[.!?]*$/i)?.[1]?.trim()
+    ?? normalized.match(/(?:[,;]\s*|\band\s+)([^,;.!?]+?)\s+too[.!?]*$/i)?.[1]?.trim()
+    ?? null;
 }
 
 export function isGenericAddAnotherItem(message: string) {
@@ -212,6 +239,24 @@ export function isGenericAddAnotherItem(message: string) {
 export function splitMultipleProductRequest(message: string) {
   const compact = message.replace(/\s+/g, " ").trim();
   const numberedMarkers = [...compact.matchAll(/(?:^|[,;]\s*|\s+)(\d{1,2})\s*[).:-]\s*/g)];
+  const mentionsPotFitItems = /\b(?:stock\s*)?pots?\b/i.test(compact)
+    && /\b(?:strainers?|colanders?|baskets?|inserts?)\b/i.test(compact)
+    && !hasUnrelatedPotOrBasketMeaning(compact);
+  // A pot and its insert form one compatibility request. Keep the full human
+  // sentence together so ownership, negation and fit direction reach the API.
+  // Numbered quote lists remain separate line items, and an explicit extra
+  // product after the compatibility clause must not be swallowed.
+  if (mentionsPotFitItems && numberedMarkers.length < 2) {
+    const compatibilityAndExtra = compact.match(/^(.*?\b(?:strainers?|colanders?|baskets?|inserts?)\b.*?)\s*(?:[,;]\s*|\s+(?:plus|and\s+also|as\s+well\s+as)\s+)((?:also\s+)?(?:i\s+)?(?:need|want|add|get|buy|order|a\b|an\b)\b[\s\S]+)$/i);
+    if (compatibilityAndExtra && PRODUCT_NOUN.test(compatibilityAndExtra[2])) {
+      const extra = compatibilityAndExtra[2].replace(/^also\s+/i, "").trim();
+      const firstClauseOnlyDescribesOwnedItems = /\b(?:already|alr|currently)?\s*(?:have|got|own)\b/i.test(compatibilityAndExtra[1])
+        && !/\b(?:need|want|buy|order|get|find|looking\s+for)\b/i.test(compatibilityAndExtra[1]);
+      if (firstClauseOnlyDescribesOwnedItems) return [];
+      return [compatibilityAndExtra[1].trim(), /^i\s+(?:need|want)\b/i.test(extra) ? extra : `I need ${extra.replace(/^(?:need|want|add|get|buy|order)\s+/i, "")}`];
+    }
+    return [];
+  }
   const numberedClauses = numberedMarkers.length >= 2
     ? numberedMarkers.map((marker, index) => {
         const start = (marker.index ?? 0) + marker[0].length;
@@ -329,9 +374,9 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
     if (/\b\d+\s*[- ]\s*in\s*[- ]\s*$/i.test(prefix)) continue;
     const suffix = message.slice(index + raw.length);
     if (/^\s*-?\s*steps?\b/i.test(suffix)) continue;
-    if (/^\s*(?:or\s+\d+\s+)?slots?\b/i.test(suffix)) continue;
+    if (/^\s*-?\s*(?:or\s+\d+\s+)?slots?\b/i.test(suffix)) continue;
     if (/^\s*(?:pax|persons?|people)\b/i.test(suffix)) continue;
-    if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|ml|kg|g|lb|lbs|pounds?|oz|ounces?)\b/i.test(suffix)) continue;
+    if (/^\s*(?:cm|mm|inches?|inch|litres?|liters?|l|ml|qt|kg|g|lb|lbs|pounds?|oz|ounces?)\b/i.test(suffix)) continue;
     if (/^\s*[x×]\s*\d/i.test(suffix)) continue;
     candidates.push({ index, raw });
   }
@@ -350,11 +395,32 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
       /(?<![\w.])(-?\d+(?:\.\d+)?)\s+(?:(?:\w[\w'-]*)\s+){0,3}(?:knives?|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\b/gi,
     ),
     ...collectQuantityCandidates(message, /(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?|sets?|pairs?|packets?|packs?|cartons?|ctns?)\w*\b/gi),
+    ...collectQuantityCandidates(message, /(?<![\w.])(-?\d+(?:\.\d+)?)\s+(?:each|ea)\b/gi),
     ...collectQuantityCandidates(message, /(-?\d+(?:\.\d+)?)\s*(?:个|件|只|套|把|双|份)/gu),
     ...collectQuantityCandidates(message, /\b(-?\d+(?:\.\d+)?)\s+(?:of\s+)?(?:this|that|it|these|those|them)\b/gi),
     ...collectQuantityCandidates(
       message,
-      /\b(?:get|want|need|order|buy|take|have|give(?:\s+me)?|qty|quantity(?:\s+of)?)(?:\s+(?:no\.?|number))?\s*(-?\d+(?:\.\d+)?)/gi,
+      /\b(?:get|want|need|order|buy|take|give(?:\s+me)?|qty|quantity(?:\s+of)?)(?:\s+(?:no\.?|number))?\s*(-?\d+(?:\.\d+)?)/gi,
+    ),
+    ...collectQuantityCandidates(message, /\b(?:can|could|may)\s+i\s+have\s*(-?\d+(?:\.\d+)?)/gi),
+    // Human chat often places a bare quantity after the product name
+    // ("also need bread knife 3 please" / "bread knife x3"). Anchor it to a
+    // buying cue or additive "also" and the end of the message so dimensions
+    // such as "chef knife 8 inch" stay specifications rather than quantities.
+    ...collectQuantityCandidates(
+      message,
+      /\b(?:need|want|order|buy|get|add)\b[^.!?\n]{0,90}\b(?:knife|knives|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\b[\s,:-]+x\s*(-?\d+(?:\.\d+)?)\s*(?:(?:please|pls|plz|thanks?|thank\s+you)\s*)?[.!?]*$/gi,
+    ),
+    // A single bare digit is a common chat quantity ("bread knife 3").
+    // Larger bare values can be an omitted size (for example a 24 cm knife),
+    // so require an explicit x/PC/unit cue for those rather than guessing.
+    ...collectQuantityCandidates(
+      message,
+      /\b(?:need|want|order|buy|get|add)\b[^.!?\n]{0,90}\b(?:knife|knives|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\b[\s,:-]+(-?\d(?:\.\d+)?)\s*(?:(?:please|pls|plz|thanks?|thank\s+you)\s*)?[.!?]*$/gi,
+    ),
+    ...collectQuantityCandidates(
+      message,
+      /\b(?:knife|knives|glasses?|plates?|bowls?|cups?|mugs?|pans?|woks?|pots?|grinders?|blenders?|strainers?|shoes?|spoons?|forks?|cartridges?|sponges?|towels?|gloves?|toasters?|ladders?|stools?|trolleys?)\b[^.!?\n]{0,20}\balso\b[\s,:-]*(?:x\s*)?(-?\d(?:\.\d+)?)\s*(?:(?:please|pls|plz|thanks?|thank\s+you)\s*)?[.!?]*$/gi,
     ),
   ];
 
@@ -377,6 +443,54 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
   for (const match of message.matchAll(/\bnegative\s+(\d+(?:\.\d+)?)/gi)) {
     const index = (match.index ?? 0) + match[0].lastIndexOf(match[1]);
     candidates.push({ index, raw: `-${match[1]}` });
+  }
+
+  for (const match of message.matchAll(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:each|ea)\b/gi)) {
+    const quantity = wordQuantities[match[1].toLowerCase()];
+    if (quantity) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
+
+  // Stock questions often omit a unit ("got five or not" / "have 5?").
+  // Keep this tightly anchored to availability language so model numbers and
+  // product sizes are not silently treated as order quantities.
+  const selectorNumber = "(?:\\d+|one|two|three|four|first|second|third|fourth|last|1st|2nd|3rd|4th)";
+  const optionSelector = `(?:(?:\\s+of\\s+|,\\s*)(?:(?:the\\s+)?(?:first|second|third|fourth|last|1st|2nd|3rd|4th)(?:\\s+(?:one|option|choice|item))?|(?:option|choice|item|number|no\\.?)\\s*#?\\s*${selectorNumber}))?`;
+  for (const match of message.matchAll(new RegExp(`\\b(?:got|have|supply|provide)\\s+(?:at\\s+least\\s+)?(-?\\d+(?:\\.\\d+)?)\\s*(?:pieces?|pcs?|units?)?${optionSelector}\\s*(?=or\\s+not\\b|available\\b|in\\s+stock\\b|left\\b|on\\s+hand\\b|stock\\b|\\?)`, "gi"))) {
+    const index = (match.index ?? 0) + match[0].lastIndexOf(match[1]);
+    candidates.push({ index, raw: match[1] });
+  }
+  for (const match of message.matchAll(new RegExp(`\\b(?:got|have|supply|provide)\\s+(?:at\\s+least\\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\\s*(?:pieces?|pcs?|units?)?${optionSelector}\\s*(?=or\\s+not\\b|available\\b|in\\s+stock\\b|left\\b|on\\s+hand\\b|stock\\b|\\?)`, "gi"))) {
+    const quantity = wordQuantities[match[1].toLowerCase()];
+    if (quantity) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
+  const selectorFirst = `(?:option|choice|item|number|no\\.?)\\s*#?\\s*${selectorNumber}`;
+  for (const match of message.matchAll(new RegExp(`\\b${selectorFirst}\\s+(?:got|have|has)?\\s*(-?\\d+(?:\\.\\d+)?)\\s*(?:pieces?|pcs?|units?)?\\s*(?=or\\s+not\\b|available\\b|in\\s+stock\\b|left\\b|on\\s+hand\\b|stock\\b|\\?)`, "gi"))) {
+    const index = (match.index ?? 0) + match[0].lastIndexOf(match[1]);
+    candidates.push({ index, raw: match[1] });
+  }
+  for (const match of message.matchAll(/\b(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?)?\s*(?:available|left|in\s+stock|on\s+hand)\b/gi)) {
+    if (/\b(?:model|size|code|sku)\s*$/i.test(message.slice(0, match.index ?? 0))) continue;
+    candidates.push({ index: match.index ?? 0, raw: match[1] });
+  }
+  for (const match of message.matchAll(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:pieces?|pcs?|units?)?\s*(?:available|left|in\s+stock|on\s+hand)\b/gi)) {
+    if (/\b(?:model|size|code|sku)\s*$/i.test(message.slice(0, match.index ?? 0))) continue;
+    const quantity = wordQuantities[match[1].toLowerCase()];
+    if (quantity) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
+  for (const match of message.matchAll(/\b(?:can\s+(?:(?:you|u)\s+)?)?(?:supply|provide)\s+(?:at\s+least\s+)?(-?\d+(?:\.\d+)?)\s*(?:pieces?|pcs?|units?)?\b/gi)) {
+    const index = (match.index ?? 0) + match[0].lastIndexOf(match[1]);
+    candidates.push({ index, raw: match[1] });
+  }
+  for (const match of message.matchAll(/\b(?:can\s+(?:(?:you|u)\s+)?)?(?:supply|provide)\s+(?:at\s+least\s+)?(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:pieces?|pcs?|units?)?\b/gi)) {
+    const quantity = wordQuantities[match[1].toLowerCase()];
+    if (quantity) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
+  }
+  for (const match of message.matchAll(/\benough\s+for\s+(-?\d+(?:\.\d+)?)\b/gi)) {
+    candidates.push({ index: match.index ?? 0, raw: match[1] });
+  }
+  for (const match of message.matchAll(/\benough\s+for\s+(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi)) {
+    const quantity = wordQuantities[match[1].toLowerCase()];
+    if (quantity) candidates.push({ index: match.index ?? 0, raw: String(quantity) });
   }
 
   if (candidates.length === 0) return { kind: "none" };

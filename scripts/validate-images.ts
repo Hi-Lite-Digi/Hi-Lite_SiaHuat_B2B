@@ -31,6 +31,7 @@ const defaultFixtures: ProductImageFixture[] = [
   },
 ];
 const comparisonScreenshot = path.join(imageFixtureDir, "rice-dispenser-comparison.png");
+const whatsappToasterScreenshot = path.join(imageFixtureDir, "whatsapp-toaster-reference-sanitized.png");
 const randomNonProductImage = path.join(imageFixtureDir, "random-non-product.png");
 const cliFixtures = process.argv.slice(2);
 const fixtures: ProductImageFixture[] = cliFixtures.length > 0
@@ -182,7 +183,7 @@ async function validateComparisonScreenshot(message: string, expectedQuantity: R
     ...requiredDetails.map((detail) => responseMessage.includes(detail)
       ? null
       : `The comparison response omitted the visible detail: ${detail}`),
-    label === "comparison-numbered" && /WF-RD-60/i.test(responseMessage)
+    ["comparison-numbered", "comparison-human-shorthand"].includes(label) && /WF-RD-60/i.test(responseMessage)
       ? "The numbered request for items 1 and 2 incorrectly included item 3 (WF-RD-60)"
       : null,
     /can['’]?t reliably read|closer crop|unreadable/i.test(responseMessage)
@@ -207,6 +208,148 @@ async function validateComparisonScreenshot(message: string, expectedQuantity: R
     message: responseMessage,
     selectedProduct: body.selectedProduct,
     products: body.products,
+  };
+}
+
+async function validateHumanToasterScreenshot(
+  prompt = "got this kind? 4 slot, no belt type. 2 pcs",
+  label = "digits",
+) {
+  const bytes = await fs.readFile(whatsappToasterScreenshot);
+  const image = {
+    dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
+    mimeType: "image/png" as const,
+    name: "qa-whatsapp-toaster-reference.png",
+  };
+  const sessionId = `image-toaster-${label}-${crypto.randomUUID()}`;
+  const firstTurn = await postChat({ sessionId, message: prompt, image });
+  const firstProducts = [
+    ...(firstTurn.body.selectedProduct ? [firstTurn.body.selectedProduct] : []),
+    ...(firstTurn.body.products ?? []),
+  ];
+  const firstMessage = firstTurn.body.message ?? "";
+  const secondTurn = await postChat({
+    sessionId,
+    message: "toaster lah",
+    history: [
+      { role: "user", content: prompt },
+      { role: "assistant", content: firstMessage },
+    ],
+    context: {
+      stage: firstTurn.body.stage ?? "clarify",
+      activeProduct: firstTurn.body.selectedProduct ?? null,
+      quantity: 2,
+      displayedProducts: firstProducts.slice(0, 5),
+    },
+  });
+  const secondProducts = [
+    ...(secondTurn.body.selectedProduct ? [secondTurn.body.selectedProduct] : []),
+    ...(secondTurn.body.products ?? []),
+  ];
+  const secondMessage = secondTurn.body.message ?? "";
+  const allProducts = [...firstProducts, ...secondProducts];
+  const combined = `${firstMessage} ${secondMessage} ${allProducts.map((product) => product.name).join(" ")}`;
+  const wrongProduct = allProducts.find((product) => !/toaster/i.test(product.name) || /conveyor|utility\s+box|cambox/i.test(product.name));
+  const asksForKnownStyleAgain = /(?:choose|is it|which|tell me|prefer|what)[^.!?]{0,60}(?:4[ -]?slot|6[ -]?slot|conveyor)/i.test(secondMessage);
+  const failures = [
+    firstTurn.status === 200 ? null : `Initial photo turn returned HTTP ${firstTurn.status}`,
+    secondTurn.status === 200 ? null : `Follow-up returned HTTP ${secondTurn.status}`,
+    firstTurn.durationMs < 30_000 ? null : `Initial photo turn took ${firstTurn.durationMs}ms; expected under 30000ms`,
+    secondTurn.durationMs < 20_000 ? null : `Follow-up took ${secondTurn.durationMs}ms; expected under 20000ms`,
+    wrongProduct ? `The toaster screenshot returned an unrelated or conveyor product: ${wrongProduct.name}` : null,
+    /utility\s+(?:box|boxes)|cambox/i.test(combined)
+      ? "The WhatsApp toaster screenshot was misclassified as a utility/storage box"
+      : null,
+    /4[ -]?slot/i.test(firstMessage) && /\b2\b/.test(firstMessage) && /toaster/i.test(firstMessage)
+      ? null
+      : "The initial photo reply did not retain the 4-slot, non-conveyor toaster request and quantity 2",
+    asksForKnownStyleAgain
+      ? "The imperfect follow-up asked for the toaster style again even though 4-slot/no-belt was already supplied"
+      : null,
+    /6[ -]?slot/i.test(secondMessage)
+      ? "The follow-up broadened the known 4-slot request to an unwanted 6-slot toaster"
+      : null,
+    /4[ -]?slot/i.test(secondMessage) && /\b2\b/.test(secondMessage) && /toaster/i.test(secondMessage)
+      ? null
+      : "The follow-up did not carry the 4-slot toaster and quantity 2 forward",
+    secondProducts.length > 0 || /couldn['’]?t find|no (?:exact|matching)|not available|out of stock|manual(?:ly)? sourcing|source it manually|staff[ -]review|contact Sia Huat sales/i.test(secondMessage)
+      ? null
+      : "The follow-up neither offered a purchasable toaster nor an honest manual sourcing path",
+  ].filter(Boolean);
+
+  return {
+    file: whatsappToasterScreenshot,
+    sentName: `${label}-${image.name}`,
+    expected: "4-slot non-conveyor toaster, quantity 2",
+    oracle: null,
+    pass: failures.length === 0,
+    failures,
+    durationMs: firstTurn.durationMs + secondTurn.durationMs,
+    message: `${firstMessage}\n\nFollow-up: ${secondMessage}`,
+    selectedProduct: secondTurn.body.selectedProduct,
+    products: secondTurn.body.products,
+  };
+}
+
+async function validateHumanRiceComparisonFollowup() {
+  const bytes = await fs.readFile(comparisonScreenshot);
+  const image = {
+    dataUrl: `data:image/png;base64,${bytes.toString("base64")}`,
+    mimeType: "image/png" as const,
+    name: "qa-rice-human-followup.png",
+  };
+  const sessionId = `image-rice-followup-${crypto.randomUUID()}`;
+  const prompt = "can chk item 1 n 2? need two each";
+  const firstTurn = await postChat({ sessionId, message: prompt, image });
+  const secondTurn = await postChat({
+    sessionId,
+    message: "both 2 each lah",
+    history: [
+      { role: "user", content: prompt },
+      { role: "assistant", content: firstTurn.body.message ?? "" },
+    ],
+    context: {
+      stage: "clarify",
+      activeProduct: null,
+      quantity: 2,
+      displayedProducts: [],
+    },
+  });
+  const firstMessage = firstTurn.body.message ?? "";
+  const secondMessage = secondTurn.body.message ?? "";
+  const failures = [
+    firstTurn.status === 200 ? null : `Initial rice-comparison turn returned HTTP ${firstTurn.status}`,
+    secondTurn.status === 200 ? null : `Rice-comparison follow-up returned HTTP ${secondTurn.status}`,
+    firstTurn.durationMs < 10_000 ? null : `Initial turn took ${firstTurn.durationMs}ms; expected under 10000ms`,
+    secondTurn.durationMs < 10_000 ? null : `Follow-up took ${secondTurn.durationMs}ms; expected under 10000ms`,
+    /WF-RD-10/i.test(secondMessage) && /WF-RD-30/i.test(secondMessage)
+      ? null
+      : "The follow-up did not retain both selected rice-dispenser models",
+    !/WF-RD-60/i.test(secondMessage)
+      ? null
+      : "The follow-up incorrectly added the unselected third rice-dispenser model",
+    /\b2\s+each\b|quantity[^.!?]{0,30}\b2\b/i.test(secondMessage)
+      ? null
+      : "The follow-up lost quantity 2 each",
+    !/tell me how many|choose a quantity|how many do you need/i.test(secondMessage)
+      ? null
+      : "The follow-up asked for a quantity that the customer had already supplied",
+    (secondTurn.body.products?.length ?? 0) === 0 && !secondTurn.body.selectedProduct
+      ? null
+      : "The unresolved comparison follow-up returned unverified catalogue cards",
+  ].filter(Boolean);
+
+  return {
+    file: comparisonScreenshot,
+    sentName: image.name,
+    expected: "WF-RD-10 and WF-RD-30 at quantity 2 each across an imperfect follow-up",
+    oracle: null,
+    pass: failures.length === 0,
+    failures,
+    durationMs: firstTurn.durationMs + secondTurn.durationMs,
+    message: `${firstMessage}\n\nFollow-up: ${secondMessage}`,
+    selectedProduct: secondTurn.body.selectedProduct,
+    products: secondTurn.body.products,
   };
 }
 
@@ -423,10 +566,21 @@ async function main() {
     "comparison-numbered",
   ));
   results.push(await validateComparisonScreenshot(
+    "can chk item 1 n 2? need two each",
+    /\b2\s+each\b|\btwo\s+each\b|kept[^.!?]{0,30}\b2\b/i,
+    "comparison-human-shorthand",
+  ));
+  results.push(await validateComparisonScreenshot(
     "Compare the rice dispensers in this screenshot; I need 2.",
     /(?:kept|quantity|need)[^.!?]{0,30}\b2\b|\b2\b[^.!?]{0,30}(?:units?|each)/i,
     "comparison-explicit-family",
   ));
+  results.push(await validateHumanToasterScreenshot());
+  results.push(await validateHumanToasterScreenshot(
+    "got this kind? four slot, no belt type. two pcs",
+    "word-numbers",
+  ));
+  results.push(await validateHumanRiceComparisonFollowup());
   results.push(await validateRandomNonProduct());
   results.push(await validateRandomNonProductWithNamedCategory());
   results.push(await validateRandomNonProductWithRememberedCategory());

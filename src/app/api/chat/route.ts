@@ -14,6 +14,7 @@ import {
   searchCatalogue,
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
+import { ladleCapacityMatchQuality, requestedLadleCapacitiesOz } from "@/lib/catalogue-query";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
 import { honestManualHandoff } from "@/lib/honest-handoff";
 import {
@@ -27,10 +28,13 @@ import { classifyImageRaster, imageMatchesCandidate, matchKnownComparisonReferen
 import {
   catalogueHistoryWithClarification,
   catalogueMessageWithContext,
+  explicitKnifeBrand,
   isExactStockQuestion,
   isTradePriceQuestion,
   productCategory,
+  rejectsCurrentProductReference,
   rememberedActiveCategories,
+  requestedProductCategory,
 } from "@/lib/chat-intent";
 import { asksForRecommendation, isProductRefinementOnly, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
@@ -314,6 +318,7 @@ function exactCodeCandidates(message: string) {
   )].filter((candidate) =>
     candidate.length >= 3
     && candidate.length <= 50
+    && !/^\d+(?:ST|ND|RD|TH)$/.test(candidate)
     && !/^\d+(?:\.\d+)?-?(?:CM|MM|IN|INCH)$/.test(candidate)
     && (!/^\d+(?:\.\d+)?$/.test(candidate) || hasExplicitCodeCue || isStandaloneNumericCode)
   ).slice(0, 5);
@@ -348,15 +353,39 @@ function isConcreteCatalogueRequest(message: string) {
 function referencedContextProduct(input: ChatRequest) {
   const displayedProducts = input.context?.displayedProducts ?? [];
   const explicitlyReferencedIndex = requestedDisplayedProductIndex(input.message, displayedProducts);
-  if (explicitlyReferencedIndex !== null) return displayedProducts[explicitlyReferencedIndex] ?? null;
-  return input.context?.activeProduct
-    ?? (displayedProducts.length === 1 ? displayedProducts[0] : null);
+  const candidate = explicitlyReferencedIndex !== null
+    ? displayedProducts[explicitlyReferencedIndex] ?? null
+    : (displayedProducts.length === 1 ? displayedProducts[0] : null)
+    ?? input.context?.activeProduct;
+  const positiveCategory = requestedProductCategory(input.message);
+  const candidateCategory = candidate ? productCategory(candidate.name) : null;
+  if (!candidate || rejectsCurrentProductReference(input.message)) return null;
+  const explicitCodes = exactCodeCandidates(input.message);
+  if (explicitCodes.length > 0 && !explicitCodes.some((code) => code.toLowerCase() === candidate.stock_id.toLowerCase())) return null;
+  const possibleKnifeBrand = explicitKnifeBrand(input.message);
+  if (possibleKnifeBrand) {
+    const candidateText = [candidate.name, candidate.brand, candidate.brand_id, candidate.description].filter(Boolean).join(" ");
+    if (!new RegExp(`\\b${possibleKnifeBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(candidateText)) return null;
+  }
+  if (positiveCategory && candidateCategory && positiveCategory !== candidateCategory) return null;
+  if (!matchesExplicitProductCategory(input.message, candidate)) return null;
+  if (positiveCategory === "knife" && !matchesConstrainedKnifeRequest(input.message, candidate)) return null;
+  if (/\b\d+(?:\.\d+)?(?:\s*(?:x|by|×)\s*\d+(?:\.\d+)?)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(input.message)
+    && !matchesRequestedDimensions(input.message, candidate)) return null;
+  return candidate;
 }
 
 async function freshExactStockReply(input: ChatRequest) {
   if (!isExactStockQuestion(input.message) || input.image) return null;
-  const referencedProduct = referencedContextProduct(input);
-  if (!referencedProduct) return getFastChatReply(input);
+  let referencedProduct = referencedContextProduct(input);
+  if (!referencedProduct) {
+    const codeProducts = await Promise.all(exactCodeCandidates(input.message).map((code) => findCatalogueProductByCode(code)));
+    referencedProduct = codeProducts.find((product) => product !== null) ?? null;
+  }
+  if (!referencedProduct) {
+    const namesFreshProduct = requestedProductCategory(input.message) !== null || exactCodeCandidates(input.message).length > 0;
+    return namesFreshProduct ? null : getFastChatReply(input);
+  }
 
   let refreshedProduct: Product = {
     ...referencedProduct,
@@ -389,6 +418,9 @@ async function freshExactStockReply(input: ChatRequest) {
     });
   }
 
+  const targetWasDisplayed = (input.context?.displayedProducts ?? []).some((product) =>
+    product.stock_id === referencedProduct.stock_id,
+  );
   const displayedProducts = (input.context?.displayedProducts ?? []).map((product) =>
     product.stock_id === referencedProduct.stock_id ? refreshedProduct : product,
   );
@@ -396,11 +428,11 @@ async function freshExactStockReply(input: ChatRequest) {
     ...input,
     context: {
       stage: input.context?.stage ?? "clarify",
-      activeProduct: input.context?.activeProduct?.stock_id === referencedProduct.stock_id
+      activeProduct: input.context?.activeProduct?.stock_id === referencedProduct.stock_id || !targetWasDisplayed
         ? refreshedProduct
         : input.context?.activeProduct ?? null,
       quantity: input.context?.quantity ?? null,
-      displayedProducts: displayedProducts.length > 0 ? displayedProducts : [refreshedProduct],
+      displayedProducts: targetWasDisplayed ? displayedProducts : [refreshedProduct],
     },
   });
   return stockReply ? { ...stockReply, refreshedProduct } : null;
@@ -459,20 +491,21 @@ function imageReferenceNeedsVisualEvidence(message: string) {
 function hasImageIndependentBuyingSpecification(message: string) {
   return exactCodeCandidates(message).length > 0
     || /\b\d+(?:\.\d+)?\s*(?:qt|quarts?|l|litres?|liters?|ml|oz|kg|g|cm|mm|inches?|slots?|steps?)\b/i.test(message)
+    || /\b(?:four|six)\s*[ -]?slots?\b/i.test(message)
     || /\b(?:stainless(?:\s+steel)?|carbon\s+steel|cast\s+iron|aluminium|aluminum|polycarbonate|melamine|plastic)\b/i.test(message)
-    || /\b(?:pop[ -]?up|non[ -]?conveyor|conveyor|folding|safety\s+handrail)\b/i.test(message);
+    || /\b(?:pop[ -]?up|non[ -]?conveyor|conveyor|(?:no|not|without)\s+(?:a\s+)?belt(?:\s+type)?|folding|safety\s+handrail)\b/i.test(message);
 }
 
 function matchesExplicitProductCategory(message: string, product: Product) {
   const productName = product.name;
-  const productText = [product.name, product.description, product.category, product.subcategory, product.third_category]
+  const productText = [product.name, product.description, product.size, product.dimensions, product.category, product.subcategory, product.third_category]
     .filter(Boolean)
     .join(" ");
   const requestedUseCase = detectProductUseCase(message);
-  const requestedCategory = productCategory(message);
+  const requestedCategory = requestedProductCategory(message);
   if (requestedUseCase && !matchesProductUseCase(product, requestedUseCase)) return false;
   const requestedMaterials = [
-    /\bstainless(?:\s+steel)?\b/i.test(message) ? /\bstainless(?:\s+steel)?\b/i : null,
+    /\bstainless(?:\s+steel)?\b/i.test(message) ? /\b(?:stainless(?:\s+steel)?|s\s*\/\s*s)\b/i : null,
     /\bblack\s+steel\b/i.test(message) ? /\bblack\s+steel\b/i : null,
     /\bcarbon\s+steel\b/i.test(message) ? /\bcarbon\s+steel\b/i : null,
     /\bcast\s+iron\b/i.test(message) ? /\bcast\s+iron\b/i : null,
@@ -497,7 +530,7 @@ function matchesExplicitProductCategory(message: string, product: Product) {
       && !/\b(?:cover|accessor(?:y|ies)|replacement|spare\s+part)\b/i.test(productName);
   }
   if (requestedCategory === "toaster") {
-    if (/\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|\d+(?:\s+or\s+\d+)?\s*slots?)\b/i.test(message)
+    if (/\b(?:pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|(?:no|not|without)\s+(?:a\s+)?belt(?:\s+type)?|belt\s+type\s+(?:no|not)|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|(?:\d+|four|six)(?:\s+or\s+(?:\d+|four|six))?\s*slots?)\b/i.test(message)
       && /\bconveyor\b/i.test(productText)) return false;
     return /\btoasters?\b/i.test(productText);
   }
@@ -541,7 +574,25 @@ function matchesExplicitProductCategory(message: string, product: Product) {
       && !/\b(?:microfibre|microfiber|cloth|fabric|warmer|holder|rack)\b/i.test(productName);
   }
   if (/\bgloves?\b/i.test(message)) return /\bgloves?\b/i.test(productName);
+  if (requestedCategory === "lid") {
+    if (!/\b(?:lids?|covers?)\b/i.test(productName)) return false;
+    const lidFraction = message.match(/\b1\s*\/\s*([24])\b/)?.[1];
+    if (lidFraction && !new RegExp(`\\b1\\s*\\/\\s*${lidFraction}\\b`, "i").test(productText)) return false;
+    if (/\b(?:notch|slot|cut[ -]?out)\b/i.test(message) && !/\b(?:slot(?:ted)?|notch(?:ed)?|cut[ -]?out)\b/i.test(productText)) return false;
+    return true;
+  }
+  if (/\bladles?\b/i.test(message)) return /\bladles?\b/i.test(productName);
+  const foodPanRequest = /\b(?:gn|gastronorm|food)\s*pan\b/i.test(message)
+    || (/\b1\s*\/\s*(?:2|4)\b/.test(message) && /\bpans?\b/i.test(message) && /\bdeep\b/i.test(message));
+  if (foodPanRequest) {
+    if (!/\b(?:gn|gastronorm|food)\s*pan\b|\bpan\b[\s\S]*\b(?:1\s*\/\s*[24]|100|150|200)\b/i.test(productText)) return false;
+    const fraction = message.match(/\b1\s*\/\s*([24])\b/)?.[1];
+    if (fraction && !new RegExp(`\\b1\\s*\\/\\s*${fraction}\\b`, "i").test(productText)) return false;
+  }
   if (/\bbread\s+kn(?:ife|ives)\b/i.test(message)) return /\bbread\b[\s\S]*\bknife\b|\bknife\b[\s\S]*\bbread\b/i.test(productText);
+  if (/\boyster\s+kn(?:ife|ives)\b/i.test(message)) {
+    return /\boyster\b[\s\S]*\bknife\b|\bknife\b[\s\S]*\boyster\b/i.test(productText);
+  }
   if (/\bboning\s+kn(?:ife|ives)\b/i.test(message)) return /\bboning\s+knife\b/i.test(productText);
   if (/\bparing\s+kn(?:ife|ives)\b/i.test(message)) return /\bparing\s+knife\b/i.test(productText);
   if (/\bchef(?:'s)?\s+kn(?:ife|ives)\b/i.test(message)) return /\bchef(?:'s|s)?\s+knife\b/i.test(productText);
@@ -1085,6 +1136,50 @@ async function searchBroadUtensils() {
   return products;
 }
 
+async function groundedMultiCapacityLadleReply(message: string): Promise<ChatReply | null> {
+  const capacities = requestedLadleCapacitiesOz(message);
+  if (capacities.length < 2) return null;
+
+  const resultSets = await Promise.all(capacities.map(async (capacity) => {
+    try {
+      return await searchCatalogue(`one-pc ladle ${capacity}oz`, { resultLimit: 30, outputLimit: 20 });
+    } catch (error) {
+      console.error("[api/chat] ladle capacity search failed", { capacity, error });
+      return [];
+    }
+  }));
+  const products = capacities.flatMap((capacity, index) => {
+    const ranked = resultSets[index]
+      .map((product) => ({ product, quality: ladleCapacityMatchQuality(searchableProductText(product), capacity) }))
+      .filter(({ quality, product }) => quality > 0 && matchesExplicitProductCategory("stainless steel ladle", product))
+      .sort((left, right) => right.quality - left.quality
+        || Number(right.product.available_quantity ?? 0) - Number(left.product.available_quantity ?? 0));
+    return ranked[0]?.product ? [ranked[0].product] : [];
+  });
+  const uniqueProducts = [...new Map(products.map((product) => [product.stock_id, product])).values()];
+  if (uniqueProducts.length === 0) return null;
+
+  const foundCapacities = capacities.filter((capacity, index) =>
+    resultSets[index].some((product) => uniqueProducts.some((selected) =>
+      selected.stock_id === product.stock_id
+      && ladleCapacityMatchQuality(searchableProductText(selected), capacity) > 0,
+    )),
+  );
+  const missingCapacities = capacities.filter((capacity) => !foundCapacities.includes(capacity));
+  const lengthCaveat = /\b(?:approx(?:imate(?:ly)?)?|around|about)\b[^.!?]{0,20}\b10\s*(?:inch|inches|in|\")\b|\b10\s*(?:inch|inches|in|\")\b/i.test(message)
+    ? " The catalogue does not confirm an approximately 10-inch length for every capacity, so please review each card's listed dimensions before selecting."
+    : "";
+  return {
+    message: missingCapacities.length > 0
+      ? `I found exact ${foundCapacities.map((capacity) => `${capacity}oz`).join(" and ")} ladles, but I couldn't confirm ${missingCapacities.map((capacity) => `${capacity}oz`).join(" and ")} in the current catalogue.${lengthCaveat}`
+      : `Here are the requested ${capacities.map((capacity) => `${capacity}oz`).join(", ")} stainless-steel ladles.${lengthCaveat}`,
+    stage: "clarify",
+    products: uniqueProducts,
+    selectedProduct: null,
+    suggestions: missingCapacities.length > 0 ? ["Prepare staff review summary"] : [],
+  };
+}
+
 async function groundedCatalogueReply(
   message: string,
   options: { authoritative?: boolean; excludedStockIds?: Set<string> } = {},
@@ -1102,6 +1197,8 @@ async function groundedCatalogueReply(
     }
   }
 
+  const multiCapacityLadleReply = await groundedMultiCapacityLadleReply(message);
+  if (multiCapacityLadleReply) return multiCapacityLadleReply;
   if (isWaterDispenserRequest(message)) return groundedWaterDispenserReply(message);
   if (isStockpotRequest(message)) return groundedStockpotReply(message);
 
@@ -1810,12 +1907,16 @@ function freshPhotoStartsNewProduct(input: ChatRequest) {
 }
 
 function imageCatalogueConstraints(message: string) {
+  const toasterStyleContext = /\b(?:toasters?|toasers?|ya\s+kun|(?:4|6|four|six)\s*[ -]?slots?|conve(?:yor|yr))\b/i.test(message);
+  const toasterStyleConstraint = toasterStyleContext
+    ? message.match(/\b(?:(?:\d+|four|six)\s*[ -]?slots?|pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor|(?:no|not|without)\s+(?:a\s+)?belt(?:\s+type)?|belt\s+type\s+(?:no|not))\b/i)?.[0] ?? null
+    : null;
   const constraints = [
     [...message.matchAll(/\b(?:black|white|grey|gray|brown|blue|red|green|silver)\b/gi)].at(-1)?.[0] ?? null,
     message.match(/\b\d+(?:\.\d+)?\s*(?:x|by|×)\s*\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i)?.[0] ?? null,
     message.match(/\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in|qt|quarts?|l|litres?|liters?|kg|lb|lbs|pounds?)\b/i)?.[0] ?? null,
     message.match(/\b(?:stainless(?:\s+steel)?|plastic|polyethylene|carbon\s+steel|cast\s+iron|aluminium|aluminum)\b/i)?.[0] ?? null,
-    message.match(/\b(?:\d+\s*[ -]?slots?|pop[ -]?up|non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor|without\s+(?:a\s+)?conveyor)\b/i)?.[0] ?? null,
+    toasterStyleConstraint,
   ].filter((constraint): constraint is string => Boolean(constraint));
   return [...new Set(constraints)].join(" ");
 }
@@ -2073,7 +2174,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const rememberedCatalogueMessage = catalogueMessageWithContext(input.message, userHistory);
   const originalQuantity = requestedQuantity(input.message);
   const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
-  const currentCategory = productCategory(input.message);
+  const currentCategory = requestedProductCategory(input.message);
   const continuesCurrentCategory = Boolean(
     previousCategory && (!currentCategory || currentCategory === previousCategory),
   );
@@ -2529,7 +2630,7 @@ async function processChat(input: ChatRequest) {
   const rawDisplayedProductIndex = input.image || asksProductInformation || requestsAnotherOption(input.message) || isProductRefinementOnly(input.message)
     ? null
     : requestedDisplayedProductIndex(input.message, displayedProducts);
-  const requestedCategory = productCategory(input.message);
+  const requestedCategory = requestedProductCategory(input.message);
   const indexedProduct = rawDisplayedProductIndex === null ? null : displayedProducts[rawDisplayedProductIndex];
   const indexedCategory = indexedProduct ? productCategory(indexedProduct.name) : null;
   const displayedProductIndex = requestedCategory && indexedCategory && requestedCategory !== indexedCategory
@@ -2578,7 +2679,7 @@ async function processChat(input: ChatRequest) {
   }
 
   const hasExplicitPhotoProductClue = productCategory(input.message) !== null
-    || /\b(?:ya\s*kun|pop[ -]?up|slot\s+toaster|\d+\s*[ -]?slots?|(?:not|non[ -]?)\s*(?:a\s+)?conve(?:yor|yr))\b/i.test(input.message);
+    || /\b(?:ya\s*kun|pop[ -]?up|slot\s+toaster|(?:\d+|four|six)\s*[ -]?slots?|(?:not|non[ -]?)\s*(?:a\s+)?conve(?:yor|yr))\b/i.test(input.message);
   const hasUnusablePhotoOnlyReference = Boolean(
     input.image
     && isObviouslyUnusableImage(input.image)
@@ -2615,7 +2716,11 @@ async function processChat(input: ChatRequest) {
     return NextResponse.json(customerReply(stockReply, input));
   }
 
-  const fastReply = input.brain === "n8n" ? null : getFastChatReply(input);
+  const skipsStaleFastStockFallback = input.brain !== "n8n"
+    && isExactStockQuestion(input.message)
+    && (requestedProductCategory(input.message) !== null || exactCodeCandidates(input.message).length > 0)
+    && referencedContextProduct(input) === null;
+  const fastReply = input.brain === "n8n" || skipsStaleFastStockFallback ? null : getFastChatReply(input);
   if (fastReply) {
     console.log("[api/chat] fast deterministic reply", {
       durationMs: Math.round(performance.now() - startedAt),

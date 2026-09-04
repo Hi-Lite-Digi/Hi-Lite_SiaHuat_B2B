@@ -12,6 +12,7 @@ import type {
   Product,
 } from "@/lib/chat-contract";
 import {
+  additionalProductTarget,
   asksForRecommendation,
   confirmsDisplayedProduct,
   confirmsOrderRequest,
@@ -29,7 +30,7 @@ import {
   shouldStartFreshAdditionalItem,
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
-import { catalogueMessageWithContext, isExactStockQuestion, isTradePriceQuestion, productCategory } from "@/lib/chat-intent";
+import { catalogueMessageWithContext, isExactStockQuestion, isTradePriceQuestion, productCategory, rejectsCurrentProductReference, requestedProductCategory } from "@/lib/chat-intent";
 import {
   conversationPdfText,
   isConversationUiAction,
@@ -837,9 +838,34 @@ export function ChatDemo() {
       : "";
 
     const cleanCategory = productCategory(clean);
+    const positivelyRequestedCategory = requestedProductCategory(clean);
+    const currentStateProducts = [confirmedProduct, pendingProduct, ...lastProducts]
+      .filter((product): product is Product => Boolean(product));
+    const currentStateCategories = currentStateProducts.flatMap((product) => {
+      const category = productCategory(product.name);
+      return category ? [category] : [];
+    });
+    const sameSalesFamily = (left: string, right: string) => left === right
+      || (["pot", "stockpot"].includes(left) && ["pot", "stockpot"].includes(right));
+    const hasAdditiveProductCue = /\b(?:add|also|as\s+well|both)\b|\btoo\b\s*[.!?]*$|(?:再加|也要|还要)/iu.test(clean);
+    const explicitlyRejectsCurrent = rejectsCurrentProductReference(clean);
+    const hasReplacementProductCue = explicitlyRejectsCurrent
+      || (/\b(?:not|wrong|never\s*mind|forget|instead|rather\s+than|meant|switch|change|replace)\b/i.test(clean)
+        && !hasAdditiveProductCue);
+    const replacesCurrentProduct = Boolean(
+      !attachment
+      && hasReplacementProductCue
+      && positivelyRequestedCategory
+      && currentStateCategories.length > 0
+      && (explicitlyRejectsCurrent
+        || currentStateCategories.every((category) => !sameSalesFamily(category, positivelyRequestedCategory))),
+    );
     const canMatchQueuedCategory = newlyQueuedRequests.length === 0;
+    const continuedQueuedLabel = clean.match(/^Continue:\s*(.+)$/i)?.[1]?.trim() ?? null;
     const queuedRequestIndex = pendingOrderRequestsRef.current.findIndex(
       (request) => request.toLocaleLowerCase() === clean.toLocaleLowerCase()
+        || (continuedQueuedLabel !== null
+          && request.replace(/^I\s+(?:need|want)\s+/i, "").toLocaleLowerCase() === continuedQueuedLabel.toLocaleLowerCase())
         || (canMatchQueuedCategory && cleanCategory !== null && productCategory(request) === cleanCategory),
     );
     const awaitingAdditionalProduct = awaitingAdditionalProductRef.current;
@@ -895,8 +921,8 @@ export function ChatDemo() {
     }
 
     const consumesAwaitingAdditionalProduct = awaitingAdditionalProduct && !returnsToExistingSummary;
-    const explicitlyAddsSeparateProduct = /\b(?:add|also|too|as well)\b|(?:再加|也要|还要)/iu.test(clean);
-    const startingAdditionalProduct = canUseExistingProductState && !returnsToExistingSummary && (awaitingAdditionalProduct
+    const explicitlyAddsSeparateProduct = /\b(?:add|also|as well)\b|\btoo\b\s*[.!?]*$|(?:再加|也要|还要)/iu.test(clean);
+    const startingAdditionalProduct = canUseExistingProductState && !replacesCurrentProduct && !returnsToExistingSummary && (awaitingAdditionalProduct
       || queuedRequestIndex >= 0
       || (canUseExistingProductState
         && (pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
@@ -909,6 +935,10 @@ export function ChatDemo() {
         queuedRequestToConsume = pendingOrderRequestsRef.current[queuedRequestIndex];
         queuedAdditionalProductRef.current = queuedRequestToConsume;
         messageForApi = queuedRequestToConsume;
+      }
+      const explicitAdditiveTarget = additionalProductTarget(clean);
+      if (queuedRequestIndex < 0 && explicitAdditiveTarget && productCategory(explicitAdditiveTarget)) {
+        messageForApi = `I need ${explicitAdditiveTarget}`;
       }
       if (isGenericAddAnotherItem(clean)) {
         awaitingAdditionalProductRef.current = true;
@@ -1000,7 +1030,7 @@ export function ChatDemo() {
         : []);
       return;
     }
-    if (canUseExistingProductState && !asksProductInformation && pendingQuote && !startingAdditionalProduct && confirmedProduct && confirmedQuantity !== null) {
+    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && pendingQuote && !startingAdditionalProduct && confirmedProduct && confirmedQuantity !== null) {
       syncHandledTurnWithN8n(clean);
       setPendingQuote(null);
       setQuery("");
@@ -1008,14 +1038,14 @@ export function ChatDemo() {
       return;
     }
 
-    if (canUseExistingProductState && !asksProductInformation && pendingProduct && confirmsDisplayedProduct(clean)) {
+    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmsDisplayedProduct(clean)) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
       await confirmProduct(clean, pendingProduct, confirmedQuantity ?? undefined);
       return;
     }
 
-    if (canUseExistingProductState && !asksProductInformation && pendingProduct && confirmedQuantity !== null && referencesSingleDisplayedProduct(clean, 1)) {
+    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmedQuantity !== null && referencesSingleDisplayedProduct(clean, 1)) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
       await confirmProduct(clean, pendingProduct, confirmedQuantity);
@@ -1027,7 +1057,7 @@ export function ChatDemo() {
       syncHandledTurnWithN8n(clean); setQuery(""); rejectProduct(clean); return;
     }
 
-    if (canUseExistingProductState && !asksProductInformation && !pendingProduct && lastProducts.length === 1 && confirmsDisplayedProduct(clean) && confirmedQuantity !== null) {
+    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && !pendingProduct && lastProducts.length === 1 && confirmsDisplayedProduct(clean) && confirmedQuantity !== null) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
       await confirmProduct(clean, lastProducts[0], confirmedQuantity);
@@ -1045,9 +1075,17 @@ export function ChatDemo() {
       chooseProduct(recommended, clean);
       return;
     }
-    const requestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean) && !isProductRefinementOnly(clean)
+    const rawRequestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean) && !isProductRefinementOnly(clean)
       ? requestedDisplayedProductIndex(clean, lastProducts)
       : null;
+    const requestedProduct = rawRequestedIndex === null ? null : lastProducts[rawRequestedIndex];
+    const displayedProductCategory = requestedProduct ? productCategory(requestedProduct.name) : null;
+    // A negated old item can share words with its displayed card (for example
+    // “not cartridge, need burner head”). Do not silently select that stale
+    // card when the customer has clearly named a different product category.
+    const requestedIndex = positivelyRequestedCategory && displayedProductCategory && positivelyRequestedCategory !== displayedProductCategory
+      ? null
+      : rawRequestedIndex;
     if (!pendingProduct && requestedIndex !== null) {
       const product = lastProducts[requestedIndex];
       if (product) {
@@ -1273,7 +1311,7 @@ export function ChatDemo() {
     }
 
     const changedItem = clean.match(/\b(?:actually|instead|switch|change|rather|different|another).*?\b(knife|pan|glassware|tableware|coffee)\b/i);
-    if (canUseExistingProductState && confirmedProduct && changedItem) {
+    if (canUseExistingProductState && !replacesCurrentProduct && confirmedProduct && changedItem) {
       syncHandledTurnWithN8n(clean);
       const item = changedItem[1].toLowerCase();
       setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setStage("discover"); setQuery("");
@@ -1297,7 +1335,7 @@ export function ChatDemo() {
       return;
     }
 
-    if (canUseExistingProductState && stage === "quantity" && confirmedProduct && !asksProductInformation) {
+    if (canUseExistingProductState && !replacesCurrentProduct && stage === "quantity" && confirmedProduct && !asksProductInformation) {
       syncHandledTurnWithN8n(clean);
       const quantityText = clean.match(/^\d+$/)?.[0] ?? naturalQuantity;
       const quantity = confirmedQuantity
@@ -1317,7 +1355,7 @@ export function ChatDemo() {
       showOrderReview(quantity, confirmedProduct, clean); return;
     }
 
-    if (canUseExistingProductState && pendingQuote && !startingAdditionalProduct && !asksProductInformation) {
+    if (canUseExistingProductState && !replacesCurrentProduct && pendingQuote && !startingAdditionalProduct && !asksProductInformation) {
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
         { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "这份询价摘要尚未完成。请使用下方按钮，或输入下一件商品的名称。" : "This enquiry summary is still open. Use a button below, or type the name of the next product you need." },
@@ -1329,9 +1367,14 @@ export function ChatDemo() {
 
     const history = brainHistory();
     const attachedImage = attachment;
-    const startsFreshProduct = startingAdditionalProduct || startsFreshPhotoProduct;
+    const startsFreshProduct = startingAdditionalProduct || startsFreshPhotoProduct || replacesCurrentProduct;
 
-    if (startsFreshPhotoProduct) {
+    if (startsFreshProduct) {
+      const replacedProduct = confirmedProduct ?? pendingProduct ?? lastProducts[0] ?? null;
+      if (replacesCurrentProduct && replacedProduct
+        && orderLinesRef.current.some((line) => line.code === replacedProduct.stock_id)) {
+        replacingQuoteCodeRef.current = replacedProduct.stock_id;
+      }
       setPendingProduct(null);
       setPendingQuantity(null);
       setPendingQuote(null);
@@ -1454,7 +1497,11 @@ export function ChatDemo() {
       }
 
       setStage(reply.stage);
-      setSuggestions(products.length > 0 ? productOptionSuggestions(products) : reply.suggestions ?? []);
+      const nextQueuedRequest = pendingOrderRequestsRef.current[0] ?? null;
+      const queueContinuation = products.length === 0 && nextQueuedRequest
+        ? [`Continue: ${nextQueuedRequest.replace(/^I\s+(?:need|want)\s+/i, "")}`]
+        : [];
+      setSuggestions(products.length > 0 ? productOptionSuggestions(products) : [...(reply.suggestions ?? []), ...queueContinuation]);
       setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: `${reply.message}${queuedRequestNotice}`, products }]);
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
