@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   conversationPdfText,
+  enquiryReceiptTotals,
   isConversationUiAction,
+  latestEnquiryReceiptLines,
   needsUnicodePdfRendering,
   wrapMeasuredText,
 } from "./conversation-export";
@@ -36,4 +38,31 @@ test("wraps unspaced Chinese text without dropping any characters", () => {
 
   assert.deepEqual(lines, ["自动饭机", "自动饭机"]);
   assert.equal(lines.join(""), source);
+});
+
+test("uses the latest complete set of confirmed lines for the PDF receipt", () => {
+  const pot = { item: "Stock pot", code: "POT-1", pricePerItem: 10, quantity: 3, total: 30, uom: "PC" };
+  const ladle = { item: "Ladle", code: "LADLE-1", pricePerItem: 4.5, quantity: 2, total: 9, uom: "PC" };
+  const messages = [
+    { quoteSummary: pot, quoteSummaries: [pot] },
+    {},
+    { quoteSummary: ladle, quoteSummaries: [pot, ladle] },
+    {},
+  ];
+
+  assert.deepEqual(latestEnquiryReceiptLines(messages), [pot, ladle]);
+});
+
+test("calculates receipt line count, quantities by unit, and grand total", () => {
+  const totals = enquiryReceiptTotals([
+    { item: "Stock pot", code: "POT-1", pricePerItem: 10, quantity: 3, total: 30, uom: "pc" },
+    { item: "Ladle", code: "LADLE-1", pricePerItem: 4.5, quantity: 2, total: 9, uom: "PC" },
+    { item: "Gas cartridges", code: "GAS-1", pricePerItem: 20, quantity: 1, total: 20, uom: "CTN" },
+  ]);
+
+  assert.deepEqual(totals, {
+    lineCount: 3,
+    quantitiesByUom: [{ uom: "PC", quantity: 5 }, { uom: "CTN", quantity: 1 }],
+    grandTotal: 59,
+  });
 });

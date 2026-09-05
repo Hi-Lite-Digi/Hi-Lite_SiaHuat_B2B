@@ -49,6 +49,45 @@ const actionLabels = new Set([
   "不是我要看其他商品",
 ]);
 
+export type EnquiryReceiptLine = {
+  item: string;
+  code: string;
+  pricePerItem: number;
+  quantity: number;
+  total: number;
+  uom: string;
+  sourceUrl?: string | null;
+};
+
+type ReceiptMessage = {
+  quoteSummary?: EnquiryReceiptLine;
+  quoteSummaries?: EnquiryReceiptLine[];
+};
+
+export function latestEnquiryReceiptLines(messages: ReceiptMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.quoteSummaries?.length) return message.quoteSummaries;
+    if (message.quoteSummary) return [message.quoteSummary];
+  }
+  return [];
+}
+
+export function enquiryReceiptTotals(lines: EnquiryReceiptLine[]) {
+  const quantitiesByUom = new Map<string, number>();
+  let grandTotal = 0;
+  for (const line of lines) {
+    const uom = line.uom.trim().toUpperCase() || "UNIT";
+    quantitiesByUom.set(uom, (quantitiesByUom.get(uom) ?? 0) + line.quantity);
+    grandTotal += line.total;
+  }
+  return {
+    lineCount: lines.length,
+    quantitiesByUom: [...quantitiesByUom.entries()].map(([uom, quantity]) => ({ uom, quantity })),
+    grandTotal,
+  };
+}
+
 function normalizedActionLabel(value: string) {
   return value
     .trim()

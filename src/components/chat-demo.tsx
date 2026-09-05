@@ -33,7 +33,9 @@ import {
 import { catalogueMessageWithContext, isExactStockQuestion, isTradePriceQuestion, productCategory, rejectsCurrentProductReference, requestedProductCategory } from "@/lib/chat-intent";
 import {
   conversationPdfText,
+  enquiryReceiptTotals,
   isConversationUiAction,
+  latestEnquiryReceiptLines,
   needsUnicodePdfRendering,
   wrapMeasuredText,
 } from "@/lib/conversation-export";
@@ -1109,6 +1111,11 @@ export function ChatDemo() {
       completedItemCount: orderLinesRef.current.length,
     })) {
       syncHandledTurnWithN8n(clean);
+      const skippedProduct = confirmedProduct ?? pendingProduct;
+      const skippedProductWasAdded = skippedProduct
+        ? orderLinesRef.current.some((line) => line.code === skippedProduct.stock_id)
+        : true;
+      const confirmedLineCount = orderLinesRef.current.length;
       awaitingAdditionalProductRef.current = true;
       queuedAdditionalProductRef.current = null;
       lastUnavailableProductRef.current = null;
@@ -1121,8 +1128,12 @@ export function ChatDemo() {
       setMessages((current) => [...current,
         { id: nextId.current++, role: "user", text: clean },
         { id: nextId.current++, role: "assistant", text: replyLanguage === "zh"
-          ? "好的，我已保留询价摘要中已添加的商品。您接下来要添加什么不同的商品？请告诉我商品名称和数量。"
-          : "Sure. I’ve kept the items already added to your enquiry summary. What different product would you like to add next? Please include the item name and quantity." },
+          ? skippedProduct && !skippedProductWasAdded
+            ? `${skippedProduct.name} 尚未加入询价摘要，因为您还没有选择数量。我已保留 ${confirmedLineCount} 项已确认商品。您接下来要添加什么不同的商品？请告诉我商品名称和数量。`
+            : `好的，我已保留询价摘要中的 ${confirmedLineCount} 项已确认商品。您接下来要添加什么不同的商品？请告诉我商品名称和数量。`
+          : skippedProduct && !skippedProductWasAdded
+            ? `${skippedProduct.name} was not added because you did not choose a quantity. I’ve kept ${confirmedLineCount} confirmed ${confirmedLineCount === 1 ? "item" : "items"}. What different product would you like to add next? Please include its name and quantity.`
+            : `I’ve kept ${confirmedLineCount} confirmed ${confirmedLineCount === 1 ? "item" : "items"} in your enquiry. What different product would you like to add next? Please include its name and quantity.` },
       ]);
       setSuggestions(replyLanguage === "zh" ? ["完成询价摘要", "取消"] : ["Finish enquiry summary", "Cancel additional item"]);
       setQuery("");
@@ -1739,11 +1750,11 @@ export function ChatDemo() {
       const lineHeight = 4.8;
       let y = 18;
 
-      const addHeader = () => {
+      const addHeader = (title: string) => {
         pdf.setTextColor(21, 54, 47);
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(18);
-        pdf.text("Sia Huat Conversation Transcript", margin, y);
+        pdf.text(title, margin, y);
         y += 7;
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(9);
@@ -1766,7 +1777,65 @@ export function ChatDemo() {
         y = 18;
       };
 
-      addHeader();
+      const receiptLines = latestEnquiryReceiptLines(messages);
+      const receiptTotals = enquiryReceiptTotals(receiptLines);
+      addHeader("Sia Huat Enquiry Receipt");
+
+      pdf.setFillColor(238, 247, 243);
+      pdf.setDrawColor(188, 214, 204);
+      pdf.rect(margin, y, boxWidth, 26, "FD");
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(10);
+      pdf.setTextColor(21, 54, 47);
+      pdf.text(`Confirmed line items: ${receiptTotals.lineCount}`, margin + 5, y + 7);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9.5);
+      const quantitySummary = receiptTotals.quantitiesByUom.length > 0
+        ? receiptTotals.quantitiesByUom.map(({ quantity, uom }) => `${quantity} ${uom}`).join(" + ")
+        : "0";
+      pdf.text(`Total requested quantity: ${quantitySummary}`, margin + 5, y + 14);
+      pdf.setFont("helvetica", "bold");
+      pdf.text(`Grand total: $${receiptTotals.grandTotal.toFixed(2)} (ex GST)`, margin + 5, y + 21);
+      y += 32;
+
+      if (receiptLines.length === 0) {
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(10);
+        pdf.setTextColor(51, 75, 68);
+        pdf.text("No confirmed items yet. Select a product and quantity before sharing this PDF with sales.", margin, y);
+        y += 12;
+      } else {
+        receiptLines.forEach((line, index) => {
+          const detailLines = pdf.splitTextToSize([
+            `${index + 1}. ${line.item}`,
+            `Code: ${line.code}  |  Quantity: ${line.quantity} ${line.uom}`,
+            `Unit price: $${line.pricePerItem.toFixed(2)} / ${line.uom}  |  Line total: $${line.total.toFixed(2)} (ex GST)`,
+            ...(line.sourceUrl ? [line.sourceUrl] : []),
+          ].join("\n"), textWidth) as string[];
+          const itemHeight = 9 + detailLines.length * lineHeight;
+          if (y + itemHeight > pageHeight - margin - 12) {
+            addPage();
+            addHeader("Sia Huat Enquiry Receipt (continued)");
+          }
+          pdf.setFillColor(247, 247, 245);
+          pdf.setDrawColor(210, 220, 216);
+          pdf.rect(margin, y, boxWidth, itemHeight, "FD");
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(9.5);
+          pdf.setTextColor(51, 75, 68);
+          pdf.text(detailLines, margin + 5, y + 7, { lineHeightFactor: 1.25 });
+          y += itemHeight + 4;
+        });
+      }
+
+      if (y + 18 > pageHeight - margin) addPage();
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(9.5);
+      pdf.setTextColor(21, 54, 47);
+      pdf.text("Status: Enquiry only - no purchase has been placed.", margin, y + 4);
+
+      addPage();
+      addHeader("Sia Huat Conversation Transcript");
 
       for (const message of messages) {
         const products = [
