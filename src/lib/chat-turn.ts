@@ -278,6 +278,15 @@ export function splitMultipleProductRequest(message: string) {
     : [];
 }
 
+export function multipleProductInputNotice(productCount: number, language: "en" | "zh") {
+  if (productCount < 2) return "";
+  const remainingCount = productCount - 1;
+  if (language === "zh") {
+    return `我在您的消息中找到 ${productCount} 种商品。为了准确确认商品、库存和数量，请一次输入并确认一种商品。现在先处理第 1 项。我已保存其余 ${remainingCount} 项；确认每项后，请点击“继续”处理下一项。`;
+  }
+  return `I found ${productCount} products in your message. To keep each product match, stock check and quantity accurate, please enter and confirm one product at a time. We’ll start with item 1 now. I’ve saved the remaining ${remainingCount} ${remainingCount === 1 ? "item" : "items"}; after confirming each item, tap Continue for the next one.`;
+}
+
 /**
  * Keeps a bare attribute correction in the catalogue-search path instead of
  * treating it as a request to select whichever displayed card happens to

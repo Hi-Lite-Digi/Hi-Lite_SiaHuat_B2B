@@ -5,6 +5,7 @@ import {
   additionalProductTarget,
   declinesUnavailableItem,
   hasUnavailableProductContext,
+  multipleProductInputNotice,
   requestedDisplayedProductIndex,
   requestedQuantity,
   requestsAdditionalProduct,
@@ -179,6 +180,21 @@ test("keeps every numbered item from the real eight-line quote request", () => {
   assert.match(items[1], /Strainer for the 12QT Pot/i);
   assert.match(items[5], /Lid for 1\/2 S\/S Pan/i);
   assert.match(items[7], /Oyster Knife/i);
+});
+
+test("clearly explains that a multi-product request is handled one item at a time", () => {
+  const english = multipleProductInputNotice(8, "en");
+  assert.match(english, /found 8 products/i);
+  assert.match(english, /one product at a time/i);
+  assert.match(english, /start with item 1/i);
+  assert.match(english, /saved the remaining 7 items/i);
+  assert.match(english, /tap Continue/i);
+
+  const chinese = multipleProductInputNotice(3, "zh");
+  assert.match(chinese, /找到 3 种商品/);
+  assert.match(chinese, /一次输入并确认一种商品/);
+  assert.match(chinese, /其余 2 项/);
+  assert.equal(multipleProductInputNotice(1, "en"), "");
 });
 
 test("does not select a displayed card that the customer rejected", () => {

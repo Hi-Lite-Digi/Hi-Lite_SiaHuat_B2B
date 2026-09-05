@@ -20,6 +20,7 @@ import {
   hasUnavailableProductContext,
   isGenericAddAnotherItem,
   isProductRefinementOnly,
+  multipleProductInputNotice,
   parseRequestedQuantity,
   referencesSingleDisplayedProduct,
   requestedDisplayedProductIndex,
@@ -278,7 +279,7 @@ function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: str
   </p>;
 }
 
-const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send me the item name, brand or a photo." };
+const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send one product at a time with its name, quantity, brand or a photo. After confirming it, tap Add another item for the next product." };
 const initialSuggestions = ["Chef knives", "Glassware", "Black dinner plates"];
 
 export function ChatDemo() {
@@ -832,11 +833,7 @@ export function ChatDemo() {
     }
 
     const queuedRequestNotice = newlyQueuedRequests.length > 0
-      ? replyLanguage === "zh"
-        ? `\n\n我也记住了下一项：${newlyQueuedRequests.join("；")}。完成当前商品后会继续处理。`
-        : `\n\nI’ve also kept your next request: ${newlyQueuedRequests
-            .map((request) => request.replace(/[.!?]+$/g, ""))
-            .join("; ")}. We’ll handle it after this item.`
+      ? `\n\n${multipleProductInputNotice(multiProductRequests.length, replyLanguage)}`
       : "";
 
     const cleanCategory = productCategory(clean);
@@ -1953,8 +1950,8 @@ export function ChatDemo() {
         id: 1,
         role: "assistant",
         text: item === "开始新的询价"
-          ? "新的询价已开始。您要找什么商品？请发送商品名称、品牌或照片。"
-          : "New enquiry started. What product are you looking for? Send the item name, brand or a photo.",
+          ? "新的询价已开始。请一次发送一种商品，并包括商品名称、数量、品牌或照片。确认后，点击“再加一件商品”继续添加下一种商品。"
+          : "New enquiry started. Please send one product at a time with its name, quantity, brand or a photo. After confirming it, tap Add another item for the next product.",
       });
       return;
     }
