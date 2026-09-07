@@ -37,6 +37,9 @@ export function matchesProductRequirements(request: string, product: Pick<Produc
 
 /** Search concise catalogue terms; enforce the full requirements afterwards. */
 export function requirementLookupQuery(request: string) {
+  // Retrieve the family before enforcing dimensions: listings commonly use
+  // the inch symbol while customers type "inch" or "inches".
+  if (/\bsteak\s+tongs?\b/i.test(request)) return "steak tong";
   if (/\bcooking\s+tongs?\b/i.test(request)) return "tong";
   if (/\btoasters?\b/i.test(request) && /\b(?:slots?|pop[ -]?up)\b/i.test(request)) return "toaster";
   if (/\b(?:cordless)\b[\s\S]*\bwhisks?\b/i.test(request)) return "cordless";

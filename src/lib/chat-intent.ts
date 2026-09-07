@@ -449,6 +449,9 @@ function excludedBrandConstraint(messages: string[]) {
 
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
   message = normalizeCommonProductTypos(message);
+  // An explicit positive code selection replaces the preceding type/size
+  // search. Otherwise utensil context can silently drop the requested code.
+  if (/^\s*(?:please\s+)?(?:use|choose|select|take|switch\s+to|change\s+to)\s+(?:the\s+)?(?:item\s+|product\s+)?(?:code|sku)\s*[:#-]?\s*(?=[a-z0-9./-]*\d)[a-z0-9]+(?:[./-][a-z0-9]+)*\b/i.test(message)) return message;
   userHistory = userHistory.map(normalizeCommonProductTypos);
   const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
   const currentCategory = requestedProductCategory(message);

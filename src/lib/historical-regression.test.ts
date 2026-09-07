@@ -21,6 +21,15 @@ test("PDF 2: an exact displayed steak-tong name is a choice, not a refinement", 
   assert.equal(requestedDisplayedProductIndex(products[0].name, products), 0);
   assert.equal(isProductRefinementOnly("I want cooking tongs, not serving tongs", products), true);
 });
+
+test("live checkout: inch wording retrieves the steak-tong family and an explicit code replaces stale search context", () => {
+  const request = "2 stainless steel steak tongs, 15 inch";
+  const contextual = catalogueMessageWithContext(request, ["Kenwood HMP30.A0-WH hand mixer", "Add another item"]);
+  assert.match(contextual, /15 inch steak tong/);
+  assert.equal(requirementLookupQuery(normalizeCatalogueQuery(contextual)), "steak tong");
+  assert.equal(catalogueMessageWithContext("Use item code ST-15 instead", [request]), "Use item code ST-15 instead");
+  assert.doesNotMatch(catalogueMessageWithContext("Do not use item code ST-15", [request]), /^Do not use item code/);
+});
 test("PDF 6: rejecting Taiwanese knives does not become a request for Taiwan origin", () => {
   const history = ["I need a damascus chef knife. 3 pcs", "Have a japanese made knife?", "No, this is taiwanese knife"];
   const query = catalogueMessageWithContext("Are there others?", history);
