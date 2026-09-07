@@ -33,7 +33,29 @@ export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
  */
 export function normalizeCommonProductTypos(message: string) {
   return message
+    // Normalize common Chinese catalogue terms and measurements for the same
+    // search constraints as English; retain the original text in conversation.
+    .replace(/(\d+(?:\.\d+)?)\s*(?:厘米|公分)/gu, " $1cm ")
+    .replace(/(\d+(?:\.\d+)?)\s*毫米/gu, " $1mm ")
+    .replace(/(\d+(?:\.\d+)?)\s*英寸/gu, " $1 inch ")
+    .replace(/(?:厨师刀|主厨刀)/gu, " chef knife ")
+    .replace(/面包刀/gu, " bread knife ")
+    .replace(/(?:红酒杯|葡萄酒杯)/gu, " wine glass ")
+    .replace(/不粘(?:平底)?锅/gu, " non-stick frying pan ")
+    .replace(/平底锅/gu, " frying pan ")
+    .replace(/(?:主餐盘|餐盘)/gu, " dinner plate ")
+    .replace(/(?:手柄|刀柄)/gu, " handle ")
+    .replace(/黑色/gu, " black ")
+    .replace(/白色/gu, " white ")
+    .replace(/蓝色/gu, " blue ")
+    .replace(/(?:圆形|圆的)/gu, " round ")
+    .replace(/方形/gu, " square ")
+    .replace(/(?:可重复使用|可反复使用)/gu, " reusable ")
     .replace(/\b(?:ned|nead|nedd)\b/gi, "need")
+    .replace(/\bwnat\b/gi, "want")
+    .replace(/\bdotn\b/gi, "don't")
+    .replace(/\btongsw\b/gi, "tongs")
+    .replace(/\byangiba\b/gi, "yanagiba")
     .replace(/\b(?:blak|balck|blakc)\b/gi, "black")
     .replace(/\b(?:dinnr|dinr)\b/gi, "dinner")
     .replace(/\bmeggemi\b/gi, "maggi mee")
@@ -300,7 +322,7 @@ export function explicitKnifeBrand(message: string) {
   const words = (message.slice(0, knifeMatch.index).match(/[a-z][a-z0-9&'-]*/gi) ?? []).slice(-8);
   const trailingModifiers = new Set([
     "black", "blue", "boning", "bread", "brown", "chef", "damascus", "green", "grey", "gray",
-    "japan", "japanese", "oyster", "paring", "plastic", "red", "silver", "stainless", "steel",
+    "japan", "japanese", "made", "sashimi", "yanagiba", "oyster", "paring", "plastic", "red", "silver", "stainless", "steel",
     "taiwan", "taiwanese", "white", "yellow",
   ]);
   while (words.length > 0 && trailingModifiers.has(words.at(-1)!.toLowerCase())) words.pop();
@@ -345,6 +367,11 @@ export function catalogueHistoryWithClarification(message: string, history: Hist
     && (currentCategory || isCatalogueRequest(message) || words.length > 16)) {
     return userHistory;
   }
+  // Suggested dimensions/colours in an assistant's question are not customer
+  // requirements. Once the customer has named the family, keep their own
+  // words as the search source (e.g. cooking tongs must not inherit 18cm from
+  // the serving tongs described in the previous reply).
+  if (!isNumberedComparisonSelection && rememberedActiveCategories(userHistory).length > 0) return userHistory;
 
   // Only the assistant turn immediately before the customer's follow-up may
   // supply clarification context. Searching farther back can revive a stale
@@ -467,11 +494,12 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     const latestUtensilMessage = [...customerMessages].reverse()
       .find((content) => /\b(?:spatula|turner|whisk|peeler|tongs?|ladle)s?\b/i.test(content)) ?? joinedMessages;
     if (/\btongs?\b/i.test(latestUtensilMessage)) {
-      const tongType = /\bsteak\b/i.test(latestUtensilMessage)
+      const latestTongPurpose = [...customerMessages].reverse().find(content => /\b(?:steak|cooking|serving|grilling)\b/i.test(content)) ?? latestUtensilMessage;
+      const tongType = /\bsteak\b/i.test(latestTongPurpose)
         ? "steak tong"
-        : /\bcooking\b/i.test(latestUtensilMessage)
+        : /\b(?:cooking|grilling)\b/i.test(latestTongPurpose)
           ? "cooking tongs"
-          : /\bserving\b/i.test(latestUtensilMessage)
+          : /\bserving\b/i.test(latestTongPurpose)
             ? "serving tongs"
             : "tongs";
       const material = /\bstainless(?:\s+steel)?\b/i.test(joinedMessages) ? "stainless steel" : null;
@@ -482,7 +510,8 @@ export function catalogueMessageWithContext(message: string, userHistory: string
       const powered = /\b(?:electric|cordless|powered|not\s+manual)\b/i.test(latestUtensilMessage);
       const threeInOne = /\b(?:3[ -]?in[ -]?1|three[ -]?in[ -]?one)\b/i.test(latestUtensilMessage);
       const blender = /\bblenders?\b/i.test(latestUtensilMessage);
-      return [powered ? (/\bcordless\b/i.test(latestUtensilMessage) ? "cordless" : "electric") : null, threeInOne ? "3-in-1" : null, blender ? "blender" : null, "whisk"].filter(Boolean).join(" ");
+      const home = /\b(?:home|domestic)\b/i.test(joinedMessages) ? "home" : null;
+      return [home, powered ? (/\bcordless\b/i.test(latestUtensilMessage) ? "cordless" : "electric") : null, threeInOne ? "three-in-one" : null, blender ? "blender" : null, "whisk"].filter(Boolean).join(" ");
     }
     if (/\bladles?\b/i.test(latestUtensilMessage)) {
       const material = /\bstainless(?:\s+steel)?\b/i.test(joinedMessages) ? "stainless steel" : null;
@@ -612,7 +641,7 @@ export function catalogueMessageWithContext(message: string, userHistory: string
         ? `${latestSlotCount}-slot`
         : null;
     const isPopUp = /\b(?:non[ -]?conveyor|not\s+(?:a\s+)?conveyor|no\s+conveyor(?:\s+type)?|without\s+(?:a\s+)?conveyor|(?:no|not|without)\s+(?:a\s+)?belt(?:\s+type)?|belt\s+type\s+(?:no|not)|don['’]?t\s+want\s+(?:a\s+)?(?:conveyor|convertor)|do\s+not\s+want\s+(?:a\s+)?(?:conveyor|convertor)|ya\s+kun|pop[ -]?up|(?:\d+|four|six)(?:\s+or\s+(?:\d+|four|six))?\s*slots?)\b/i.test(joinedMessages);
-    return [slotRequirement, isPopUp ? "commercial pop-up toaster" : "commercial toaster"]
+    return [slotRequirement, isPopUp || /\bslots?\b/i.test(joinedMessages) ? "commercial pop-up toaster" : "commercial toaster"]
       .filter(Boolean)
       .join(" ");
   }
@@ -689,7 +718,8 @@ export function catalogueMessageWithContext(message: string, userHistory: string
 
   if (activeCategory === "knife") {
     const latestDamascusIndex = customerMessages.findLastIndex((content) => /\bdamascus\b/i.test(content));
-    const latestOriginIndex = customerMessages.findLastIndex((content) => /\b(?:japan|japanese|taiwan|taiwanese)\b/i.test(content));
+    const latestOriginIndex = customerMessages.findLastIndex((content) => /\b(?:japan|japanese|taiwan|taiwanese)\b/i.test(content)
+      && !/^\s*(?:no|not|wrong)\b/i.test(content));
     // A later origin refinement replaces an earlier Damascus requirement. This
     // prevents a short follow-up such as "show a few" from reviving a stale
     // constraint that the customer already changed.
@@ -703,12 +733,13 @@ export function catalogueMessageWithContext(message: string, userHistory: string
       { index: customerMessages.findLastIndex((content) => /\bboning\s+kn(?:ife|ives)\b/i.test(content)), label: "boning knife" },
       { index: customerMessages.findLastIndex((content) => /\bparing\s+kn(?:ife|ives)\b/i.test(content)), label: "paring knife" },
       { index: customerMessages.findLastIndex((content) => /\boyster\s+kn(?:ife|ives)\b/i.test(content)), label: "oyster knife" },
+      { index: customerMessages.findLastIndex((content) => /\b(?:sashimi|yanagiba|yanagi)\b/i.test(content)), label: "sashimi knife" },
     ].filter((candidate) => candidate.index >= 0).sort((left, right) => right.index - left.index)[0]?.label ?? "knife";
     const originSource = latestOriginIndex >= 0 ? customerMessages[latestOriginIndex] : "";
     const origin = /\b(?:japan|japanese)\b/i.test(originSource)
-      ? "japanese"
+      ? "japanese made"
       : /\b(?:taiwan|taiwanese)\b/i.test(originSource)
-        ? "taiwanese"
+        ? "taiwanese made"
         : null;
     const size = [...customerMessages].reverse()
       .map((content) => content.match(/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i)?.[0])
@@ -725,9 +756,11 @@ export function catalogueMessageWithContext(message: string, userHistory: string
       damascus,
       origin,
       latestKnifeType,
+      /\b(?:yanagiba|yanagi)\b/i.test(joinedMessages) && latestKnifeType === "sashimi knife" ? "yanagiba" : null,
       size,
       colour ? `${colour} handle` : null,
       handleMaterial,
+      /\bforged\s+premium\s+handle\b/i.test(joinedMessages) ? "forged premium handle" : null,
       excludedBrand ? `excluding brand ${excludedBrand}` : null,
     ].filter(Boolean).join(" ");
   }
@@ -899,6 +932,10 @@ export function rememberedActiveCategories(messages: string[]) {
   let active: string[] = [];
 
   for (const content of messages) {
+    if (/^\s*(?:ok(?:ay)?\s+)?(?:nvm|never\s*mind|cancel|stop|forget it)[.!\s]*$/i.test(content)) {
+      active = [];
+      continue;
+    }
     let categories = productCategories
       .filter((category) => category.pattern.test(content))
       .map((category) => category.label);

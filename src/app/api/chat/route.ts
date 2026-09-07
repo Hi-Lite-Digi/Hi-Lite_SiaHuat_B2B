@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { chatRequestSchema, type ChatReply, type ChatRequest, type Product } from "@/lib/chat-contract";
-import { sendChatToN8n } from "@/lib/n8n-client";
+import { composeClaudeReply, inspectImageWithClaude } from "@/lib/claude-client";
+import { recognizedPhotoReply } from "@/lib/image-recognition";
+import { displayedPriceComparison } from "@/lib/displayed-comparison";
+import { matchesProductRequirements, requirementLookupQuery } from "@/lib/product-requirements";
 import {
   detectProductUseCase,
   findAvailableCatalogueAlternatives,
@@ -505,6 +508,7 @@ function hasImageIndependentBuyingSpecification(message: string) {
 }
 
 function matchesExplicitProductCategory(message: string, product: Product) {
+  if (!matchesProductRequirements(message, product)) return false;
   if (!matchesShakerRequest(message, product.name)) return false;
   const productName = product.name;
   const productText = [product.name, product.description, product.size, product.dimensions, product.category, product.subcategory, product.third_category]
@@ -803,6 +807,8 @@ function catalogueTokens(value: string) {
 }
 
 function matchesDirectCatalogueRequest(message: string, product: Product) {
+  if (!matchesProductRequirements(message, product)) return false;
+  if (requirementLookupQuery(message)) return true;
   if (/\bbanana\s+(?:leaf|leaves|peels?)\b/i.test(message)
     && !/\bplates?\b/i.test(message)
     && /\bplates?\b/i.test(product.name)) {
@@ -837,6 +843,7 @@ function searchableProductText(product: Product) {
 }
 
 function matchesConstrainedKnifeRequest(message: string, product: Product) {
+  if (!matchesProductRequirements(message, product)) return false;
   const text = searchableProductText(product);
   if (productFamily(product) !== "knife") return false;
   if ((/\bcleavers?\b/i.test(message) || /砍骨刀/u.test(message)) && !/\bcleavers?\b/i.test(product.name)) return false;
@@ -1820,6 +1827,7 @@ function enforceLiveCheckoutGate(reply: ChatReply): ChatReply {
 
 function quickFallback(input: ChatRequest, groundedReply: ChatReply | null): ChatReply {
   if (groundedReply) {
+    if (groundedReply.products.length === 0 && !groundedReply.selectedProduct) return groundedReply;
     return {
       ...groundedReply,
       message: groundedReply.products.length === 1
@@ -2047,7 +2055,7 @@ async function groundImageNarrativeReply(reply: ChatReply, catalogueMessage: str
       : safeGrounded;
   }
 
-  // n8n can correctly identify a family but occasionally describe it in prose
+  // Vision can correctly identify a family but occasionally describe it in prose
   // without returning product codes. Collapse that prose to a stable catalogue
   // query so the customer still receives grounded product cards.
   const conciseQuery = conciseImageCatalogueQuery(reply.message);
@@ -2203,7 +2211,7 @@ function excludePreviouslyDisplayedProducts(reply: ChatReply, excludedStockIds?:
 }
 
 async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: ChatReply) => void) {
-  // Run the inexpensive local raster check alongside catalogue/n8n work. It is
+  // Run the inexpensive local raster check alongside catalogue/vision work. It is
   // the final guard against treating a document or unrelated graphic as a
   // purchasable product merely because the vision workflow guessed a family.
   const rasterKindPromise = input.image
@@ -2316,7 +2324,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       : `${catalogueMessage}; ${currentDetails}`;
     return unavailableCatalogueReply(sourcingRequest);
   }
-  let n8nError: unknown = null;
+  let visionError: unknown = null;
   const workflowMessage = prefersChinese(input)
     ? `${catalogueMessage}\n\n请全程使用简体中文回复客户。商品名称、品牌和商品代码可以保留原文。`
     : catalogueMessage;
@@ -2502,14 +2510,17 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     }
   }
 
-  const n8nAbortController = new AbortController();
-  const n8nReplyPromise = sendChatToN8n(
+  const visionAbortController = new AbortController();
+  const visionReplyPromise = (input.image ? inspectImageWithClaude(
     workflowMessage === input.message ? input : { ...input, message: workflowMessage },
-    n8nAbortController.signal,
-  ).catch((error) => {
-    if (n8nAbortController.signal.aborted) return null;
-    n8nError = error;
-    console.error("[api/chat] n8n reply failed", error);
+    visionAbortController.signal,
+  ) : Promise.resolve<ChatReply>({
+    message: "What would you like help choosing?",
+    products: [], selectedProduct: null, suggestions: [], stage: "clarify",
+  })).catch((error) => {
+    if (visionAbortController.signal.aborted) return null;
+    visionError = error;
+    console.error("[api/chat] Claude reply failed", error);
     return null;
   });
   const groundedReply = input.image
@@ -2521,30 +2532,28 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
 
   if (groundedReply) {
     rememberGrounded(groundedReply);
-    // Catalogue-grounded turns do not need to keep an unused workflow fetch
-    // alive after the customer response is ready. Cancelling it prevents
-    // serverless capacity from being occupied until the n8n timeout expires.
-    n8nAbortController.abort("CATALOGUE_REPLY_READY");
+    // No vision work is needed when catalogue evidence resolves the turn.
+    visionAbortController.abort("CATALOGUE_REPLY_READY");
   }
   if (groundedReply && isStockpotRequest(catalogueMessage)) {
     const liveReply = await addLiveCatalogueState(groundedReply);
     return deduplicateReplyProducts(enforceLiveCheckoutGate(explainUnavailableProducts(liveReply)));
   }
-  const n8nReply = groundedReply ? null : await n8nReplyPromise;
-  if (!groundedReply && !n8nReply) {
-    if (n8nError instanceof Error && n8nError.message === "N8N_NOT_CONFIGURED") throw n8nError;
+  const visionReply = groundedReply ? null : await visionReplyPromise;
+  if (!groundedReply && !visionReply) {
+    if (visionError instanceof Error && visionError.message === "CLAUDE_NOT_CONFIGURED") throw visionError;
     return quickFallback(input, null);
   }
 
-  const comparisonRasterKind = input.image && n8nReply
+  const comparisonRasterKind = input.image && visionReply
     ? await rasterKindPromise
     : null;
   const imageComparison = input.image
-    && n8nReply
+    && visionReply
     && comparisonRasterKind === "document-like"
-    && visionImageKind(n8nReply.message) === "screenshot"
+    && visionImageKind(visionReply.message) === "screenshot"
     ? riceDispenserImageClarification({
-        visionText: n8nReply.message,
+        visionText: visionReply.message,
         userMessage: input.message,
         quantity: contextualQuantity,
         language: prefersChinese(input) ? "zh" : "en",
@@ -2572,8 +2581,15 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     return comparisonFallback;
   }
 
-  let groundedImageReply = input.image && n8nReply
-    ? await groundImageNarrativeReply(n8nReply, catalogueMessage).catch((error) => {
+  const recognizedFallback = input.image && visionReply
+    ? recognizedPhotoReply(input, visionReply, (await rasterKindPromise) ?? "unknown")
+    : null;
+  // Preserve the identified family while the exact catalogue match is checked,
+  // including if that lookup runs into the customer response deadline.
+  if (recognizedFallback) rememberGrounded(recognizedFallback);
+
+  let groundedImageReply = input.image && visionReply
+    ? await groundImageNarrativeReply(visionReply, catalogueMessage).catch((error) => {
         console.error("[api/chat] image narrative grounding failed", { error });
         return null;
       })
@@ -2590,7 +2606,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       ? await requireVisualCatalogueEvidence(input.image, groundedImageReply)
       : null;
     if (!groundedImageReply) {
-      const safeFallback = ambiguousPhotoReply(input);
+      const safeFallback = recognizedFallback ?? ambiguousPhotoReply(input);
       rememberGrounded(safeFallback);
       return safeFallback;
     }
@@ -2599,16 +2615,16 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   // stock enrichment approaches the 27-second customer deadline, quickFallback
   // can still return these relevant products instead of a generic clarification.
   if (groundedImageReply) rememberGrounded(groundedImageReply);
-  const brainReply = groundedReply ?? groundedImageReply ?? n8nReply;
+  const brainReply = groundedReply ?? groundedImageReply ?? visionReply;
   if (!brainReply) return quickFallback(input, groundedReply);
   const exactReply = keepExactCodeMatches(brainReply, input.message);
-  const groundedOrN8n = groundedReply ?? {
+  const groundedOrVision = groundedReply ?? {
     ...exactReply,
     stage: exactReply.products.length === 0 && isCatalogueRequest(input.message)
       ? "clarify" as const
       : exactReply.stage,
   };
-  const prioritizedReply = await prioritizeRequestedUseCase(groundedOrN8n, catalogueMessage);
+  const prioritizedReply = await prioritizeRequestedUseCase(groundedOrVision, catalogueMessage);
   const diversifiedReply = enforceExplicitProductCategory(
     await addDiverseProductOptions(prioritizedReply, catalogueMessage),
     catalogueMessage,
@@ -2666,6 +2682,8 @@ async function processChat(input: ChatRequest) {
   }
 
   const displayedProducts = input.context?.displayedProducts ?? [];
+  const priceComparison = !input.image ? displayedPriceComparison(input.message, displayedProducts) : null;
+  if (priceComparison) return NextResponse.json(customerReply(priceComparison, input));
   const asksProductInformation = isTradePriceQuestion(input.message) || isExactStockQuestion(input.message);
   const selectionNumber = input.message.trim().match(/^(\d+)$/)?.[1]
     ?? input.message.match(/\b(?:option|choice|item|number|no\.?)\s*#?\s*(\d+)\b/i)?.[1];
@@ -2704,7 +2722,7 @@ async function processChat(input: ChatRequest) {
     };
     return NextResponse.json(customerReply(reply, input));
   }
-  const rawDisplayedProductIndex = input.image || asksProductInformation || requestsAnotherOption(input.message) || isProductRefinementOnly(input.message)
+  const rawDisplayedProductIndex = input.image || asksProductInformation || requestsAnotherOption(input.message) || isProductRefinementOnly(input.message, displayedProducts)
     ? null
     : requestedDisplayedProductIndex(input.message, displayedProducts);
   const requestedCategory = requestedProductCategory(input.message);
@@ -2784,7 +2802,7 @@ async function processChat(input: ChatRequest) {
     }
   }
 
-  const stockReply = input.brain === "n8n" ? null : await freshExactStockReply(input);
+  const stockReply = Boolean(input.brain) ? null : await freshExactStockReply(input);
   if (stockReply) {
     console.log("[api/chat] fresh stock reply", {
       durationMs: Math.round(performance.now() - startedAt),
@@ -2793,11 +2811,11 @@ async function processChat(input: ChatRequest) {
     return NextResponse.json(customerReply(stockReply, input));
   }
 
-  const skipsStaleFastStockFallback = input.brain !== "n8n"
+  const skipsStaleFastStockFallback = !input.brain
     && isExactStockQuestion(input.message)
     && (requestedProductCategory(input.message) !== null || exactCodeCandidates(input.message).length > 0)
     && referencedContextProduct(input) === null;
-  const fastReply = input.brain === "n8n" || skipsStaleFastStockFallback ? null : getFastChatReply(input);
+  const fastReply = Boolean(input.brain) || skipsStaleFastStockFallback ? null : getFastChatReply(input);
   if (fastReply) {
     console.log("[api/chat] fast deterministic reply", {
       durationMs: Math.round(performance.now() - startedAt),
@@ -2821,7 +2839,7 @@ async function processChat(input: ChatRequest) {
         }, CUSTOMER_REPLY_DEADLINE_MS);
       }),
     ]);
-    console.log("[api/chat] n8n brain reply", {
+    console.log("[api/chat] Claude brain reply", {
       durationMs: Math.round(performance.now() - startedAt),
       productCount: reply.products.length,
       stage: reply.stage,
@@ -2829,7 +2847,7 @@ async function processChat(input: ChatRequest) {
     return NextResponse.json(customerReply(reply, input));
   } catch (error) {
     console.error("Chat failed", error);
-    if (error instanceof Error && error.message === "N8N_NOT_CONFIGURED") {
+    if (error instanceof Error && error.message === "CLAUDE_NOT_CONFIGURED") {
       return NextResponse.json(
         { error: "The conversational assistant is not configured yet." },
         { status: 503 },
@@ -2864,5 +2882,22 @@ export async function POST(request: Request) {
     );
   }
 
-  return inSessionOrder(input.data.sessionId, () => processChat(input.data));
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return NextResponse.json({ error: "The conversational assistant is not configured yet." }, { status: 503 });
+  }
+  return inSessionOrder(input.data.sessionId, async () => {
+    const turnStarted = performance.now();
+    const response = await processChat(input.data);
+    if (!response.ok) return response;
+    const draft = await response.json() as ChatReply;
+    try {
+      const remainingMs = Math.max(1, 30_000 - (performance.now() - turnStarted));
+      const reply = await composeClaudeReply(input.data, draft, AbortSignal.any([request.signal, AbortSignal.timeout(Math.ceil(remainingMs))]));
+      return NextResponse.json(reply, { headers: { "x-chat-provider": "anthropic" } });
+    } catch (error) {
+      console.warn("[api/chat] Claude wording unavailable", { reason: error instanceof Error ? error.message : "unknown" });
+      // Keep verified product data usable during an outage; never call the old provider.
+      return NextResponse.json(draft, { headers: { "x-chat-provider": "deterministic-fallback" } });
+    }
+  });
 }

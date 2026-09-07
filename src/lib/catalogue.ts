@@ -2,10 +2,12 @@ import "server-only";
 import { z } from "zod";
 import { productSchema, type Product } from "@/lib/chat-contract";
 import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
+import { matchesProductRequirements, requirementLookupQuery } from "@/lib/product-requirements";
 import {
   catalogueLookupOverride,
   foodPanDepthConstraintMatches,
   hasPlasticLikeHandle,
+  matchesDiningPlateRequest,
   matchesShakerRequest,
   normalizeFoodPanCatalogueQuery,
 } from "@/lib/catalogue-query";
@@ -116,6 +118,8 @@ export function normalizeCatalogueQuery(message: string) {
     "9": "43", "9.5": "44", "10": "44", "10.5": "45", "11": "45", "12": "46",
   };
   const corrected = message
+    .replace(/\b3\s*-?\s*in\s*-?\s*1\b/gi, "three-in-one")
+    .replace(/\b(\d+)\s+or\s+(\d+)\s*slots?\b/gi, "$1/$2 slot")
     .replace(/\bche+f+f?\b/gi, "chef")
     .replace(/\b(?:knfie|kinife|knive)\b/gi, "knife")
     .replace(/\b(?:fryng|fryin)\b/gi, "frying")
@@ -158,6 +162,8 @@ export function normalizeCatalogueQuery(message: string) {
 }
 
 function catalogueLookupQuery(query: string) {
+  const requirementQuery = requirementLookupQuery(query);
+  if (requirementQuery) return requirementQuery;
   const override = catalogueLookupOverride(query);
   if (override) return override;
   if (/\bcambox\b/i.test(query)) return "cambox";
@@ -173,9 +179,11 @@ function catalogueLookupQuery(query: string) {
 }
 
 function matchesExplicitConstraints(query: string, product: Product) {
+  if (!matchesProductRequirements(query, product)) return false;
   const requested = query.toLowerCase();
   const candidate = searchableProductText(product).toLowerCase();
   const productName = product.name.toLowerCase();
+  if (!matchesDiningPlateRequest(query, candidate)) return false;
   if (!matchesShakerRequest(query, product.name)) return false;
   const excludedBrand = requested.match(/\bexcluding\s+brand\s+([a-z0-9&' -]+)$/i)?.[1]?.trim();
   if (excludedBrand) {

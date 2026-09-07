@@ -67,7 +67,7 @@ type ReceiptMessage = {
 export function latestEnquiryReceiptLines(messages: ReceiptMessage[]) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.quoteSummaries?.length) return message.quoteSummaries;
+    if (message.quoteSummaries) return message.quoteSummaries;
     if (message.quoteSummary) return [message.quoteSummary];
   }
   return [];

@@ -1,3 +1,17 @@
+/** Dinner-plate requests must not silently become serving platters or disposable partyware. */
+export function matchesDiningPlateRequest(request: string, candidate: string) {
+  if (!/\bplates?\b/i.test(request)) return true;
+  if (/\bfine\s+dining\b/i.test(request) && !/\b(?:melamine|plastic|disposable)\b/i.test(request)
+    && /\b(?:melamine|plastic|disposable|paper|polystyrene)\b/i.test(candidate)) return false;
+  if (/\b(?:dinner|mains?)\b/i.test(request)
+    && /\b(?:platters?|narrow|sushi|canap[eé]s?|appeti[sz]er|dessert|side\s+plate)\b/i.test(candidate)) return false;
+  if (/\breusable\b/i.test(request)
+    && /\b(?:disposable|single[ -]use|paper|ps|polystyrene)\b/i.test(candidate)) return false;
+  if (/\bround\b/i.test(request)
+    && /\b(?:square|rect(?:angular)?|oval|oblong)\b/i.test(candidate)) return false;
+  return true;
+}
+
 function centimetres(value: string, unit: string) {
   const numeric = Number.parseFloat(value);
   if (/^mm$/i.test(unit)) return numeric / 10;

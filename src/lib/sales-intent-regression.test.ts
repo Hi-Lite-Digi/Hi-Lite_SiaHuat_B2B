@@ -35,6 +35,20 @@ const torchBurner = {
   available_quantity: 426,
 };
 
+test("an explicit change of mind keeps the new specifications and skips add-versus-switch", () => {
+  const message = "Actually I need a 20cm chef knife, 2 pieces.";
+  assert.equal(getFastChatReply({
+    sessionId: "change-mind-qa",
+    message,
+    history: [{ role: "user", content: "I need black dinner plates" }],
+  }), null);
+  assert.equal(requestedQuantity(message), 2);
+  const query = catalogueMessageWithContext(message, ["I need black dinner plates"]);
+  assert.match(query, /20cm/i);
+  assert.match(query, /chef knife/i);
+  assert.doesNotMatch(query, /plates?|black/i);
+});
+
 test("switches from the PDF's knife enquiry to Boston shakers", () => {
   const message = "i want to look at boston shakers";
   const history = ["Hi i want a kanch knife"];

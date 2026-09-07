@@ -1,5 +1,5 @@
 {
-  "name": "Hi-Lite Sia Huat — Voice Transcription",
+  "name": "Hi-Lite Sia Huat — Deepgram Voice Transcription",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +12,10 @@
       "name": "Voice Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [-520, 0],
+      "position": [
+        -520,
+        0
+      ],
       "webhookId": "b29aa31f-8acd-484f-b4b0-f5787ce62470"
     },
     {
@@ -23,43 +26,91 @@
       "name": "Validate Server Request",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-280, 0]
+      "position": [
+        -280,
+        0
+      ]
     },
     {
       "parameters": {
-        "resource": "audio",
-        "operation": "transcribe",
+        "authentication": "genericCredentialType",
+        "method": "POST",
         "inputDataFieldName": "data",
-        "options": {}
+        "url": "https://api.deepgram.com/v1/listen?model=nova-3&detect_language=true&smart_format=true",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "={{ $binary.data.mimeType }}"
+            }
+          ]
+        },
+        "contentType": "binaryData",
+        "sendHeaders": true,
+        "sendBody": true,
+        "options": {
+          "timeout": 25000
+        },
+        "genericAuthType": "httpHeaderAuth"
       },
       "id": "e5618cf6-7b0c-4923-b798-5a878d97f16c",
       "name": "Transcribe Voice Note",
-      "type": "@n8n/n8n-nodes-langchain.openAi",
-      "typeVersion": 1.8,
-      "position": [-40, 0]
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -40,
+        0
+      ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { transcript: String($json.text ?? $json.transcript ?? '').trim() } }}",
+        "responseBody": "={{ { transcript: String($json.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? \"\").trim() } }}",
         "options": {}
       },
       "id": "b27b4c55-d951-4394-a331-02e926fbc1df",
       "name": "Return Transcript",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.4,
-      "position": [200, 0]
+      "position": [
+        200,
+        0
+      ]
     }
   ],
   "connections": {
     "Voice Webhook": {
-      "main": [[{ "node": "Validate Server Request", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate Server Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate Server Request": {
-      "main": [[{ "node": "Transcribe Voice Note", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Transcribe Voice Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Transcribe Voice Note": {
-      "main": [[{ "node": "Return Transcript", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Return Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {

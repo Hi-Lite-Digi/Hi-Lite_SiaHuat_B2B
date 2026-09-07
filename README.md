@@ -1,6 +1,8 @@
 # Hi-Lite × Sia Huat Product Assistant
 
-Phase 1 is a conversational product-enquiry web application backed by n8n Cloud, OpenAI, and a Sia Huat catalogue in Supabase Postgres.
+Phase 1 is a conversational product-enquiry web application using Anthropic Claude for replies and image analysis, Deepgram for voice transcription, and a Sia Huat catalogue in Supabase Postgres. The web application's runtime no longer calls the former n8n/OpenAI workflows.
+
+See [docs/CLAUDE-MIGRATION.md](docs/CLAUDE-MIGRATION.md) for the provider configuration, reply behaviour, verification, and release checklist.
 
 ## Live demo
 
@@ -16,7 +18,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design, trust bo
 
 ## Local setup
 
-1. Copy `.env.example` to `.env.local` and add the server-only n8n values.
+1. Copy `.env.example` to `.env.local` and add the server-only Anthropic and Deepgram keys and existing catalogue configuration.
 2. Install dependencies with `pnpm install`.
 3. Run `pnpm dev`.
 4. Open `http://localhost:3000` or the port printed by Next.js.
@@ -24,8 +26,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design, trust bo
 Required application variables:
 
 ```text
-N8N_WEBHOOK_URL=https://your-n8n-instance.example/webhook/sia-huat-web-chat
-N8N_WORKFLOW_KEY=server-only-secret
+ANTHROPIC_API_KEY=your-anthropic-key
+ANTHROPIC_MODEL=claude-opus-5
+DEEPGRAM_API_KEY=your-deepgram-key
+DEEPGRAM_MODEL=nova-3
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```

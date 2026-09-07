@@ -58,7 +58,8 @@ export const chatRequestSchema = z.object({
   history: z.array(historyItemSchema).max(30).default([]),
   context: conversationContextSchema,
   image: imageAttachmentSchema.optional(),
-  brain: z.literal("n8n").optional(),
+  // Legacy n8n requests remain accepted; both values now use Claude.
+  brain: z.enum(["claude", "n8n"]).optional(),
 });
 
 export const chatReplySchema = z.object({

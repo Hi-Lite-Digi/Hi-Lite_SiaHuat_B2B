@@ -1,5 +1,7 @@
 # Sia Huat Phase 1 Architecture
 
+> Historical architecture below: the Claude migration replaces the web app's n8n/OpenAI calls with direct Anthropic and Deepgram requests. See [CLAUDE-MIGRATION.md](CLAUDE-MIGRATION.md) for the current implementation. The remaining text describes the previous release.
+
 ## Decision
 
 Phase 1 uses n8n Cloud as the orchestration layer and Supabase Postgres as the only catalogue source of truth. The Next.js application is a backend-for-frontend: the browser never receives an n8n secret, OpenAI key, Supabase password, or database connection string.

@@ -133,14 +133,14 @@ export function confirmsDisplayedProduct(message: string) {
 }
 
 export function confirmsOrderRequest(message: string) {
-  const normalized = message.trim();
+  const normalized = message.trim().replace(/\bcomfirm\b/gi, "confirm");
   return /^(?:(?:ok(?:ay|ie)?|yes|yup|yeah|sure)[,\s-]*)?(?:confirm(?:ed)?(?:\s+(?:the\s+)?(?:order|order request|enquiry))?|place the enquiry|submit(?:\s+the)?\s+enquiry(?:\s+now)?|send the enquiry|submit for review|finish(?:\s+the)?(?:\s+enquiry)?\s+summary|finish summary)(?:[.!\s]*)$/i.test(normalized)
     || /^(?:好的?[，,、\s]*)?(?:确认|确认订单询价|提交审核|完成询价摘要)[。.！!\s]*$/u.test(normalized);
 }
 
 export function requestsStaffReview(message: string) {
   const normalized = message.trim();
-  if (/^(?:prepare staff review summary|continue for staff review|准备人工审核摘要|交由人员确认)[.!。！\s]*$/iu.test(normalized)) {
+  if (/^(?:prepare staff review summary|prepare sales summary|continue for staff review|准备询价摘要|准备人工审核摘要|交由人员确认)[.!。！\s]*$/iu.test(normalized)) {
     return true;
   }
   return /\b(?:prepare|create|make|give|show|need|want)\b[^.!?]{0,70}\b(?:staff|manual)\s+review(?:\s+(?:summary|details?))?\b/i.test(normalized)
@@ -194,7 +194,11 @@ export function hasUnavailableProductContext(input: {
 }
 
 const PRODUCT_NOUN = /\b(?:apron|basket|baskets|blender|bowl|cartridge|cartridges|chair|cleaver|coffee|colander|container|cookware|cover|covers|cup|cutlery|dispenser|fork|gas|glass|glasses|glassware|glove|gloves|grinder|knife|knives|ladder|ladle|lid|lids|machine|mug|pan|pants|plate|plates|pot|rack|shoe|shoes|shot|sponge|sponges|spoon|stool|stove|strainer|table|tableware|toaster|towel|towels|tray|trolley|uniform|wok)\b/i;
-const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?[A-Z0-9]{2,}(?:-[A-Z0-9.-]+)+\b/i;
+const PRODUCT_CODE_REFERENCE = /\b(?:code\s*[:#-]?\s*)?(?=[A-Z0-9.-]*\d)(?:[A-Z0-9]+(?:-[A-Z0-9.-]+)+|[A-Z]{1,8}\d{3,}[A-Z0-9]*)\b/i;
+
+export function hasProductCodeReference(message: string) {
+  return PRODUCT_CODE_REFERENCE.test(message);
+}
 
 /**
  * Detects a new product request while an existing order line is being
@@ -293,7 +297,11 @@ export function multipleProductInputNotice(productCount: number, language: "en" 
  * share one token. Explicit choices such as "take the black one" still use
  * the displayed-product resolver.
  */
-export function isProductRefinementOnly(message: string) {
+export function isProductRefinementOnly(message: string, displayedProducts: Product[] = []) {
+  message = normalizeCommonProductTypos(message);
+  const canonical = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (displayedProducts.some(product => canonical(product.name) === canonical(message) || canonical(product.stock_id) === canonical(message))) return false;
+  if (/\b(?:sashimi|yanagiba|fillet(?:ing)?)\b/i.test(message) || /\b(?:use|using|need)\s+(?:it|this|that)\s+(?:for|to)\b/i.test(message)) return true;
   const strictConstraint = /\b(?:no|not|without|don['’]?t|do\s+not)\b[\s\S]{0,30}\b(?:manual|conveyor|convertor|serving)\b|\b(?:electric|cordless|powered|cooking|steak|serving|pop[ -]?up|non[ -]?conveyor|full\s+sets?|dining\s+sets?)\b|\b\d+(?:\s+or\s+\d+)?\s*slots?\b/i.test(message);
   if (strictConstraint) return true;
 
@@ -390,6 +398,7 @@ function collectEnglishQuantityCandidates(message: string, pattern: RegExp, grou
     // Keep product specifications such as "four slot", "three step" and
     // "eight inch" out of the order-quantity state.
     if (/^\s*-?\s*(?:steps?|slots?|cm|mm|inches?|inch|litres?|liters?|l|ml|qt|kg|g|lb|lbs|pounds?|oz|ounces?)\b/i.test(suffix)) continue;
+    if (/^\s*(?:%|percent\b|per\s+cent\b)/i.test(suffix)) continue;
     candidates.push({ index, raw: String(quantity) });
   }
   return candidates;
@@ -429,6 +438,7 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
     if (/\/\s*$/.test(prefix)) continue;
     if (/\b\d+\s*[- ]\s*in\s*[- ]\s*$/i.test(prefix)) continue;
     const suffix = message.slice(index + raw.length);
+    if (/^\s*(?:%|percent\b|per\s+cent\b)/i.test(suffix)) continue;
     if (/^\s*-?\s*steps?\b/i.test(suffix)) continue;
     if (/^\s*-?\s*(?:or\s+\d+\s+)?slots?\b/i.test(suffix)) continue;
     if (/^\s*(?:pax|persons?|people)\b/i.test(suffix)) continue;
@@ -442,6 +452,9 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
 export function parseRequestedQuantity(message: string): QuantityParseResult {
   message = normalizeCommonProductTypos(message);
   const candidates = [
+    ...collectQuantityCandidates(message, /\badd\s*(-?\d+(?:\.\d+)?)(?![\w.-])/gi),
+    ...collectQuantityCandidates(message, /(?<![\w.])(-?\d+(?:\.\d+)?)\s+more\b/gi),
+    ...collectEnglishQuantityCandidates(message, new RegExp(`\\b(?:add)\\s+(${englishQuantityPattern})\\b`, "gi")),
     ...collectQuantityCandidates(
       message,
       /\b(?:actually\s+)?(?:make\s+(?:it|that)|change(?:\s+the)?\s+quantity(?:\s+to)?|quantity(?:\s+to)?|change\s+to)\s*(-?\d+(?:\.\d+)?)/gi,

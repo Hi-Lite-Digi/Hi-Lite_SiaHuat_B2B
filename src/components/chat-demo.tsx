@@ -18,6 +18,7 @@ import {
   confirmsOrderRequest,
   declinesUnavailableItem,
   hasUnavailableProductContext,
+  hasProductCodeReference,
   isGenericAddAnotherItem,
   isProductRefinementOnly,
   multipleProductInputNotice,
@@ -32,6 +33,10 @@ import {
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
 import { catalogueMessageWithContext, isExactStockQuestion, isTradePriceQuestion, productCategory, rejectsCurrentProductReference, requestedProductCategory } from "@/lib/chat-intent";
+import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, referencedEnquiryLine, removalTarget } from "@/lib/enquiry-order";
+import { confirmationMessage, enquirySummaryMessage, stockLimitMessage, stockUnconfirmedMessage, suggestionLabel } from "@/lib/enquiry-copy";
+import { quickQuantityChoices, quickReplyLabel, withQuickReplies } from "@/lib/quick-replies";
+import { QuickReplyButtons } from "@/components/quick-reply-buttons";
 import {
   conversationPdfText,
   enquiryReceiptTotals,
@@ -82,60 +87,6 @@ function safeChatFailureMessage(language: ChatLanguage, timedOut = false, hasPro
   return timedOut
     ? "That lookup took too long. Please try again, or send the product name."
     : "That lookup didn’t finish. Please try again, or send the product name.";
-}
-
-function whatsAppQuoteMessage(order: QuoteSummary | QuoteSummary[], confirmed = false, language: ChatLanguage = "en") {
-  const quotes = Array.isArray(order) ? order : [order];
-  const grandTotal = quotes.reduce((total, quote) => total + quote.total, 0);
-  if (language === "zh") {
-    const lines = [
-      confirmed
-        ? "您的询价摘要已准备好。此演示不会自动发送给销售人员。"
-        : quotes.length > 1 ? `请检查以下 ${quotes.length} 件商品。` : "请检查以下询价内容。",
-      "",
-      "*订单摘要*",
-    ];
-    quotes.forEach((quote, index) => {
-      lines.push(
-        ...(index > 0 ? [""] : []),
-        `*${quotes.length > 1 ? `${index + 1}. ` : ""}商品：* ${quote.item}`,
-        `*商品代码：* ${quote.code}`,
-        `*单价：* $${quote.pricePerItem.toFixed(2)} / ${quote.uom}（未含 GST）`,
-        `*数量：* ${quote.quantity} ${quote.uom}`,
-        `*${quotes.length > 1 ? "小计" : "总价"}：* $${quote.total.toFixed(2)}（未含 GST）`,
-      );
-      if (quote.sourceUrl) lines.push("*商品链接：*", quote.sourceUrl);
-    });
-    if (quotes.length > 1) lines.push("", `*总计：* $${grandTotal.toFixed(2)}（未含 GST）`);
-    lines.push("", confirmed
-      ? "目前尚未正式下单。请使用上方 PDF 按钮下载摘要，并手动发给 Sia Huat 销售人员以确认报价、库存、付款和送货。"
-      : "目前尚未正式下单。您可以继续添加商品，或完成询价摘要。");
-    return lines.join("\n");
-  }
-
-  const lines = [
-    confirmed
-      ? "Your enquiry summary is ready. This demo has not sent it to Sia Huat sales staff."
-      : quotes.length > 1 ? `Please review these ${quotes.length} items.` : "Please review this enquiry.",
-    "",
-    "*ORDER SUMMARY*",
-  ];
-  quotes.forEach((quote, index) => {
-    lines.push(
-      ...(index > 0 ? [""] : []),
-      `*${quotes.length > 1 ? `${index + 1}. ` : ""}Item:* ${quote.item}`,
-      `*Code:* ${quote.code}`,
-      `*Price per item:* $${quote.pricePerItem.toFixed(2)} / ${quote.uom} (ex GST)`,
-      `*Quantity:* ${quote.quantity} ${quote.uom}`,
-      `*${quotes.length > 1 ? "Line total" : "Total"}:* $${quote.total.toFixed(2)} (ex GST)`,
-    );
-    if (quote.sourceUrl) lines.push("*Item link:*", quote.sourceUrl);
-  });
-  if (quotes.length > 1) lines.push("", `*GRAND TOTAL:* $${grandTotal.toFixed(2)} (ex GST)`);
-  lines.push("", confirmed
-    ? "No purchase has been placed. Download the PDF above and share it with your Sia Huat sales contact for quotation and order confirmation."
-    : "No purchase has been placed yet. Use the buttons below to add another item or finish this enquiry summary.");
-  return lines.join("\n");
 }
 
 function WhatsAppText({ text }: { text: string }) {
@@ -198,9 +149,7 @@ function availableLimit(product: Product) {
 }
 
 function quantitySuggestions(limit: number | null, language: ChatLanguage = "en") {
-  const suggestions = [1, 6, 12, 24].filter((quantity) => limit === null || quantity <= limit);
-  const anotherItem = language === "zh" ? "选择其他商品" : "Choose another item";
-  return [...suggestions.map(String), anotherItem];
+  return quickQuantityChoices(limit, language === "zh");
 }
 
 function productOptionSuggestions(products: Product[]) {
@@ -279,7 +228,7 @@ function MessageTimestamp({ role, time }: { role: ChatMessage["role"]; time: str
   </p>;
 }
 
-const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋\n\nWhat are you looking for? Send one product at a time with its name, quantity, brand or a photo. After confirming it, tap Add another item for the next product." };
+const welcome: ChatMessage = { id: 1, role: "assistant", text: "Hi, I’m Claire from Sia Huat 👋 What are you looking for today? You can send me a photo too." };
 const initialSuggestions = ["Chef knives", "Glassware", "Black dinner plates"];
 
 export function ChatDemo() {
@@ -314,6 +263,8 @@ export function ChatDemo() {
   const [queuedMessages, setQueuedMessages] = useState<Array<{ value: string; voiceNote?: VoiceNote }>>([]);
   const submitRef = useRef<((value: string, voiceNote?: VoiceNote) => Promise<void>) | null>(null);
   const orderLinesRef = useRef<QuoteSummary[]>([]);
+  const quotedProductsRef = useRef(new Map<string, Product>());
+  const additiveQuantityRef = useRef(false);
   const shownProductIdsRef = useRef<Set<string>>(new Set());
   const pendingOrderRequestsRef = useRef<string[]>([]);
   const awaitingAdditionalProductRef = useRef(false);
@@ -701,7 +652,7 @@ export function ChatDemo() {
   }, []);
 
   function quoteFor(quantity: number, product: Product): QuoteSummary {
-    const estimate = product.list_price * quantity;
+    const estimate = Math.round(product.list_price * 100) * quantity / 100;
     return {
       item: product.name,
       code: product.stock_id,
@@ -718,13 +669,16 @@ export function ChatDemo() {
   }
 
   function showOrderReview(quantity: number, product: Product, userText?: string) {
-    const quote = quoteFor(quantity, product);
+    const quote = checkedEnquiryLine(quantity, product);
+    if (!quote) return;
     const replacingQuoteCode = replacingQuoteCodeRef.current;
     const nextOrder = [
       ...orderLinesRef.current.filter((line) => line.code !== quote.code && line.code !== replacingQuoteCode),
       quote,
     ];
     orderLinesRef.current = nextOrder;
+    quotedProductsRef.current.set(product.stock_id, product);
+    additiveQuantityRef.current = false;
     replacingQuoteCodeRef.current = null;
     additionalItemInProgressRef.current = false;
     awaitingAdditionalProductRef.current = false;
@@ -735,7 +689,7 @@ export function ChatDemo() {
       ...(userText ? [{ id: nextId.current++, role: "user" as const, text: userText }] : []),
       {
         id: nextId.current++, role: "assistant" as const,
-        text: `${whatsAppQuoteMessage(nextOrder, false, conversationLanguage)}${nextQueuedRequest
+        text: `${enquirySummaryMessage(nextOrder, false, conversationLanguage)}${nextQueuedRequest
           ? conversationLanguage === "zh"
             ? `\n\n接下来：${nextQueuedRequest}`
             : `\n\nNext up: ${nextQueuedLabel}. Tap Continue below—you don’t need to type it again.`
@@ -755,28 +709,10 @@ export function ChatDemo() {
         : ["Finish enquiry summary", "Add another item", "Change quantity"]);
   }
 
-  function showQuantityLimit(userText: string, quantity: number, product: Product, limit: number) {
-    setMessages((current) => [...current,
-      { id: nextId.current++, role: "user", text: userText },
-      {
-        id: nextId.current++, role: "assistant", selectedProduct: product,
-        text: conversationLanguage === "zh"
-          ? `Sia Huat 网站的实时库存只有 ${limit} ${product.uom_id}，无法提供您要的 ${quantity}。\n\n您要现有的 ${limit} ${product.uom_id}，还是查看其他选择？`
-          : `The live Sia Huat Add to cart check shows only ${limit} ${product.uom_id} available, so I can’t prepare ${quantity}.\n\nWould you like ${limit} ${product.uom_id}, or would you prefer another option instead?`,
-      },
-    ]);
-    setPendingQuantity(quantity); setQuery(""); setStage(limit > 0 ? "quantity" : "clarify");
-    setSuggestions(limit > 0
-      ? [String(limit), conversationLanguage === "zh" ? "选择其他商品" : "Choose another item"]
-      : conversationLanguage === "zh" ? ["选择其他商品", "不用了，谢谢"] : ["Choose another item", "No, thank you"]);
-  }
-
   function showRememberedQuantityLimit(quantity: number, product: Product, limit: number) {
     setMessages((current) => [...current, {
       id: nextId.current++, role: "assistant", selectedProduct: product,
-      text: conversationLanguage === "zh"
-        ? `${product.name} 目前只有 ${limit} ${product.uom_id}，但您需要 ${quantity} ${product.uom_id}。\n\n您要现有的 ${limit} ${product.uom_id}，还是查看其他选择？`
-        : `Only ${limit} ${product.uom_id} of ${product.name} ${limit === 1 ? "is" : "are"} currently available, but you requested ${quantity} ${product.uom_id}.\n\nWould you like all ${limit} ${product.uom_id}, or would you prefer another option?`,
+      text: stockLimitMessage(quantity, limit, product.uom_id, conversationLanguage),
     }]);
     setPendingQuantity(quantity); setStage(limit > 0 ? "quantity" : "clarify");
     setSuggestions(limit > 0
@@ -849,15 +785,17 @@ export function ChatDemo() {
     const hasAdditiveProductCue = /\b(?:add|also|as\s+well|both)\b|\btoo\b\s*[.!?]*$|(?:再加|也要|还要)/iu.test(clean);
     const explicitlyRejectsCurrent = rejectsCurrentProductReference(clean);
     const hasReplacementProductCue = explicitlyRejectsCurrent
-      || (/\b(?:not|wrong|never\s*mind|forget|instead|rather\s+than|meant|switch|change|replace)\b/i.test(clean)
+      || (/\b(?:actually|not|wrong|never\s*mind|forget|instead|rather\s+than|meant|switch|change|replace)\b/i.test(clean)
         && !hasAdditiveProductCue);
     const replacesCurrentProduct = Boolean(
       !attachment
       && hasReplacementProductCue
-      && positivelyRequestedCategory
-      && currentStateCategories.length > 0
-      && (explicitlyRejectsCurrent
-        || currentStateCategories.every((category) => !sameSalesFamily(category, positivelyRequestedCategory))),
+      && ((hasProductCodeReference(clean) && currentStateProducts.length > 0)
+        || (positivelyRequestedCategory
+          && currentStateCategories.length > 0
+          && (explicitlyRejectsCurrent
+            || currentStateCategories.every((category) => !sameSalesFamily(category, positivelyRequestedCategory))
+            || /\b(?:switch|replace|instead|different|another)\b/i.test(clean)))),
     );
     const canMatchQueuedCategory = newlyQueuedRequests.length === 0;
     const continuedQueuedLabel = clean.match(/^Continue:\s*(.+)$/i)?.[1]?.trim() ?? null;
@@ -874,6 +812,67 @@ export function ChatDemo() {
     const canUseExistingProductState = !attachment;
     const hasExistingOrderSummary = canUseExistingProductState
       && (pendingQuote !== null || orderLinesRef.current.length > 0);
+    const removeTarget = !attachment ? removalTarget(clean) : null;
+    const clearOrder = !attachment && clearsEnquiry(clean);
+    const cancelsOnlyAdditionalItem = /^(?:cancel additional item|cancel the additional item)$/i.test(clean);
+    if (clearOrder || (hasExistingOrderSummary && removeTarget && !cancelsOnlyAdditionalItem)) {
+      const removed = removeTarget ? referencedEnquiryLine(removeTarget, orderLinesRef.current) : null;
+      if (!clearOrder && !removed) {
+        setMessages((current) => [...current,
+          { id: nextId.current++, role: "user", text: clean },
+          { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? "您要删除哪一项？请告诉我商品代码。" : "Which item should I remove? Please give me its product code." },
+        ]);
+        setQuery("");
+        return;
+      }
+      const remaining = clearOrder ? [] : orderLinesRef.current.filter((line) => line.code !== removed?.code);
+      orderLinesRef.current = remaining;
+      const latest = remaining.at(-1) ?? null;
+      const latestProduct = latest ? quotedProductsRef.current.get(latest.code) ?? null : null;
+      lastQuotedProductRef.current = latestProduct;
+      replacingQuoteCodeRef.current = null;
+      additiveQuantityRef.current = false;
+      additionalItemInProgressRef.current = false;
+      awaitingAdditionalProductRef.current = false;
+      pendingOrderRequestsRef.current = [];
+      setPendingProduct(null); setPendingQuantity(null); setPendingQuote(latest);
+      setConfirmedProduct(latestProduct); setLastProducts(latestProduct ? [latestProduct] : []);
+      setStage(latest ? "clarify" : "discover");
+      setMessages((current) => [...current,
+        { id: nextId.current++, role: "user", text: clean },
+        { id: nextId.current++, role: "assistant", text: remaining.length
+          ? `${replyLanguage === "zh" ? "已删除这项商品。" : "Removed that item."}\n\n${enquirySummaryMessage(remaining, false, replyLanguage)}`
+          : replyLanguage === "zh" ? "询价已清空。您想重新找什么商品？" : "Your enquiry is now empty. What would you like to look for?",
+          quoteSummaries: remaining },
+      ]);
+      setSuggestions(latest
+        ? replyLanguage === "zh" ? ["完成询价摘要", "更改数量", "再加一件商品"] : ["Finish enquiry summary", "Change quantity", "Add another item"]
+        : []);
+      setQuery("");
+      return;
+    }
+
+    // Handle quantities addressed to an existing line before the new-product
+    // path drops its context. "Add 16 more" means 18 total when 2 are saved.
+    const lineQuantity = parseRequestedQuantity(clean);
+    const referencedLine = referencedEnquiryLine(clean, orderLinesRef.current)
+      ?? (/\b(?:same|this|that|it|more)\b/i.test(clean)
+        && (!positivelyRequestedCategory || currentStateCategories.includes(positivelyRequestedCategory))
+        ? orderLinesRef.current.find((line) => line.code === confirmedProduct?.stock_id) ?? null : null);
+    const editsExistingLine = hasExistingOrderSummary && referencedLine && !asksProductInformation
+      && (!hasReplacementProductCue || /\b(?:quantity|make\s+(?:it|that))\b/i.test(clean))
+      && lineQuantity.kind === "valid"
+      && (hasAdditiveProductCue || /\b(?:make|quantity|need|want|take)\b/i.test(clean));
+    if (editsExistingLine) {
+      const product = quotedProductsRef.current.get(referencedLine.code) ?? (confirmedProduct?.stock_id === referencedLine.code ? confirmedProduct : null);
+      if (product) {
+        const quantity = mergedEnquiryQuantity(orderLinesRef.current, referencedLine.code, lineQuantity.value, hasAdditiveProductCue);
+        additiveQuantityRef.current = false;
+        setQuery("");
+        await confirmProduct(clean, product, quantity);
+        return;
+      }
+    }
     const returnsToExistingSummary = awaitingAdditionalProduct
       && hasExistingOrderSummary
       && (confirmsOrderRequest(clean) || clean === "Change quantity" || clean === "更改数量");
@@ -886,6 +885,7 @@ export function ChatDemo() {
       && (awaitingAdditionalProduct || pendingQuote === null)
       && /^(?:cancel(?:\s+(?:the\s+)?additional\s+item)?|never\s*mind|no thanks|no thank you|不用了|取消|算了)[.!。！\s]*$/iu.test(clean);
     if (cancelsAdditionalProduct) {
+      additiveQuantityRef.current = false;
       awaitingAdditionalProductRef.current = false;
       additionalItemInProgressRef.current = false;
       const queuedRequestToCancel = queuedAdditionalProductRef.current;
@@ -923,12 +923,14 @@ export function ChatDemo() {
     const explicitlyAddsSeparateProduct = /\b(?:add|also|as well)\b|\btoo\b\s*[.!?]*$|(?:再加|也要|还要)/iu.test(clean);
     const startingAdditionalProduct = canUseExistingProductState && !replacesCurrentProduct && !returnsToExistingSummary && (awaitingAdditionalProduct
       || queuedRequestIndex >= 0
+      || (hasExistingOrderSummary && explicitlyAddsSeparateProduct && !asksProductInformation)
       || (canUseExistingProductState
         && (pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
         && requestsAdditionalProduct(clean)
         && (replacingQuoteCodeRef.current === null || explicitlyAddsSeparateProduct)));
     if (startingAdditionalProduct) {
       replacingQuoteCodeRef.current = null;
+      additiveQuantityRef.current = true;
       additionalItemInProgressRef.current = true;
       if (queuedRequestIndex >= 0) {
         queuedRequestToConsume = pendingOrderRequestsRef.current[queuedRequestIndex];
@@ -963,7 +965,7 @@ export function ChatDemo() {
         { id: nextId.current++, role: "user", text: clean },
         {
           id: nextId.current++, role: "assistant",
-          text: whatsAppQuoteMessage(confirmedQuotes, true, replyLanguage),
+          text: enquirySummaryMessage(confirmedQuotes, true, replyLanguage),
           quoteSummary: latestQuote,
           quoteSummaries: confirmedQuotes,
         },
@@ -1037,14 +1039,14 @@ export function ChatDemo() {
       return;
     }
 
-    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmsDisplayedProduct(clean)) {
+    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmsDisplayedProduct(clean)) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
       await confirmProduct(clean, pendingProduct, confirmedQuantity ?? undefined);
       return;
     }
 
-    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmedQuantity !== null && referencesSingleDisplayedProduct(clean, 1)) {
+    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmedQuantity !== null && referencesSingleDisplayedProduct(clean, 1)) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
       await confirmProduct(clean, pendingProduct, confirmedQuantity);
@@ -1056,7 +1058,7 @@ export function ChatDemo() {
       syncHandledTurnWithN8n(clean); setQuery(""); rejectProduct(clean); return;
     }
 
-    if (canUseExistingProductState && !replacesCurrentProduct && !asksProductInformation && !pendingProduct && lastProducts.length === 1 && confirmsDisplayedProduct(clean) && confirmedQuantity !== null) {
+    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && !asksProductInformation && !pendingProduct && lastProducts.length === 1 && confirmsDisplayedProduct(clean) && confirmedQuantity !== null) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
       await confirmProduct(clean, lastProducts[0], confirmedQuantity);
@@ -1074,7 +1076,7 @@ export function ChatDemo() {
       chooseProduct(recommended, clean);
       return;
     }
-    const rawRequestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean) && !isProductRefinementOnly(clean)
+    const rawRequestedIndex = canSelectDisplayedProduct && !requestsAnotherOption(clean) && !isProductRefinementOnly(clean, lastProducts)
       ? requestedDisplayedProductIndex(clean, lastProducts)
       : null;
     const requestedProduct = rawRequestedIndex === null ? null : lastProducts[rawRequestedIndex];
@@ -1096,6 +1098,7 @@ export function ChatDemo() {
     }
 
     if (canUseExistingProductState && (clean === "Change quantity" || clean === "更改数量") && confirmedProduct) {
+      additiveQuantityRef.current = false;
       syncHandledTurnWithN8n(clean);
       setPendingQuote(null);
       setMessages((current) => [...current, { id: nextId.current++, role: "user", text: clean }, { id: nextId.current++, role: "assistant", text: replyLanguage === "zh" ? `好的，您需要多少 ${confirmedProduct.uom_id} 的 ${confirmedProduct.name}？` : `Sure. How many ${confirmedProduct.uom_id} of ${confirmedProduct.name} do you need?`, selectedProduct: confirmedProduct }]);
@@ -1150,6 +1153,7 @@ export function ChatDemo() {
       const currentProduct = confirmedProduct ?? pendingProduct ?? lastUnavailableProductRef.current ?? lastProducts[0] ?? null;
       if (currentProduct && orderLinesRef.current.some((line) => line.code === currentProduct.stock_id)) {
         replacingQuoteCodeRef.current = currentProduct.stock_id;
+        additiveQuantityRef.current = true;
       }
       const sourceWasCompletelyOutOfStock = currentProduct?.stock_status === "out_of_stock"
         || (currentProduct ? availableLimit(currentProduct) === 0 : false);
@@ -1318,32 +1322,17 @@ export function ChatDemo() {
       setSuggestions(quantitySuggestions(availableLimit(confirmedProduct), replyLanguage)); return;
     }
 
-    const changedItem = clean.match(/\b(?:actually|instead|switch|change|rather|different|another).*?\b(knife|pan|glassware|tableware|coffee)\b/i);
-    if (canUseExistingProductState && !replacesCurrentProduct && confirmedProduct && changedItem) {
-      syncHandledTurnWithN8n(clean);
-      const item = changedItem[1].toLowerCase();
-      setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setConfirmedProduct(null); setStage("discover"); setQuery("");
-      setMessages((current) => [...current,
-        { id: nextId.current++, role: "user", text: clean },
-        { id: nextId.current++, role: "assistant", text: `No problem. We’ll stop the ${confirmedProduct.name} enquiry. What kind of ${item} do you want instead?` },
-      ]);
-      setSuggestions(item === "pan" ? ["Frying pan", "Non-stick pan", "Sauce pan"] : [`Search for ${item}`]);
-      return;
-    }
-
     const naturalQuantity = clean.match(/^(?:actually\s+)?(?:make it|change(?: the)? quantity to|quantity)\s*(\d+)$/i)?.[1];
     if (canUseExistingProductState && confirmedProduct && (stage === "complete" || pendingQuote) && naturalQuantity) {
       syncHandledTurnWithN8n(clean);
       const quantity = Number.parseInt(naturalQuantity, 10);
-      const limit = availableLimit(confirmedProduct);
       if (quantity >= 1 && quantity <= 100_000) {
-        if (limit !== null && quantity > limit) showQuantityLimit(clean, quantity, confirmedProduct, limit);
-        else showOrderReview(quantity, confirmedProduct, clean);
+        await confirmProduct(clean, confirmedProduct, quantity);
       }
       return;
     }
 
-    if (canUseExistingProductState && !replacesCurrentProduct && stage === "quantity" && confirmedProduct && !asksProductInformation) {
+    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && stage === "quantity" && confirmedProduct && !asksProductInformation) {
       syncHandledTurnWithN8n(clean);
       const quantityText = clean.match(/^\d+$/)?.[0] ?? naturalQuantity;
       const quantity = confirmedQuantity
@@ -1355,12 +1344,7 @@ export function ChatDemo() {
         setSuggestions(quantitySuggestions(availableLimit(confirmedProduct), replyLanguage)); return;
       }
 
-      const limit = availableLimit(confirmedProduct);
-      if (limit !== null && quantity > limit) {
-        showQuantityLimit(clean, quantity, confirmedProduct, limit); return;
-      }
-
-      showOrderReview(quantity, confirmedProduct, clean); return;
+      await confirmProduct(clean, confirmedProduct, quantity); return;
     }
 
     if (canUseExistingProductState && !replacesCurrentProduct && pendingQuote && !startingAdditionalProduct && !asksProductInformation) {
@@ -1378,6 +1362,7 @@ export function ChatDemo() {
     const startsFreshProduct = startingAdditionalProduct || startsFreshPhotoProduct || replacesCurrentProduct;
 
     if (startsFreshProduct) {
+      if (!startingAdditionalProduct) additiveQuantityRef.current = replacesCurrentProduct;
       const replacedProduct = confirmedProduct ?? pendingProduct ?? lastProducts[0] ?? null;
       if (replacesCurrentProduct && replacedProduct
         && orderLinesRef.current.some((line) => line.code === replacedProduct.stock_id)) {
@@ -1493,13 +1478,7 @@ export function ChatDemo() {
         setLastProducts((current) => current.some((item) => item.stock_id === product.stock_id) ? current : [product, ...current]);
         setMessages((current) => [...current, {
           id: nextId.current++, role: "assistant", needsConfirmation: true, selectedProduct: product,
-          text: `${replyLanguage === "zh"
-            ? quantity
-              ? `请确认这是您要的商品。\n\n您需要的数量：${quantity} ${product.uom_id}。`
-              : "我在目录中找到了这件商品。请确认是否是您要的商品。"
-            : quantity
-              ? `Please confirm this is the correct item.\n\nQuantity requested: ${quantity} ${product.uom_id}.`
-              : "I found this item in the catalogue. Is this the exact item you want?"}${queuedRequestNotice}`,
+          text: `${confirmationMessage(quantity, product.uom_id, replyLanguage)}${queuedRequestNotice}`,
         }]);
         return;
       }
@@ -1509,7 +1488,7 @@ export function ChatDemo() {
       const queueContinuation = products.length === 0 && nextQueuedRequest
         ? [`Continue: ${nextQueuedRequest.replace(/^I\s+(?:need|want)\s+/i, "")}`]
         : [];
-      setSuggestions(products.length > 0 ? productOptionSuggestions(products) : [...(reply.suggestions ?? []), ...queueContinuation]);
+      setSuggestions(reply.suggestions?.length ? [...reply.suggestions, ...queueContinuation] : products.length > 0 ? productOptionSuggestions(products) : queueContinuation);
       setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: `${reply.message}${queuedRequestNotice}`, products }]);
     } catch (reason) {
       if (sessionId.current !== requestSession) return;
@@ -1558,9 +1537,7 @@ export function ChatDemo() {
         { id: nextId.current++, role: "user", text: userText },
         {
           id: nextId.current++, role: "assistant",
-          text: conversationLanguage === "zh"
-            ? `这件商品无法选择，因为 Sia Huat 网站显示完全缺货。${quantity ? `已在本对话中保留数量 ${quantity}。` : ""}尚未发送人工采购请求。您可以选择其他有库存的商品、更改规格，或准备摘要手动发给销售人员。`
-            : `That result cannot be selected because the Sia Huat website shows it is completely out of stock. ${quantity ? `I’ve kept your requested quantity of ${quantity} in this conversation. ` : ""}No sourcing request has been sent. Choose another available item, change a specification, or prepare a summary to share with sales manually.`,
+          text: stockLimitMessage(quantity ?? 1, 0, product.uom_id, conversationLanguage),
         },
       ]);
       setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]); return;
@@ -1572,13 +1549,7 @@ export function ChatDemo() {
       { id: nextId.current++, role: "user", text: userText },
       {
         id: nextId.current++, role: "assistant",
-        text: conversationLanguage === "zh"
-          ? quantity
-            ? `请确认：您要 ${quantity} ${product.uom_id} 的 ${product.name}，对吗？`
-            : "请确认，这是您要的商品吗？"
-          : quantity
-            ? `Just to confirm—do you want ${quantity} ${product.uom_id} of ${product.name}?`
-            : "Just to confirm, is this the exact item you want?",
+        text: confirmationMessage(quantity, product.uom_id, conversationLanguage),
         selectedProduct: product,
         needsConfirmation: true,
       },
@@ -1589,7 +1560,12 @@ export function ChatDemo() {
     const product = productOverride ?? pendingProduct;
     if (!product || checkingStock) return;
     setPendingProduct(null); setPendingQuote(null); setConfirmedProduct(product); setStage("clarify"); setSuggestions([]); setCheckingStock(true);
-    const quantity = quantityOverride === undefined ? pendingQuantity : quantityOverride;
+    const requested = quantityOverride === undefined ? pendingQuantity : quantityOverride;
+    const quantity = requested === null ? null : mergedEnquiryQuantity(orderLinesRef.current, product.stock_id, requested, additiveQuantityRef.current
+      && replacingQuoteCodeRef.current !== product.stock_id);
+    if (quantity !== null) additiveQuantityRef.current = false;
+    const stockSession = sessionId.current;
+    loadingRef.current = true; setLoading(true);
     setMessages((current) => [...current, { id: nextId.current++, role: "user", text: userText }]);
 
     try {
@@ -1600,15 +1576,14 @@ export function ChatDemo() {
         signal: AbortSignal.timeout(25_000),
       });
       const check = await response.json() as LiveStockCheck & { error?: string };
+      if (sessionId.current !== stockSession) return;
       if (!response.ok) throw new Error(check.error ?? "Live stock check failed.");
       const liveProduct: Product = { ...product, list_price: check.priceExGst, in_stock: check.inStock, available_quantity: check.availableQuantity, stock_status: check.stockStatus, source_url: check.sourceUrl };
       setConfirmedProduct(liveProduct);
       if (check.stockStatus === "in_stock") {
         if (quantity !== null && check.availableQuantity === null) {
           setStage("clarify");
-          setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
-            ? `已在本对话中保留您需要 ${quantity} ${product.uom_id}，但网站无法确认确切库存。您要查看其他选择，还是准备摘要手动发给 Sia Huat 销售人员？`
-            : `I have your request for ${quantity} ${product.uom_id}, but the available quantity could not be confirmed. Would you like another option, or should I prepare the details for you to share with Sia Huat sales manually?`, selectedProduct: liveProduct }]);
+          setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: stockUnconfirmedMessage(quantity, product.uom_id, conversationLanguage), selectedProduct: liveProduct }]);
           setSuggestions(conversationLanguage === "zh" ? ["准备人工审核摘要", "选择其他商品"] : ["Prepare staff review summary", "Choose another item"]);
           return;
         }
@@ -1634,46 +1609,42 @@ export function ChatDemo() {
         setStage("clarify");
         setPendingQuantity(quantity);
         lastUnavailableProductRef.current = liveProduct;
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
-          ? `${product.name} 目前完全缺货。${quantity === null ? "" : `已在本对话中保留数量 ${quantity}。`}减少数量也无法购买这件商品。要查看其他有货的选择，还是准备人工审核摘要？`
-          : `${product.name} is currently completely out of stock. ${quantity === null ? "" : `I’ve kept your requested quantity of ${quantity}. `}A smaller quantity will not make this item available. Would you like another in-stock option, or a staff-review summary for manual sourcing?`, selectedProduct: liveProduct }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: stockLimitMessage(quantity ?? 1, 0, product.uom_id, conversationLanguage), selectedProduct: liveProduct }]);
         setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要", "不用了，谢谢"] : ["Choose another item", "Prepare staff review summary", "No, thank you"]);
       } else {
         setStage("clarify");
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
-          ? quantity
-            ? `已在本对话中保留您需要 ${quantity} ${product.uom_id}，但网站无法确认库存。您要查看其他选择，还是准备摘要手动发给 Sia Huat 销售人员？`
-            : "网站无法确认库存。您要查看其他选择，还是准备摘要手动发给 Sia Huat 销售人员？"
-          : quantity
-            ? `I have your request for ${quantity} ${product.uom_id}, but the available quantity could not be confirmed. Would you like another option, or should I prepare the details for you to share with Sia Huat sales manually?`
-            : "The available quantity could not be confirmed. Would you like another option, or should I prepare the details for you to share with Sia Huat sales manually?", selectedProduct: liveProduct }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: stockUnconfirmedMessage(quantity, product.uom_id, conversationLanguage), selectedProduct: liveProduct }]);
         setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]);
       }
     } catch {
+      if (sessionId.current !== stockSession) return;
       if (quantity !== null) {
         setStage("clarify");
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `已在本对话中保留您需要 ${quantity} ${product.uom_id}，但无法确认库存和价格。要准备摘要手动发给 Sia Huat 销售人员吗？` : `I have your request for ${quantity} ${product.uom_id}, but the available quantity and price could not be confirmed. Would you like me to prepare the details for you to share with Sia Huat sales manually?`, selectedProduct: product }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: stockUnconfirmedMessage(quantity, product.uom_id, conversationLanguage), selectedProduct: product }]);
         setSuggestions(conversationLanguage === "zh" ? ["准备人工审核摘要", "选择其他商品"] : ["Prepare staff review summary", "Choose another item"]);
       } else {
         setStage("quantity");
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时无法确认库存，但我仍保留了已选商品。\n\n您需要多少 ${product.uom_id}？完成摘要后，请手动发给销售人员确认。` : `I couldn’t confirm the live stock just now, but I still have the selected item.\n\nHow many ${product.uom_id} do you need? After the summary is ready, share it with sales manually for verification.`, selectedProduct: product }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `暂时确认不了库存。您需要多少 ${product.uom_id}？` : `I couldn't check stock just now. How many ${product.uom_id} would you like?`, selectedProduct: product }]);
         setSuggestions(quantitySuggestions(availableLimit(product), conversationLanguage));
       }
     } finally {
-      setCheckingStock(false);
+      if (sessionId.current === stockSession) {
+        setCheckingStock(false);
+        loadingRef.current = false; setLoading(false);
+      }
     }
   }
 
   function rejectProduct(userText = conversationLanguage === "zh" ? "不是，我要看其他商品。" : "No, that’s not the item.") {
     if (!pendingProduct) return;
     const alternatives = lastProducts.filter((product) => product.stock_id !== pendingProduct.stock_id);
-    setPendingProduct(null); setPendingQuantity(null); setPendingQuote(null); setStage("clarify");
+    setPendingProduct(null); setPendingQuote(null); setStage("clarify");
     setLastProducts(alternatives);
     setMessages((current) => [...current,
       { id: nextId.current++, role: "user", text: userText },
       { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh"
-        ? alternatives.length > 0 ? "好的，以下是其他商品和价格。请选择较接近您需求的选项。" : "好的，请告诉我其他商品名称、品牌或细节，我会重新查询。"
-        : alternatives.length > 0 ? "No problem. Here are the other catalogue options and prices. Which one is closer?" : "No problem. Tell me another name, brand or detail and I’ll search again.", products: alternatives },
+        ? alternatives.length > 0 ? "没问题，这几款有更合适的吗？" : "没问题，您想换什么样的？"
+        : alternatives.length > 0 ? "No problem—would one of these suit you better?" : "No problem. What would you like to change?", products: alternatives },
     ]);
     setSuggestions(alternatives.length > 0 ? productOptionSuggestions(alternatives) : conversationLanguage === "zh" ? ["重新查询", "浏览商品"] : ["Search again", "Browse products"]);
   }
@@ -1689,6 +1660,8 @@ export function ChatDemo() {
     loadingRef.current = false;
     setQueuedMessages([]);
     orderLinesRef.current = [];
+    quotedProductsRef.current.clear();
+    additiveQuantityRef.current = false;
     shownProductIdsRef.current = new Set();
     pendingOrderRequestsRef.current = [];
     awaitingAdditionalProductRef.current = false;
@@ -1941,6 +1914,7 @@ export function ChatDemo() {
   }
 
   function handleSuggestion(item: string) {
+    if (loadingRef.current || checkingStock || exportingPdf) return;
     if (item === "Download enquiry PDF" || item === "下载询价 PDF") {
       void saveConversationAsPdf();
       return;
@@ -1984,25 +1958,41 @@ export function ChatDemo() {
       window.setTimeout(() => queryInputRef.current?.focus(), 0);
       return;
     }
-    void submit(item);
+    void submit(suggestionLabel(item));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); void submit(query); }
+
+  const confirmationMessageId = messages.findLast((message) => message.needsConfirmation)?.id;
+  const latestMessage = messages.at(-1);
+  const conversationStarted = messages.some(message => message.role === "user");
+  const activeSuggestions = suggestions.length || !latestMessage || latestMessage.needsConfirmation ? suggestions : withQuickReplies({
+    message: latestMessage.text, stage, products: latestMessage.products ?? [], selectedProduct: latestMessage.selectedProduct ?? null, suggestions: [],
+  }).suggestions;
+  const quickRepliesBusy = loading || checkingStock || exportingPdf || recordingVoice || transcribingVoice;
 
   return <div onPaste={handleImagePaste} className="conversation-export min-w-0 w-full max-w-[490px] rounded-[2.5rem] bg-[#112f29] p-2 shadow-[0_35px_90px_rgba(21,54,47,.24)] sm:rounded-[3.3rem] sm:p-3">
     <div className="chat-phone flex h-[70dvh] min-h-[540px] min-w-0 flex-col overflow-hidden rounded-[2rem] bg-[#f8f5ee] sm:rounded-[2.55rem] lg:h-[min(720px,calc(100dvh-3rem))] lg:min-h-[560px]">
       <header className="chat-screen-header flex min-w-0 items-center gap-2 bg-[#176853] px-3 py-4 text-white sm:gap-3 sm:px-5 sm:py-5"><div className="grid size-10 shrink-0 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f] sm:size-11">C</div><div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold sm:text-base">Claire · Sia Huat</h2><p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#efad3f]" /> demo assistant</p></div><div className="print-hide flex shrink-0 items-center gap-0.5 sm:gap-1"><Button aria-label="Download conversation PDF" title="Download conversation PDF" disabled={exportingPdf} variant="ghost" className="h-9 rounded-full px-2 text-white hover:bg-white/10 hover:text-white sm:px-2.5" onClick={() => void saveConversationAsPdf()}>{exportingPdf ? <LoaderCircle className="size-4 animate-spin" /> : <FileDown className="size-4" />}<span className="hidden text-[11px] font-semibold min-[350px]:inline">PDF</span></Button><Button aria-label="Reset conversation" size="icon" variant="ghost" className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button></div></header>
       <div className="chat-transcript chat-grid flex-1 space-y-4 overflow-y-auto p-3 sm:p-5">
-        {messages.map((message) => <div key={message.id} className={`chat-message min-w-0 overflow-hidden ${message.role === "user" ? "ml-auto max-w-[88%] rounded-2xl rounded-tr-sm bg-[#dff3e9] p-3 text-sm shadow-sm sm:max-w-[82%]" : "max-w-full rounded-2xl rounded-tl-sm bg-white p-3 text-sm shadow-sm sm:max-w-[94%] sm:p-4"}`}>
+        {messages.map((message) => <div key={message.id} className={`min-w-0 ${message.role === "user" ? "ml-auto max-w-[88%] sm:max-w-[82%]" : "max-w-full sm:max-w-[94%]"}`}>
+          <div className={`chat-message min-w-0 overflow-hidden rounded-2xl p-3 text-sm shadow-sm ${message.role === "user" ? "rounded-tr-sm bg-[#dff3e9]" : "rounded-tl-sm bg-white sm:p-4"}`}>
           {message.imageUrl && <Image src={message.imageUrl} alt="Uploaded product" width={320} height={220} unoptimized className="mb-3 max-h-48 w-full rounded-xl bg-white/60 object-contain" />}
           {message.voiceNote ? <VoiceNotePlayer note={message.voiceNote} /> : <WhatsAppText text={message.text} />}
           {message.products && message.products.length > 0 && <div className="mt-3 space-y-2 border-t border-[#15362f]/10 pt-3">{message.products.map((product, index) => <div key={product.stock_id} className="rounded-xl bg-[#f5f1e8] p-3"><button type="button" disabled={product.stock_status === "out_of_stock"} onClick={() => chooseProduct(product, String(index + 1))} className={`block w-full text-left ${product.stock_status === "out_of_stock" ? "cursor-not-allowed opacity-80" : ""}`}><p className="break-words font-semibold leading-5"><span className="mr-1 text-[#176853]">{index + 1}.</span>{product.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {product.stock_id}</p><div className="mt-1 flex flex-wrap items-center gap-2"><p className="text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(product.list_price).toFixed(2)} / {product.uom_id}</p><Badge className={`shrink-0 whitespace-nowrap ${product.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}`}>{productStockLabel(product, conversationLanguage)}</Badge></div></button>{product.source_url && <a href={product.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{product.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>)}<p className="pt-1 text-xs font-medium text-[#176853]">{productOptionPrompt(message.products, conversationLanguage)}</p></div>}
-          {message.selectedProduct && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
-           {message.needsConfirmation && pendingProduct?.stock_id === message.selectedProduct?.stock_id && <div className="mt-3 grid grid-cols-2 gap-2"><Button type="button" disabled={checkingStock} onClick={() => void confirmProduct()} className="rounded-full bg-[#176853] hover:bg-[#125441]">{checkingStock ? <LoaderCircle className="size-4 animate-spin" /> : conversationLanguage === "zh" ? "是的，就是这个" : "Yes, this is it"}</Button><Button type="button" disabled={checkingStock} onClick={() => rejectProduct()} variant="outline" className="rounded-full border-[#176853]/25 text-[#176853]">{conversationLanguage === "zh" ? "不是，查看其他" : "No, show others"}</Button></div>}
+          {message.selectedProduct && message.needsConfirmation && <div className="mt-3 rounded-xl bg-[#f5f1e8] p-3"><p className="break-words font-semibold">{message.selectedProduct.name}</p><p className="mt-2 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "商品代码" : "code"}: {message.selectedProduct.stock_id}</p><p className="mt-1 text-xs text-[#667a74]">{conversationLanguage === "zh" ? "价格" : "Price"}: ${Number(message.selectedProduct.list_price).toFixed(2)} / {message.selectedProduct.uom_id}</p>{message.selectedProduct.source_url && <a href={message.selectedProduct.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{message.selectedProduct.source_url} <ExternalLink className="size-3 shrink-0" /></a>}</div>}
           {message.time && <MessageTimestamp role={message.role} time={message.time} />}
+          </div>
+          {conversationStarted && message.role === "assistant" && message.id === latestMessage?.id && (message.needsConfirmation && message.id === confirmationMessageId && pendingProduct?.stock_id === message.selectedProduct?.stock_id
+            ? <QuickReplyButtons disabled={quickRepliesBusy} choices={[
+              { value: "confirm-product", label: conversationLanguage === "zh" ? "是的，就是这个" : "Yes, this is it" },
+              { value: "reject-product", label: conversationLanguage === "zh" ? "不是，查看其他" : "No, show others" },
+            ]} onChoose={value => value === "confirm-product" ? void confirmProduct() : void rejectProduct()} />
+            : <QuickReplyButtons disabled={quickRepliesBusy} choices={activeSuggestions.map(value => ({ value,
+              label: quickReplyLabel(value, message.products ?? [], stage === "quantity" ? (confirmedProduct ?? message.selectedProduct)?.uom_id : undefined, conversationLanguage === "zh"),
+            }))} onChoose={handleSuggestion} />)}
         </div>)}
         {loading && <div aria-label="Sia Huat is typing" aria-live="polite" className="flex w-fit items-center gap-1.5 rounded-2xl bg-white px-4 py-3 shadow-sm"><i className="typing-dot" /><i className="typing-dot" /><i className="typing-dot" /></div>}
-        {!loading && suggestions.length > 0 && <div className="chat-suggestions flex flex-wrap gap-2">{suggestions.map((item) => <button key={item} onClick={() => handleSuggestion(item)} className="rounded-full border border-[#176853]/20 bg-white/90 px-3 py-2 text-xs font-medium text-[#176853] hover:bg-white">{item}</button>)}</div>}
         <div ref={conversationEnd} />
       </div>
       <div className="chat-composer border-t border-[#15362f]/10 bg-white p-3">

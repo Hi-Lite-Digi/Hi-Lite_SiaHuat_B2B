@@ -13,6 +13,7 @@ import {
   isExactStockQuestion,
   isExistingPotStrainerRequest,
   isTradePriceQuestion,
+  normalizeCommonProductTypos,
   productCategories,
   productCategory,
   productWords,
@@ -25,14 +26,14 @@ import {
   type FastReply,
 } from "@/lib/chat-intent";
 import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
-import { requestedDisplayedProductIndex, requestedQuantity } from "@/lib/chat-turn";
+import { declinesUnavailableItem, requestedDisplayedProductIndex, requestedQuantity } from "@/lib/chat-turn";
 
 export { isCatalogueRequest } from "@/lib/chat-intent";
 
 export function getFastChatReply(input: FastChatInput): FastReply | null {
-  const message = input.message.trim();
+  const message = normalizeCommonProductTypos(input.message.trim());
   const simple = simplifyMessage(message);
-  const userHistory = input.history.filter((item) => item.role === "user").map((item) => item.content);
+  const userHistory = input.history.filter((item) => item.role === "user").map((item) => normalizeCommonProductTypos(item.content));
   const hasAssistantClarificationContext = catalogueHistoryWithClarification(message, input.history).length > userHistory.length;
   const hasProductContext = Boolean(input.context?.activeProduct)
     || userHistory.slice(-6).some((content) => productWords.test(content));
@@ -45,6 +46,11 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const hasExplicitCategoryCorrection = rejectsCurrentProductReference(message)
     || /\b(?:not|wrong|instead|rather\s+than|meant|switch|change|replace|but)\b/i.test(message);
   const currentCategory = positivelyRequestedCategory ?? rawCurrentCategory;
+  if (!input.image && currentCategory === "tableware" && /\bplates?\b/.test(simple) && !hasProductContext
+    && !input.context?.displayedProducts?.length
+    && !/\b(?:dinner|dessert|side|soup|pasta|brunch|mains?|cakes?|serving|pizza|sushi|round|square|oval|black|white|blue|red|green|porcelain|ceramic|melamine|stoneware|disposable|reusable|cm|mm|inch|inches)\b|\d+[ ]*(?:cm|mm|inch)|\b[A-Z0-9]+-[A-Z0-9]+\b/i.test(simple)) {
+    return reply("What will you mainly serve on them—main courses, desserts, or small bites?", ["Main courses", "Desserts", "Small bites"]);
+  }
   const correctsPreviousCategory = /\b(?:i\s+)?(?:was\s+)?thinking\s+(?:more\s+)?of\b|\b(?:i\s+)?meant\b|\bmore\s+like\b/i.test(message);
   let currentCategories = productCategories.filter((category) => category.pattern.test(message)).map((category) => category.label);
   const requestsStrainerForPot = currentCategory === "strainer"
@@ -107,7 +113,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   const requestsHuman =
     /\b(get|bring|find|send|give|connect|transfer|alert|call)\b.{0,30}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
     || /\b(speak|talk|chat)\b.{0,20}\b(to|with)\b.{0,12}\b(human|humand|humen|person|agent|representative|staff|team member|colleague)\b/i.test(message)
-    || /\b(real person|human agent|customer service)\b/i.test(message);
+    || /\b(real person|human agent|customer service)\b/i.test(message)
+    || /\b(?:speak|talk)\s+(?:to|with)\s+someone\b/i.test(message);
   const asksOperationalFollowup = /\b(?:quote|qoute|quotation|invoice|email|e-mail|payment|bank\s+transfer|payment\s+advice|delivery|order)\b/i.test(message)
     && /\b(?:status|update|check|chk|chek|follow\s*up|not\s+(?:received|arrived|here)|no\s+(?:email|reply)|has\s+not|hasn['’]?t|haven['’]?t|still\s+waiting|when\s+will|when\s+is|approved|arranged|overdue|pending|where\s+is)\b/i.test(message);
   const displayedProducts = input.context?.displayedProducts ?? [];
@@ -328,7 +335,10 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (requestsHuman && !asksAboutIdentity) {
-    return reply("I can’t connect you to a person from this demo. I’ve kept the enquiry details in this conversation; use the PDF button and contact Sia Huat sales directly.", ["Continue product enquiry"]);
+    return reply("I can’t connect you to a person here. Use the PDF button to save this conversation and share it with Sia Huat sales directly.", ["Prepare sales summary"]);
+  }
+  if (humanHandoffContext && /^(?:ok|okay|sure|yes|alright)[.!\s]*$/i.test(message)) {
+    return reply("Use the PDF button at the top of the chat to save the details and share them with sales. No one has been contacted automatically.", ["Prepare sales summary"]);
   }
 
   if (asksOperationalFollowup) {
@@ -444,11 +454,14 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   );
 
   if (asksClaireForProductPhoto) {
+    const missingListingPhoto = /\b(?:listing|website|link)\b/i.test(message) && /\b(?:no|not|doesn['’]?t|missing|without)\b/i.test(message);
     return reply(
-      activeTask
-        ? `I can’t send product photos directly in this chat yet. The product cards include a Sia Huat listing link with the official photos. I still have ${activeTask}; choose an option and open its link.`
-        : "I can’t send product photos directly in this chat yet. The product cards include a Sia Huat listing link with the official photos. Tell me the item first and I’ll find the right listings.",
-      activeTask ? ["Show the options again", "Add a brand"] : ["Enter product name", "Add a brand"],
+      missingListingPhoto
+        ? "Thanks for checking. If the listing has no photo either, I can't verify its appearance. You can ask sales for a photo before choosing, or we can look for another option."
+        : displayedProducts.length || input.context?.activeProduct
+          ? "This chat shows product details and links. You can check the product's website link for a photo, if one is available."
+          : "I can help you find a product's website link to check for a photo. Which item are you looking for?",
+      activeTask ? ["Show the options again"] : [],
     );
   }
 
@@ -459,7 +472,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  if (/^(cancel|cancel this|cancel enquiry|stop|never mind|nevermind|forget it)$/.test(simple)) {
+  if (/^(cancel|cancel this|cancel enquiry|stop|never mind|nevermind|forget it)$/.test(simple)
+    || declinesUnavailableItem(message.replace(/^ok(?:ay)?\s+/i, "")) && !/^(?:thanks?|thank you|thx)$/i.test(simple)) {
     return reply(
       activeTask
         ? `Okay, I’ve cancelled the ${activeTask.replace(/^your /, "")} enquiry. What else can I help you find?`
@@ -607,7 +621,9 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     { pattern: /\b(jewellery|jewelry|necklaces?|earrings?|bracelets?)\b/, label: "jewellery" },
     { pattern: /\b(cigarettes?|tobacco|vapes?|e-?cigarettes?)\b/, label: "tobacco or vaping products" },
     { pattern: /\b(?:mango(?:es)?|oranges?|apples?|fresh\s+fruit|fresh\s+produce)\b/, label: "fresh fruit or produce" },
-  ].filter((family) => family.pattern.test(simple));
+  ].filter((family) => family.pattern.test(simple)
+    || family.label === "fresh fruit or produce" && /^(?:fresh|frozen|fresh ones?|frozen ones?)[.!\s]*$/i.test(simple)
+      && family.pattern.test(userHistory.at(-1)?.toLowerCase() ?? ""));
 
   if (unsupportedProductFamilies.length > 0) {
     const requested = [...new Set(unsupportedProductFamilies.map((family) => family.label))].join(" or ");
@@ -884,6 +900,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (/\b(switch|change|replace|instead|only)\b/.test(simple) && currentCategory) {
+    if (currentCategory === lastCategory) return null;
     const includesSearchDetail = /\b(?:chef|cleaver|boning|paring|frying|non[ -]?stick|sauce|black|white|red|blue|green|silver|round|square|oval|dinner|serving)\b/i.test(message)
       || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(message);
     if (includesSearchDetail) return null;
@@ -900,7 +917,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (currentCategory && lastCategory && currentCategory !== lastCategory
-    && (/\bnever ?mind\b/.test(simple) || correctsPreviousCategory)) {
+    && (/\b(?:actually|never ?mind)\b/.test(simple) || correctsPreviousCategory)) {
     // Explicit corrections such as "I was thinking more of spoons and forks"
     // replace the prior category. Let the grounded catalogue route answer
     // instead of asking the customer to confirm the switch they already made.
@@ -923,7 +940,7 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
     );
   }
 
-  if (/^(hey )?(i (need|want|am looking for) |do you have |show me |find me |looking for |got )?(a |some )?(knife|knives)$/.test(simple)) {
+  if (/^(?:(?:hi|hello|hey) )?(i (need|want|am looking for) |do you have |show me |find me |looking for |got )?(a |some )?(knife|knives)$/.test(simple)) {
     return reply(
       "Sure—what kind of knife do you need? For example: chef’s knife, cleaver, bread knife, or paring knife.",
       ["Chef’s knife", "Cleaver", "Bread knife", "Paring knife"],
@@ -1056,6 +1073,11 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   if (!currentCategory && !isCatalogueRequest(message)
     && /\b(a few things|few things|need your help|need some help|can you help me)\b/.test(simple)) {
     return reply("Of course—tell me the first thing you need help with, and we’ll take it one step at a time.", ["Search for a product", "Get a quote"]);
+  }
+
+  if (lastCategory === "knife" && /\b(?:cut|cutting|prepare|preparing)\s+fish\b/i.test(message)
+    && !/\b(?:sashimi|fillet|boning)\b/i.test(message)) {
+    return reply("Will you mainly be filleting whole fish, or making thin sashimi slices?", ["Filleting fish", "Sashimi slicing"]);
   }
 
   if (hasProductContext && /^(?:asdf|qwer|zxcv)[a-z0-9]*$/i.test(message)) {
