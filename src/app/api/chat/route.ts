@@ -14,7 +14,7 @@ import {
   searchCatalogue,
 } from "@/lib/catalogue";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
-import { ladleCapacityMatchQuality, requestedLadleCapacitiesOz } from "@/lib/catalogue-query";
+import { ladleCapacityMatchQuality, matchesShakerRequest, requestedLadleCapacitiesOz } from "@/lib/catalogue-query";
 import { getFastChatReply, isCatalogueRequest } from "@/lib/fast-chat";
 import { honestManualHandoff } from "@/lib/honest-handoff";
 import {
@@ -505,6 +505,7 @@ function hasImageIndependentBuyingSpecification(message: string) {
 }
 
 function matchesExplicitProductCategory(message: string, product: Product) {
+  if (!matchesShakerRequest(message, product.name)) return false;
   const productName = product.name;
   const productText = [product.name, product.description, product.size, product.dimensions, product.category, product.subcategory, product.third_category]
     .filter(Boolean)

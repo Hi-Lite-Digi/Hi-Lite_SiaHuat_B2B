@@ -4,10 +4,21 @@ import {
   catalogueLookupOverride,
   foodPanDepthConstraintMatches,
   hasPlasticLikeHandle,
+  matchesShakerRequest,
   ladleCapacityMatchQuality,
   normalizeFoodPanCatalogueQuery,
   requestedLadleCapacitiesOz,
 } from "./catalogue-query";
+
+test("Boston shaker results must match the requested family and style", () => {
+  const query = "i want to look at boston shakers";
+  assert.equal(matchesShakerRequest(query, "S/S BOSTON SHAKER 750ml"), true);
+  assert.equal(matchesShakerRequest(query, "COOK KNIFE"), false);
+  assert.equal(matchesShakerRequest(query, "COBBLER COCKTAIL SHAKER"), false);
+  assert.equal(matchesShakerRequest(query, "BOSTON SALT SHAKER"), false);
+  assert.equal(matchesShakerRequest("cocktail shaker", "SALT SHAKER"), false);
+  assert.equal(matchesShakerRequest("knife", "COOK KNIFE"), true);
+});
 
 test("preserves GN food-pan fractions, depth and slotted-lid identity", () => {
   assert.equal(

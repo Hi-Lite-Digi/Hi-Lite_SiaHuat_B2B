@@ -5,6 +5,17 @@ function centimetres(value: string, unit: string) {
   return numeric;
 }
 
+/** Do not substitute knives, condiment shakers or other shaker styles for Boston shakers. */
+export function matchesShakerRequest(requested: string, candidate: string) {
+  if (!/\bshakers?\b/i.test(requested)) return true;
+  if (!/\bshakers?\b/i.test(candidate)) return false;
+  const style = requested.match(/\b(boston|cobbler|french|salt|pepper|sugar)\b/i)?.[1];
+  if (style && !new RegExp(`\\b${style}\\b`, "i").test(candidate)) return false;
+  if (/\b(?:boston|cocktail|cobbler|french)\b/i.test(requested)
+    && /\b(?:salt|pepper|sugar)\b/i.test(candidate)) return false;
+  return true;
+}
+
 /** Keep GN pan/lid identity and fit details out of the generic frying-pan query path. */
 export function normalizeFoodPanCatalogueQuery(message: string) {
   const fraction = message.match(/\b1\s*\/\s*(?:2|4)\b/)?.[0]?.replace(/\s+/g, "") ?? "";

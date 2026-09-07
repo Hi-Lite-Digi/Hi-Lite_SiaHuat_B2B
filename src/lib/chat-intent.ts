@@ -23,7 +23,7 @@ export type FastReply = {
   suggestions: string[];
 };
 
-export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|box|boxes|bin|bins|cambox|storage|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|toaser|toasers|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|dispencer|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
+export const productWords = /\b(knife|knives|chef|damascus|sharpener|sharpeners|sharpening|whetstone|honing|cutlery|utensil|utensils|spatula|spatulas|turner|turners|whisk|whisks|peeler|peelers|tong|tongs|fork|forks|spoon|spoons|scoop|scoops|strainer|strainers|skimmer|skimmers|colander|colanders|box|boxes|bin|bins|cambox|storage|plate|plates|bowl|bowls|glass|glasses|glassware|shot|shots|cup|cups|mug|mugs|pan|pans|wok|woks|lid|lids|cover|covers|pot|pots|stockpot|stockpots|cookware|tableware|dinnerware|dining|barware|shaker|shakers|buffet|catering|kitchen|serving|rice|tray|trays|trolley|trolleys|blender|blenders|toaster|toasters|toaser|toasers|ladder|ladders|stool|stools|cartridge|cartridges|gas|sponge|sponges|towel|towels|glove|gloves|coffee|bean|beans|grinder|grinders|tea|shoe|shoes|shows|footwear|pants|trousers|uniform|apparel|dispenser|dispencer|urn|boiler|airpot|sku|product|products|item|items|brand|price|cost|stock|available|availability|quantity|qty|quote|quotation|order|buy|cart)\b/i;
 export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
 
 /**
@@ -124,6 +124,7 @@ export function extractPotFitMeasurements(message: string): PotFitMeasurements {
 }
 
 export const productCategories = [
+  { pattern: /\bshakers?\b/i, label: "shaker" },
   { pattern: /\b(?:knife\s+)?(?:sharpeners?|sharpening\s+(?:stone|steel)|whetstone|honing\s+steel)\b/i, label: "knife sharpener" },
   { pattern: /\b(knife|knives|cleaver|boning knife|paring knife)\b|砍骨刀|菜刀|刀/iu, label: "knife" },
   { pattern: /\bserving\s+spoons?\b/i, label: "serving spoon" },
@@ -431,6 +432,11 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     ? [message]
     : [...userHistory, message];
   const joinedMessages = customerMessages.join(" ");
+
+  if (activeCategory === "shaker") {
+    const source = [...customerMessages].reverse().find((content) => /\bshakers?\b/i.test(content)) ?? message;
+    return (currentCategory ? message : `${source} ${message}`).replace(/\bshakers\b/gi, "shaker");
+  }
 
   if (activeCategory === "knife sharpener") {
     const kind = /\b(?:whetstone|sharpening\s+stone)\b/i.test(joinedMessages)

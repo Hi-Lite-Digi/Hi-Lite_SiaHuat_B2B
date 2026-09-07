@@ -6,6 +6,7 @@ import {
   catalogueLookupOverride,
   foodPanDepthConstraintMatches,
   hasPlasticLikeHandle,
+  matchesShakerRequest,
   normalizeFoodPanCatalogueQuery,
 } from "@/lib/catalogue-query";
 
@@ -175,6 +176,7 @@ function matchesExplicitConstraints(query: string, product: Product) {
   const requested = query.toLowerCase();
   const candidate = searchableProductText(product).toLowerCase();
   const productName = product.name.toLowerCase();
+  if (!matchesShakerRequest(query, product.name)) return false;
   const excludedBrand = requested.match(/\bexcluding\s+brand\s+([a-z0-9&' -]+)$/i)?.[1]?.trim();
   if (excludedBrand) {
     const excluded = looseToken(excludedBrand);

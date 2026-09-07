@@ -35,6 +35,19 @@ const torchBurner = {
   available_quantity: 426,
 };
 
+test("switches from the PDF's knife enquiry to Boston shakers", () => {
+  const message = "i want to look at boston shakers";
+  const history = ["Hi i want a kanch knife"];
+  assert.equal(requestedProductCategory(message), "shaker");
+  assert.equal(catalogueMessageWithContext(message, history), "i want to look at boston shaker");
+  const followup = catalogueMessageWithContext("show more", [...history, message]);
+  assert.match(followup, /boston shaker/);
+  assert.doesNotMatch(followup, /knife/);
+  assert.equal(catalogueMessageWithContext("i want a knife", [...history, message]), "knife");
+  assert.equal(productCategory("S/S BOSTON SHAKER 750ml"), "shaker");
+  assert.equal(productCategory("cocktail shakers"), "shaker");
+});
+
 test("turns imperfect cooked-noodle wording into a food-strainer search", () => {
   assert.equal(isAmbiguousNoodleDryingRequest("i need to dry noodles"), true);
   assert.equal(isCookedNoodleDrainingIntent("i cook my maggie then need to throw the water"), true);
