@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { recognizedPhotoReply } from "./image-recognition";
-import type { ChatReply, ChatRequest } from "./chat-contract";
+import type { ImageInspection } from "./image-recognition";
+import type { ChatRequest } from "./chat-contract";
 
 const input: ChatRequest = { sessionId: "photo-recognition", message: "you have this ?", history: [] };
-const vision = (message: string): ChatReply => ({ message, products: [], selectedProduct: null, stage: "clarify", suggestions: [] });
+const vision = (message: string, imageCategory: string | null = "knife"): ImageInspection => ({ message, imageCategory, products: [], selectedProduct: null, stage: "clarify", suggestions: [] });
 
 test("a recognised knife survives a missing exact match without inventing a purchasable item", () => {
-  const reply = recognizedPhotoReply(input, vision("IMAGE_KIND=PRODUCT\nThe image shows a chef's knife with a wide blade and black handle. The brand name is unreadable."), "product-like");
+  const reply = recognizedPhotoReply(input, vision("IMAGE_KIND=PRODUCT\nThe brand is unreadable, but this is a chef's knife with a wide blade and black handle."), "product-like");
   assert.ok(reply);
   assert.match(reply.message, /see a knife/);
   assert.match(reply.message, /couldn't confirm the exact model/);
@@ -23,7 +24,8 @@ test("unreadable images, comparisons, negative guesses and caption-only categori
     "IMAGE_KIND=PRODUCT\nI can't identify the object. It might be a knife.",
     "IMAGE_KIND=PRODUCT\nThis is not a knife", "IMAGE_KIND=PRODUCT\nIt could be a knife",
     "IMAGE_KIND=PRODUCT\nA dark rectangle. You asked about a knife.",
-  ]) assert.equal(recognizedPhotoReply({ ...input, message: "I want a knife" }, vision(message), "product-like"), null, message);
+  ]) assert.equal(recognizedPhotoReply({ ...input, message: "I want a knife" }, vision(message, null), "product-like"), null, message);
+  assert.equal(recognizedPhotoReply(input, vision("IMAGE_KIND=PRODUCT\nA dark object", "possibly a knife"), "product-like"), null);
   for (const raster of ["flat-graphic", "document-like", "unknown"] as const) {
     assert.equal(recognizedPhotoReply(input, vision("IMAGE_KIND=PRODUCT\nA knife"), raster), null);
   }

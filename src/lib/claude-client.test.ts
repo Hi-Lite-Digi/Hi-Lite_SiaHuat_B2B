@@ -88,10 +88,13 @@ test("vision sends pixels without trusting a SKU-like filename", async t => {
     const body = JSON.parse(String(options.body));
     assert.doesNotMatch(String(options.body), /FAKE-SKU/);
     assert.equal(body.messages.at(-1).content[0].source.media_type, "image/png");
-    return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ message: "IMAGE_KIND=PRODUCT\nA round plate", productIds: [], suggestions: [] }) }] });
+    assert.equal(body.messages.length, 1);
+    assert.ok(body.output_config.format.schema.required.includes("imageCategory"));
+    return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ message: "IMAGE_KIND=PRODUCT\nA round plate with an unreadable brand", imageCategory: "plate", productIds: [], suggestions: [] }) }] });
   });
-  const reply = await inspectImageWithClaude({ ...input, image: { name: "FAKE-SKU.png", mimeType: "image/png", dataUrl: "data:image/png;base64,aGVsbG8=" } });
+  const reply = await inspectImageWithClaude({ ...input, history: [{role:"user",content:"The previous item was a knife"}], image: { name: "FAKE-SKU.png", mimeType: "image/png", dataUrl: "data:image/png;base64,aGVsbG8=" } });
   assert.deepEqual(reply.products, []);
+  assert.equal(reply.imageCategory, "plate");
 });
 
 test("provider failures do not expose error bodies or silently use another provider", async t => {

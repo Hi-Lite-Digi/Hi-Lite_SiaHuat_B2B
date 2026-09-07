@@ -2587,6 +2587,11 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   // Preserve the identified family while the exact catalogue match is checked,
   // including if that lookup runs into the customer response deadline.
   if (recognizedFallback) rememberGrounded(recognizedFallback);
+  if (input.image && visionReply) console.info("[api/chat] image classification", {
+    raster: await rasterKindPromise,
+    kind: visionImageKind(visionReply.message),
+    recognizedType: Boolean(recognizedFallback),
+  });
 
   let groundedImageReply = input.image && visionReply
     ? await groundImageNarrativeReply(visionReply, catalogueMessage).catch((error) => {
