@@ -93,6 +93,24 @@ test("retains quantity when common need or plate words are misspelled", () => {
   assert.equal(requestedQuantity("2 blak dinnr pltes"), 2);
 });
 
+test("keeps monetary budgets separate from purchase quantities", () => {
+  const requests = [
+    "I need 2 chef knives for daily restaurant prep. Something under $40 each, with an easy-clean handle. What would you suggest?",
+    "2 chef knives under SGD 40 each",
+    "I need 2 knives at 40 dollars each",
+    "I need 2 knives, budget is 40 each",
+    "I need 2 knives under 40 per piece",
+    "I need 2 knives below 40 each",
+    "Under $40 each, I need 2 chef knives",
+    "I need two chef knives under $40 each",
+  ];
+  for (const message of requests) assert.equal(requestedQuantity(message), 2, message);
+  assert.equal(requestedQuantity("chef knives under $40 each"), null);
+  assert.equal(requestedQuantity("knife at SGD 40 per piece"), null);
+  assert.equal(requestedQuantity("2 each"), 2);
+  assert.equal(requestedQuantity("I need 2 knives, actually make it 3 under $40 each"), 3);
+});
+
 test("recognises human quantities after a product name and before each", () => {
   assert.equal(requestedQuantity("got oyster knife plastic handle? need three"), 3);
   assert.equal(requestedQuantity("three"), 3);

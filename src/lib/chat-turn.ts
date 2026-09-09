@@ -452,6 +452,14 @@ function collectQuantityCandidates(message: string, pattern: RegExp, group = 1) 
 
 export function parseRequestedQuantity(message: string): QuantityParseResult {
   message = normalizeCommonProductTypos(message);
+  // Prices often end in "each", which is also a quantity cue ("2 each").
+  // Remove explicitly monetary amounts before looking for purchase quantities
+  // so a later budget cannot overwrite the customer's actual item count.
+  message = message
+    .replace(/(?:\b(?:SGD|USD|S\$|US\$)|[$€£])\s*\d+(?:[,.]\d+)*/gi, " ")
+    .replace(/\b\d+(?:[,.]\d+)*\s*(?:SGD|USD|dollars?|euros?|pounds?)(?!\w)/gi, " ")
+    .replace(/\bbudget(?:\s+(?:is|of|around|under|below|up\s+to))?\s*[:=]?\s*\d+(?:[,.]\d+)*/gi, " ")
+    .replace(/\b(?:under|below|less\s+than|up\s+to|at\s+most)\s+\d+(?:[,.]\d+)*\s*(?=(?:each|ea|per\s+(?:piece|pc|unit|item))\b)/gi, " ");
   const candidates = [
     ...collectQuantityCandidates(message, /\badd\s*(-?\d+(?:\.\d+)?)(?![\w.-])/gi),
     ...collectQuantityCandidates(message, /(?<![\w.])(-?\d+(?:\.\d+)?)\s+more\b/gi),
