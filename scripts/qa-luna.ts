@@ -7,7 +7,7 @@ const records: unknown[] = [];
 
 async function conversation(name: string, messages: string[]) {
   const history: HistoryItem[] = [];
-  const sessionId = `claude-qa-${name}-${Date.now()}`;
+  const sessionId = `luna-qa-${name}-${Date.now()}`;
   for (const message of messages) {
     const started = performance.now();
     const response = await fetch(`${baseUrl}/api/chat`, {
@@ -19,8 +19,8 @@ async function conversation(name: string, messages: string[]) {
     assert.equal(response.status, 200, JSON.stringify(body));
     const reply = chatReplySchema.parse(body);
     const provider = response.headers.get("x-chat-provider");
-    records.push({ name, message, provider, elapsedMs: Math.round(performance.now() - started), reply });
-    assert.equal(provider, "anthropic", "Acceptance must exercise Claude, not the fallback");
+    records.push({ name, message, provider, usage: response.headers.get("x-ai-usage"), elapsedMs: Math.round(performance.now() - started), reply });
+    assert.equal(provider, "openai", "Acceptance must exercise Luna, not the fallback");
     assert.ok((reply.message.match(/[?？]/g) ?? []).length <= 1, reply.message);
     assert.doesNotMatch(reply.message, /No sourcing request has been sent|current online catalogue|I won.t show an accessory/i);
     if (name === "chinese") assert.match(reply.message, /[\u4e00-\u9fff]/u);
@@ -39,7 +39,7 @@ async function main() {
     await conversation("knife", ["I need a 20cm chef knife, 2 pieces."]);
   } finally {
     await mkdir("tmp/qa-reports", { recursive: true });
-    await writeFile("tmp/qa-reports/claude-migration.json", JSON.stringify(records, null, 2));
+    await writeFile("tmp/qa-reports/luna-migration.json", JSON.stringify(records, null, 2));
   }
 }
 

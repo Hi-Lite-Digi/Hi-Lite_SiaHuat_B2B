@@ -5,7 +5,7 @@ import { requestedQuantity } from "../src/lib/chat-turn";
 import { replyStyleIssues } from "../src/lib/reply-style";
 
 const baseUrl = process.env.QA_BASE_URL || "http://localhost:3017";
-const records: Array<{ story: string; message: string; provider: string | null; elapsedMs: number; reply: ChatReply }> = [];
+const records: Array<{ story: string; message: string; provider: string | null; usage: string | null; elapsedMs: number; reply: ChatReply }> = [];
 const stories = [
   { name: "plates", turns: ["Hi, I'm opening a cafe and have no idea what plates to get.", "30 black dinner plates, 10 inch round and reusable.", "No, 10 inches is essential. Please don't show me smaller plates."] },
   { name: "wine", turns: ["I need 3 wine glasses for a small wine bar.", "Which of those is cheapest?"] },
@@ -34,8 +34,8 @@ async function storyTest(story: typeof stories[number]) {
     assert.equal(response.status, 200, JSON.stringify(body));
     const reply: ChatReply = chatReplySchema.parse(body);
     const provider = response.headers.get("x-chat-provider");
-    records.push({ story: story.name, message, provider, elapsedMs: Math.round(performance.now() - start), reply });
-    assert.equal(provider, "anthropic", "The live acceptance test must use Claude.");
+    records.push({ story: story.name, message, provider, usage: response.headers.get("x-ai-usage"), elapsedMs: Math.round(performance.now() - start), reply });
+    assert.equal(provider, "openai", "The live acceptance test must use Luna.");
     assert.deepEqual(replyStyleIssues(reply), [], reply.message);
     assert.ok(reply.suggestions.length <= 3);
     if (story.name === "chinese") assert.match(reply.message, /\p{Script=Han}/u);
@@ -70,7 +70,7 @@ async function main() {
     }
   } finally {
     await mkdir("tmp/qa-reports", { recursive: true });
-    await writeFile("tmp/qa-reports/response-quality.json", JSON.stringify(records, null, 2));
+    await writeFile("tmp/qa-reports/response-quality-luna.json", JSON.stringify(records, null, 2));
   }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

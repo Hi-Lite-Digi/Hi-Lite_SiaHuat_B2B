@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { asksForRecommendation } from "./chat-turn";
 import {
   catalogueMessageWithContext,
   explicitKnifeBrand,
@@ -12,6 +13,16 @@ import {
   productCategory,
   requestedProductCategory,
 } from "./chat-intent";
+
+test("hand-mixer shopping and help-me-choose retain the powered home-use family", () => {
+  const request = "I need an electric hand mixer for home baking, 2 pieces.";
+  assert.equal(catalogueMessageWithContext(request, []), "home electric whisk");
+  assert.equal(catalogueMessageWithContext("Help me choose", [request]), "home electric whisk");
+  assert.equal(asksForRecommendation("Help me choose"), true);
+  assert.equal(asksForRecommendation("帮我选择"), true);
+  assert.equal(asksForRecommendation("Don't choose for me"), false);
+  assert.match(catalogueMessageWithContext("I need a Kenwood HMP30.A0-WH hand mixer", []), /HMP30\.A0-WH/);
+});
 import { requestedQuantity } from "./chat-turn";
 import { getFastChatReply } from "./fast-chat";
 

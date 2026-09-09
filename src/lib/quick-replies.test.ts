@@ -6,6 +6,17 @@ import type { ChatReply } from "./chat-contract";
 
 const empty: ChatReply = { message: "", stage: "clarify", products: [], selectedProduct: null, suggestions: [] };
 
+test("photo clarification does not offer buttons that merely repeat an input instruction", () => {
+  const reply = withQuickReplies({ ...empty, message: "What is the item called?", suggestions: ["Tell me the item name", "Send a clearer photo", "Choose another item"] });
+  assert.deepEqual(reply.suggestions, ["Choose another item"]);
+});
+
+test("a selected-product confirmation always includes a working affirmative action", () => {
+  const product = { stock_id: "G100", name: "Cutlery Gold, 100", status: "Active", list_price: 200, uom_id: "SET" };
+  const reply = withQuickReplies({ ...empty, message: "Just to confirm, do you want this cutlery set?", selectedProduct: product, products: [product], suggestions: ["I want a different set"] });
+  assert.deepEqual(reply.suggestions, ["Yes, this is it", "Choose another item"]);
+});
+
 test("the pizza-cutter screenshot's summary offer always has a working action", () => {
   const reply = withQuickReplies({ ...empty, message: "I couldn't find a pizza cutter. Want me to put your requirements together as a summary you can share with sales?" });
   assert.deepEqual(reply.suggestions, ["Prepare sales summary", "Choose another item"]);

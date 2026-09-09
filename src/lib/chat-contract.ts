@@ -58,8 +58,8 @@ export const chatRequestSchema = z.object({
   history: z.array(historyItemSchema).max(30).default([]),
   context: conversationContextSchema,
   image: imageAttachmentSchema.optional(),
-  // Legacy n8n requests remain accepted; both values now use Claude.
-  brain: z.enum(["claude", "n8n"]).optional(),
+  // Older clients remain accepted; every value now uses the server's Luna model.
+  brain: z.enum(["luna", "claude", "n8n"]).optional(),
 });
 
 export const chatReplySchema = z.object({

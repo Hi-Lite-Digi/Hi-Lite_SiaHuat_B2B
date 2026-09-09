@@ -73,7 +73,7 @@ async function run(name: string, turns: string[]) {
       const reply = chatReplySchema.parse(await response.json());
       const issues = checkReply(name, message, reply);
       failures += issues.length;
-      const record = { story: name, input: message, status: response.status, provider: response.headers.get("x-chat-provider"), elapsedMs: Math.round(performance.now() - start), issues, reply };
+      const record = { story: name, input: message, status: response.status, provider: response.headers.get("x-chat-provider"), usage: response.headers.get("x-ai-usage"), elapsedMs: Math.round(performance.now() - start), issues, reply };
       records.push(record);
       console.log(JSON.stringify({ ...record, reply: { ...reply, products: reply.products.map(p => ({ code: p.stock_id, name: p.name })), selectedProduct: reply.selectedProduct?.stock_id } }));
       history.push({ role: "user", content: message }, { role: "assistant", content: reply.message });

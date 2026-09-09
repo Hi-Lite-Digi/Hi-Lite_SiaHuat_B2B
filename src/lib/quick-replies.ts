@@ -21,14 +21,18 @@ export function isGroundedAnswer(answer: string, message: string) {
   return details.length > 0 && details.every(word => questionWords.has(word));
 }
 
-/** Keep actions tied to the final question, including when Claude omits buttons. */
+/** Keep actions tied to the final question, including when the model omits buttons. */
 export function withQuickReplies<T extends Reply>(reply: T, answers: string[] = [], fallback: string[] = []): T {
   const zh = /[\u3400-\u9fff]/.test(reply.message);
   const question = reply.message.match(/[^.!?。！？\n]*[?？]/g)?.at(-1) ?? "";
-  let choices = reply.suggestions;
+  const usableAction = (value: string) => !/^(?:tell me|type (?:the|both|your)|enter (?:the|your)|send a clearer)/i.test(value);
+  let choices = reply.suggestions.filter(usableAction);
   const refersToSummaryOffer = /^\s*(?:want me to|would you like me to|shall i|can i)\s+(?:do that|go ahead|prepare (?:it|that)|put that together)[?\s]*$/i.test(question)
     && /\b(?:summary|requirements|pdf)\b/i.test(reply.message) && /\b(?:sales|share)\b/i.test(reply.message);
-  if (/\b(?:summary|requirements|pdf)\b/i.test(question) && /\b(?:sales|share|prepare|put|send)\b/i.test(question)
+  if (reply.selectedProduct && reply.stage === "clarify"
+    && /^\s*(?:(?:just\s+)?to confirm[,—–-]?\s*)?(?:would|could|can|do|does|is|are|shall|want|will)\b/i.test(question)) {
+    choices = zh ? ["是的，就是这款", "选择其他商品"] : ["Yes, this is it", "Choose another item"];
+  } else if (/\b(?:summary|requirements|pdf)\b/i.test(question) && /\b(?:sales|share|prepare|put|send)\b/i.test(question)
     || /(?:摘要|需求|PDF).*(?:销售|准备|整理)|(?:准备|整理).*(?:摘要|需求)/i.test(question) || refersToSummaryOffer) {
     choices = zh ? ["准备询价摘要", "选择其他商品"] : ["Prepare sales summary", "Choose another item"];
   } else if (/\b(?:smaller|larger|different)\s+(?:size|plate|diameter)|\bsize\b.*\b(?:flexible|change)\b/i.test(question)) {
@@ -37,7 +41,7 @@ export function withQuickReplies<T extends Reply>(reply: T, answers: string[] = 
   } else {
     const grounded = answers.filter(answer => isGroundedAnswer(answer, reply.message));
     if (grounded.length) choices = grounded;
-    if (!choices.length) choices = fallback.filter(value => !/^\d+$/.test(value) || Boolean(reply.selectedProduct));
+    if (!choices.length) choices = fallback.filter(value => usableAction(value) && (!/^\d+$/.test(value) || Boolean(reply.selectedProduct)));
     if (!choices.length && reply.products.length) {
       choices = reply.products.flatMap((product, index) => product.stock_status === "out_of_stock" ? [] : [String(index + 1)]);
     }

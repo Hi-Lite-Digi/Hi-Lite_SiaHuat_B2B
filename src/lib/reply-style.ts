@@ -8,7 +8,7 @@ export function replyStyleIssues(reply: Pick<ChatReply, "message" | "products" |
   if (/\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:size|smaller|larger)\b[^?？]{0,70}\b(?:colou?r|material)\b[^?？]*[?？]|\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:colou?r|material)\b[^?？]{0,70}\b(?:size|smaller|larger)\b[^?？]*[?？]/i.test(reply.message)) {
     issues.push("Ask about only one missing attribute; do not bundle size with colour or material.");
   }
-  if (/\b(?:Noted|Kindly|Please be advised|current online catalogue|saved requirements|staff review summary|knowledge base)\b/i.test(reply.message)) {
+  if (/\b(?:Noted|Kindly|Please be advised|current online catalogue|saved requirements|staff review summary|knowledge base|server (?:shows|says|facts|guidance))\b/i.test(reply.message)) {
     issues.push("Use plain, friendly customer language without internal labels or scripted phrases.");
   }
   if (!reply.products.length && !reply.selectedProduct

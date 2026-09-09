@@ -33,6 +33,8 @@ export const skuPattern = /\b[a-z0-9]+(?:[-/][a-z0-9]+)+\b/i;
  */
 export function normalizeCommonProductTypos(message: string) {
   return message
+    // A hand mixer is the powered whisk family, not a broad appliance query.
+    .replace(/\b(?:electric\s+)?hand[ -]?mixers?\b/gi, (name) => skuPattern.test(message) ? name : "electric whisk")
     // Normalize common Chinese catalogue terms and measurements for the same
     // search constraints as English; retain the original text in conversation.
     .replace(/(\d+(?:\.\d+)?)\s*(?:厘米|公分)/gu, " $1cm ")

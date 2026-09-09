@@ -331,6 +331,7 @@ export function requestsAnotherOption(message: string) {
 }
 
 export function asksForRecommendation(message: string) {
+  if (/^(?:help me choose|not sure,? help me choose|帮我选择)[.!?？\s]*$/i.test(message.trim())) return true;
   return /^(?:(?:can|could|would) you\s+)?(?:recommend(?: one)?(?: for me)?|which (?:one|option) (?:do you |would you )?recommend|which (?:one|option) would you (?:personally\s+)?(?:pick|choose)|pick (?:one|the best one)(?: for me)?|choose (?:one|the best one) for me)\??$/i.test(message.trim());
 }
 

@@ -9,7 +9,6 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "qa:text": "tsx scripts/qa-regression.ts",
-    "qa:claude": "tsx scripts/qa-claude.ts",
     "qa:quality": "tsx scripts/qa-response-quality.ts",
     "qa:history": "tsx scripts/qa-history.ts",
     "qa:image": "tsx scripts/validate-images.ts",
@@ -20,7 +19,8 @@
     "db:import": "tsx scripts/import-products.ts",
     "db:verify": "tsx scripts/verify-database.ts",
     "catalogue:crawl": "tsx scripts/crawl-siahuat.ts",
-    "catalogue:import": "tsx scripts/crawl-siahuat.ts --limit=1 --import"
+    "catalogue:import": "tsx scripts/crawl-siahuat.ts --limit=1 --import",
+    "qa:luna": "tsx scripts/qa-luna.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
