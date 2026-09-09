@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Product } from "./chat-contract";
-import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, referencedEnquiryLine, removalTarget } from "./enquiry-order";
+import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, quantityEnquiryLine, referencedEnquiryLine, removalTarget } from "./enquiry-order";
 import { latestEnquiryReceiptLines } from "./conversation-export";
 import { parseRequestedQuantity, requestsAdditionalProduct } from "./chat-turn";
 
@@ -68,6 +68,20 @@ test("additional product codes never become a quantity change to the current ite
   for (const code of ["R-52713B81", "218455-20", "HL00900200104", "V4353"]) {
     assert.equal(requestsAdditionalProduct(`Add 1 PC of ${code}`), true, code);
   }
+});
+
+test("keeping an existing item does not redirect a new item's quantity to it", () => {
+  for (const message of [
+    "Keep that knife and add 2 ST-15 tongs please",
+    "Keep 218455-20 and add 2 ST-15",
+    "Keep the knife, add 2 tongs please",
+    "Add 2 PC of 8321T12-R chef knife",
+  ]) assert.equal(quantityEnquiryLine(message, lines, knife.stock_id), null, message);
+  assert.equal(quantityEnquiryLine("Keep the knife and add 2 wine glasses", lines, knife.stock_id)?.code, glass.stock_id);
+  assert.equal(quantityEnquiryLine("Add 4 more of the same knife please", lines, knife.stock_id)?.code, knife.stock_id);
+  assert.equal(quantityEnquiryLine("Add 2 more", lines, knife.stock_id)?.code, knife.stock_id);
+  assert.equal(quantityEnquiryLine("Actually just make it 1 knife in total", lines, knife.stock_id)?.code, knife.stock_id);
+  assert.equal(quantityEnquiryLine("Add 3 PC of 218455-20", lines, glass.stock_id)?.code, knife.stock_id);
 });
 
 test("discount percentages are not mistaken for requested item quantities", () => {

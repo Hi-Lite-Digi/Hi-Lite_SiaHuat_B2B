@@ -1,6 +1,7 @@
 import type { Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { productCategory } from "@/lib/chat-intent";
+import { additionalProductTarget, hasProductCodeReference } from "@/lib/chat-turn";
 
 /** Resolve only an unambiguous reference to an existing enquiry line. */
 export function referencedEnquiryLine(message: string, lines: EnquiryReceiptLine[]) {
@@ -14,6 +15,20 @@ export function referencedEnquiryLine(message: string, lines: EnquiryReceiptLine
   const distinctive = words.filter((word) => word.length > 3 && !["remove", "delete", "cancel", "please", "change", "quantity", "keep", "only", "more", "same", "item", "this", "that"].includes(word));
   const named = lines.filter((line) => distinctive.some((word) => line.item.toLowerCase().includes(word)));
   return named.length === 1 ? named[0] : null;
+}
+
+/** Resolve the item being changed, excluding an earlier "keep that item" clause. */
+export function quantityEnquiryLine(message: string, lines: EnquiryReceiptLine[], currentCode?: string) {
+  const target = additionalProductTarget(message) ?? message;
+  // An explicit new code wins over a shared product noun or a prior item.
+  if (hasProductCodeReference(target)
+    && !lines.some((line) => target.toLowerCase().includes(line.code.toLowerCase()))) return null;
+  const named = referencedEnquiryLine(target, lines);
+  if (named) return named;
+  const current = lines.find((line) => line.code === currentCode);
+  const category = productCategory(target);
+  return current && /\b(?:same|this|that|it|more)\b/i.test(target)
+    && (!category || productCategory(current.item) === category) ? current : null;
 }
 
 export function removalTarget(message: string): string | null {

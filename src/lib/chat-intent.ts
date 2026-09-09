@@ -454,6 +454,17 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   // An explicit positive code selection replaces the preceding type/size
   // search. Otherwise utensil context can silently drop the requested code.
   if (/^\s*(?:please\s+)?(?:use|choose|select|take|switch\s+to|change\s+to)\s+(?:the\s+)?(?:item\s+|product\s+)?(?:code|sku)\s*[:#-]?\s*(?=[a-z0-9./-]*\d)[a-z0-9]+(?:[./-][a-z0-9]+)*\b/i.test(message)) return message;
+  // Natural buying requests also name codes without saying "item code".
+  // Preserve these before category-specific search rewriting drops them.
+  const buyingCode = [...message.matchAll(/\b(?=[a-z0-9.-]*[a-z])(?=[a-z0-9.-]*\d)[a-z0-9]+(?:[.-][a-z0-9]+)+\b/gi)]
+    .some((match) => {
+      if (/^\d+(?:\.\d+)?-?(?:cm|mm|in|inch|in-\d+)$/i.test(match[0])) return false;
+      const prefix = message.slice(0, match.index);
+      const purchase = prefix.match(/\b(?:need|want|add|take|choose|select|buy|order|looking\s+for)\s+(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:(?:pcs?|pieces?|units?|sets?)\s+)?(?:of\s+)?)?(?:the\s+)?$/i);
+      return purchase !== null
+        && !/\b(?:not|never|don['’]?t|dont)\s*$/i.test(prefix.slice(0, purchase.index));
+    });
+  if (buyingCode) return message;
   userHistory = userHistory.map(normalizeCommonProductTypos);
   const previousCategory = rememberedActiveCategories(userHistory).at(-1) ?? null;
   const currentCategory = requestedProductCategory(message);

@@ -33,7 +33,7 @@ import {
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
 import { catalogueMessageWithContext, isExactStockQuestion, isTradePriceQuestion, productCategory, rejectsCurrentProductReference, requestedProductCategory } from "@/lib/chat-intent";
-import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, referencedEnquiryLine, removalTarget } from "@/lib/enquiry-order";
+import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, quantityEnquiryLine, referencedEnquiryLine, removalTarget } from "@/lib/enquiry-order";
 import { confirmationMessage, enquirySummaryMessage, stockLimitMessage, stockUnconfirmedMessage, suggestionLabel } from "@/lib/enquiry-copy";
 import { quickQuantityChoices, quickReplyLabel, withQuickReplies } from "@/lib/quick-replies";
 import { QuickReplyButtons } from "@/components/quick-reply-buttons";
@@ -855,10 +855,7 @@ export function ChatDemo() {
     // Handle quantities addressed to an existing line before the new-product
     // path drops its context. "Add 16 more" means 18 total when 2 are saved.
     const lineQuantity = parseRequestedQuantity(clean);
-    const referencedLine = referencedEnquiryLine(clean, orderLinesRef.current)
-      ?? (/\b(?:same|this|that|it|more)\b/i.test(clean)
-        && (!positivelyRequestedCategory || currentStateCategories.includes(positivelyRequestedCategory))
-        ? orderLinesRef.current.find((line) => line.code === confirmedProduct?.stock_id) ?? null : null);
+    const referencedLine = quantityEnquiryLine(clean, orderLinesRef.current, confirmedProduct?.stock_id);
     const editsExistingLine = hasExistingOrderSummary && referencedLine && !asksProductInformation
       && (!hasReplacementProductCue || /\b(?:quantity|make\s+(?:it|that))\b/i.test(clean))
       && lineQuantity.kind === "valid"
@@ -938,7 +935,8 @@ export function ChatDemo() {
         messageForApi = queuedRequestToConsume;
       }
       const explicitAdditiveTarget = additionalProductTarget(clean);
-      if (queuedRequestIndex < 0 && explicitAdditiveTarget && productCategory(explicitAdditiveTarget)) {
+      if (queuedRequestIndex < 0 && explicitAdditiveTarget
+        && (productCategory(explicitAdditiveTarget) || hasProductCodeReference(explicitAdditiveTarget))) {
         messageForApi = `I need ${explicitAdditiveTarget}`;
       }
       if (isGenericAddAnotherItem(clean)) {

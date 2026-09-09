@@ -29,6 +29,10 @@ test("live checkout: inch wording retrieves the steak-tong family and an explici
   assert.equal(requirementLookupQuery(normalizeCatalogueQuery(contextual)), "steak tong");
   assert.equal(catalogueMessageWithContext("Use item code ST-15 instead", [request]), "Use item code ST-15 instead");
   assert.doesNotMatch(catalogueMessageWithContext("Do not use item code ST-15", [request]), /^Do not use item code/);
+  assert.equal(catalogueMessageWithContext("I need 2 ST-15 tongs please", []), "I need 2 ST-15 tongs please");
+  assert.equal(catalogueMessageWithContext("Add 2 ST-15", ["I need a knife"]), "Add 2 ST-15");
+  assert.doesNotMatch(catalogueMessageWithContext("I need tongs, not ST-15", []), /ST-15/);
+  assert.doesNotMatch(catalogueMessageWithContext("I don't want ST-15 tongs", [request]), /ST-15/);
 });
 test("PDF 6: rejecting Taiwanese knives does not become a request for Taiwan origin", () => {
   const history = ["I need a damascus chef knife. 3 pcs", "Have a japanese made knife?", "No, this is taiwanese knife"];
