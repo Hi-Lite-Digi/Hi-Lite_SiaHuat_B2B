@@ -760,7 +760,10 @@ export function ChatDemo() {
       }
       queuedAdditionalProductRef.current = null;
     };
-    const multiProductRequests = !attachment && orderLinesRef.current.length === 0
+    const explicitlyBuysMultiple = !asksProductInformation
+      && /\b(?:need|want|buy|order|add|get|give)\b/i.test(clean)
+      && !/\b(?:keep|remove|delete|cancel|instead|replace|switch|not|don['’]?t)\b/i.test(clean);
+    const multiProductRequests = !attachment && (orderLinesRef.current.length === 0 || explicitlyBuysMultiple)
       && pendingOrderRequestsRef.current.length === 0
       ? splitMultipleProductRequest(clean)
       : [];
@@ -856,12 +859,12 @@ export function ChatDemo() {
 
     // Handle quantities addressed to an existing line before the new-product
     // path drops its context. "Add 16 more" means 18 total when 2 are saved.
-    const lineQuantity = parseRequestedQuantity(clean);
-    if (lineQuantity.kind === "valid") pendingPackagingRef.current = requestedPackagingUnit(clean);
+    const lineQuantity = parseRequestedQuantity(multiProductRequests.length > 1 ? messageForApi : clean);
+    if (lineQuantity.kind === "valid") pendingPackagingRef.current = requestedPackagingUnit(multiProductRequests.length > 1 ? messageForApi : clean);
     const namesNewProduct = namesDifferentEnquiryProduct(clean, currentStateProducts);
     const referencedLine = quantityEnquiryLine(clean, orderLinesRef.current, confirmedProduct?.stock_id);
     const namesSavedCategory = referencedLine && positivelyRequestedCategory && productCategory(referencedLine.item) === positivelyRequestedCategory;
-    const editsExistingLine = hasExistingOrderSummary && referencedLine && (!namesNewProduct || namesSavedCategory) && !asksProductInformation
+    const editsExistingLine = multiProductRequests.length < 2 && hasExistingOrderSummary && referencedLine && (!namesNewProduct || namesSavedCategory) && !asksProductInformation
       && (!hasReplacementProductCue || /\b(?:quantity|make\s+(?:it|that))\b/i.test(clean))
       && lineQuantity.kind === "valid"
       && (namesSavedCategory || hasAdditiveProductCue || /\b(?:make|quantity|need|want|take)\b/i.test(clean));
@@ -923,6 +926,7 @@ export function ChatDemo() {
     const consumesAwaitingAdditionalProduct = awaitingAdditionalProduct && !returnsToExistingSummary;
     const explicitlyAddsSeparateProduct = /\b(?:add|also|as well)\b|\btoo\b\s*[.!?]*$|(?:再加|也要|还要)/iu.test(clean);
     const startingAdditionalProduct = canUseExistingProductState && !replacesCurrentProduct && !returnsToExistingSummary && (awaitingAdditionalProduct
+      || newlyQueuedRequests.length > 0
       || queuedRequestIndex >= 0
       || (hasExistingOrderSummary && namesNewProduct && !asksProductInformation)
       || (hasExistingOrderSummary && explicitlyAddsSeparateProduct && !asksProductInformation)
@@ -940,7 +944,7 @@ export function ChatDemo() {
         messageForApi = queuedRequestToConsume;
       }
       const explicitAdditiveTarget = additionalProductTarget(clean);
-      if (queuedRequestIndex < 0 && explicitAdditiveTarget
+      if (multiProductRequests.length < 2 && queuedRequestIndex < 0 && explicitAdditiveTarget
         && (productCategory(explicitAdditiveTarget) || hasProductCodeReference(explicitAdditiveTarget))) {
         messageForApi = `I need ${explicitAdditiveTarget}`;
       }
