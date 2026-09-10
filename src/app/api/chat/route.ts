@@ -50,6 +50,7 @@ import {
   requestedProductCategory,
 } from "@/lib/chat-intent";
 import { asksForRecommendation, isProductRefinementOnly, parseRequestedQuantity, requestedDisplayedProductIndex, requestedQuantity, requestsAnotherOption } from "@/lib/chat-turn";
+import { requestedPackagingUnit, resolveProductQuantity } from "@/lib/enquiry-quantity";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
@@ -581,6 +582,10 @@ function matchesExplicitProductCategory(message: string, product: Product) {
     return /\b(?:gas\s+)?torch\s+burners?\b|\btorch\b[\s\S]*\bburner\b/i.test(productText)
       && !/\bcartridges?\b/i.test(productName);
   }
+  if (requestedCategory === "cooking stove") {
+    return /\bstoves?\b|\bcooktops?\b|\bhobs?\b|\b(?:portable\s+|cassette\s+)?(?:gas|butane)\s+cookers?\b/i.test(productName)
+      && !/\b(?:torch|cartridge|replacement|spare|accessor(?:y|ies)|stands?)\b/i.test(productName);
+  }
   if (/\b(?:gas|butane)\s+cartridges?\b/i.test(message)) return /\b(?:gas|butane)\b[\s\S]*\bcartridges?\b|\bcartridges?\b[\s\S]*\b(?:gas|butane)\b/i.test(productName);
   if (/\bshot\s+glass(?:es)?\b/i.test(message)) return /\bshot\s+glass(?:es)?\b/i.test(productText);
   if (/\b(?:scrub\s+)?sponges?\b/i.test(message)) return /\bsponges?\b/i.test(productName);
@@ -664,7 +669,10 @@ function enforceExplicitProductCategory(reply: ChatReply, message: string): Chat
   const selectedProduct = reply.selectedProduct && matchesExplicitProductCategory(message, reply.selectedProduct)
     ? reply.selectedProduct
     : null;
-  const customerMessage = products.length > 0 && /^Here are \d+ different\b/i.test(reply.message)
+  const removedProducts = products.length !== reply.products.length || selectedProduct !== reply.selectedProduct;
+  const customerMessage = removedProducts && products.length > 0
+    ? products.length === 1 ? "This looks like the closest match:" : `Here are ${products.length} matching options:`
+    : products.length > 0 && /^Here are \d+ different\b/i.test(reply.message)
     ? products.length === 1
       ? "This looks like the closest match:"
       : reply.message.replace(/^Here are \d+ different\b/i, `Here are ${products.length} different`)
@@ -1254,7 +1262,9 @@ async function groundedCatalogueReply(
   const priceEligibleProducts = maximumPrice === null
     ? relevantProducts
     : relevantProducts.filter((product) => Number(product.list_price) <= maximumPrice);
-  const minimumQuantity = requestedQuantity(message);
+  // Package counts are resolved against the selected item's pack size. They
+  // must not be compared to the catalogue's piece stock during discovery.
+  const minimumQuantity = requestedPackagingUnit(message) ? null : requestedQuantity(message);
   const quantityEligibleProducts = minimumQuantity === null
     ? priceEligibleProducts
     : priceEligibleProducts.filter((product) =>
@@ -1508,6 +1518,16 @@ function guideAlternativeNoMatch(reply: ChatReply, customerMessage: string, cata
 
 function enforceRequestedQuantityOptions(reply: ChatReply, message: string): ChatReply {
   const quantity = requestedQuantity(message);
+  const packaging = requestedPackagingUnit(message);
+  if (quantity !== null && packaging && (reply.products.length || reply.selectedProduct)) {
+    const candidates = reply.selectedProduct ? [reply.selectedProduct] : reply.products;
+    const notes = candidates.map(product => {
+      const resolved = resolveProductQuantity(quantity, packaging, product);
+      const limit = product.available_quantity;
+      return `${product.stock_id}: ${resolved.notice}${resolved.quantity !== null && typeof limit === "number" && resolved.quantity > limit ? ` Only ${limit} ${product.uom_id} are listed as available, so this quantity cannot be added.` : ""}`;
+    });
+    return { ...reply, message: `I've kept your request for ${quantity} ${packaging}${quantity === 1 ? "" : "s"}.\n\n${notes.join("\n")}\n\nSelect the matching item to recheck live stock before adding it to your enquiry.` };
+  }
   if (quantity === null || isExactCodeRequest(message, reply.products)) return reply;
 
   // Do not invent a stock problem when catalogue grounding found no matching
@@ -2265,8 +2285,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
       ? input.context?.quantity ?? null
       : null
   );
+  const contextualPackaging = requestedPackagingUnit(input.message) ?? (originalQuantity === null ? input.context?.quantityUnit : null);
   const catalogueMessage = contextualQuantity !== null && requestedQuantity(rememberedCatalogueMessage) === null
-    ? `${rememberedCatalogueMessage} ${contextualQuantity} units`
+    ? `${rememberedCatalogueMessage} ${contextualQuantity} ${contextualPackaging ? `${contextualPackaging}s` : "units"}`
     : rememberedCatalogueMessage;
   const knownComparisonVision = input.image ? await knownComparisonVisionPromise : null;
   if (knownComparisonVision) {
@@ -2352,7 +2373,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     || (requestedQuantity(catalogueMessage) !== null
       && (/\b\d+(?:\.\d+)?[\s-]*(?:cm|mm|inch|inches|in)\b/i.test(catalogueMessage)
         || /\b(?:pop[ -]?up|non[ -]?conveyor|slots?)\s+toasters?\b|\btoasters?\b[\s\S]{0,30}\b(?:pop[ -]?up|non[ -]?conveyor|slots?)\b/i.test(catalogueMessage)))
-    || ["trolley", "ladder", "rice dispenser", "toaster", "gas torch burner"].includes(currentCategory ?? "")
+    || ["trolley", "ladder", "rice dispenser", "toaster", "gas torch burner", "cooking stove"].includes(currentCategory ?? "")
     || /\b(?:complete\s+)?(?:dining|dinnerware|tableware)\s+sets?|\b(?:electric|cordless|powered)\b[\s\S]*\bwhisks?\b|\b(?:cooking|steak)\s+tongs?\b/i.test(catalogueMessage)
     || /\b(?:damascus|japan|japanese|woks?)\b/i.test(catalogueMessage);
   const imagePurchaseClarification = imageBuyingClarification(input, catalogueMessage);

@@ -1,16 +1,16 @@
 import type { Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
-import { productCategory } from "@/lib/chat-intent";
+import { productCategory, requestedProductCategory } from "@/lib/chat-intent";
 import { additionalProductTarget, hasProductCodeReference } from "@/lib/chat-turn";
 
 /** Resolve only an unambiguous reference to an existing enquiry line. */
 export function referencedEnquiryLine(message: string, lines: EnquiryReceiptLine[]) {
   const text = message.toLowerCase();
-  const codes = lines.filter((line) => text.includes(line.code.toLowerCase()));
-  if (codes.length === 1) return codes[0];
   const category = productCategory(message);
   const matches = lines.filter((line) => category && productCategory(line.item) === category);
   if (matches.length === 1) return matches[0];
+  const codes = lines.filter((line) => text.includes(line.code.toLowerCase()));
+  if (codes.length === 1) return codes[0];
   const words = text.match(/[a-z0-9]+/g) ?? [];
   const distinctive = words.filter((word) => word.length > 3 && !["remove", "delete", "cancel", "please", "change", "quantity", "keep", "only", "more", "same", "item", "this", "that"].includes(word));
   const named = lines.filter((line) => distinctive.some((word) => line.item.toLowerCase().includes(word)));
@@ -29,6 +29,18 @@ export function quantityEnquiryLine(message: string, lines: EnquiryReceiptLine[]
   const category = productCategory(target);
   return current && /\b(?:same|this|that|it|more)\b/i.test(target)
     && (!category || productCategory(current.item) === category) ? current : null;
+}
+
+/** Naming a different product is enough to start shopping for it after a quote. */
+export function namesDifferentEnquiryProduct(message: string, currentProducts: Product[]) {
+  const target = additionalProductTarget(message) ?? message;
+  const category = requestedProductCategory(target);
+  if (category && currentProducts.length > 0 && currentProducts.every((product) => {
+    const current = productCategory(product.name);
+    return current !== category && !([current, category].every(value => value === "pot" || value === "stockpot"));
+  })) return true;
+  return hasProductCodeReference(target) && currentProducts.length > 0
+    && !currentProducts.some((product) => target.toLowerCase().includes(product.stock_id.toLowerCase()));
 }
 
 export function removalTarget(message: string): string | null {

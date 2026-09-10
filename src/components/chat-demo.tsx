@@ -33,8 +33,9 @@ import {
   splitMultipleProductRequest,
 } from "@/lib/chat-turn";
 import { catalogueMessageWithContext, isExactStockQuestion, isTradePriceQuestion, productCategory, rejectsCurrentProductReference, requestedProductCategory } from "@/lib/chat-intent";
-import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, quantityEnquiryLine, referencedEnquiryLine, removalTarget } from "@/lib/enquiry-order";
+import { checkedEnquiryLine, clearsEnquiry, mergedEnquiryQuantity, namesDifferentEnquiryProduct, quantityEnquiryLine, referencedEnquiryLine, removalTarget } from "@/lib/enquiry-order";
 import { confirmationMessage, enquirySummaryMessage, stockLimitMessage, stockUnconfirmedMessage, suggestionLabel } from "@/lib/enquiry-copy";
+import { requestedPackagingUnit, resolveProductQuantity, type PackagingUnit } from "@/lib/enquiry-quantity";
 import { quickQuantityChoices, quickReplyLabel, withQuickReplies } from "@/lib/quick-replies";
 import { QuickReplyButtons } from "@/components/quick-reply-buttons";
 import {
@@ -265,6 +266,7 @@ export function ChatDemo() {
   const orderLinesRef = useRef<QuoteSummary[]>([]);
   const quotedProductsRef = useRef(new Map<string, Product>());
   const additiveQuantityRef = useRef(false);
+  const pendingPackagingRef = useRef<PackagingUnit | null>(null);
   const shownProductIdsRef = useRef<Set<string>>(new Set());
   const pendingOrderRequestsRef = useRef<string[]>([]);
   const awaitingAdditionalProductRef = useRef(false);
@@ -668,7 +670,7 @@ export function ChatDemo() {
     return request.replace(/^I need\s+/i, "").replace(/[.!]\s*$/, "").trim();
   }
 
-  function showOrderReview(quantity: number, product: Product, userText?: string) {
+  function showOrderReview(quantity: number, product: Product, userText?: string, conversionNotice = "") {
     const quote = checkedEnquiryLine(quantity, product);
     if (!quote) return;
     const replacingQuoteCode = replacingQuoteCodeRef.current;
@@ -689,7 +691,7 @@ export function ChatDemo() {
       ...(userText ? [{ id: nextId.current++, role: "user" as const, text: userText }] : []),
       {
         id: nextId.current++, role: "assistant" as const,
-        text: `${enquirySummaryMessage(nextOrder, false, conversationLanguage)}${nextQueuedRequest
+        text: `${conversionNotice ? `${conversionNotice}\n\n` : ""}${enquirySummaryMessage(nextOrder, false, conversationLanguage)}${nextQueuedRequest
           ? conversationLanguage === "zh"
             ? `\n\n接下来：${nextQueuedRequest}`
             : `\n\nNext up: ${nextQueuedLabel}. Tap Continue below—you don’t need to type it again.`
@@ -709,10 +711,10 @@ export function ChatDemo() {
         : ["Finish enquiry summary", "Add another item", "Change quantity"]);
   }
 
-  function showRememberedQuantityLimit(quantity: number, product: Product, limit: number) {
+  function showRememberedQuantityLimit(quantity: number, product: Product, limit: number, conversionNotice = "") {
     setMessages((current) => [...current, {
       id: nextId.current++, role: "assistant", selectedProduct: product,
-      text: stockLimitMessage(quantity, limit, product.uom_id, conversationLanguage),
+      text: `${conversionNotice ? `${conversionNotice}\n\n` : ""}${stockLimitMessage(quantity, limit, product.uom_id, conversationLanguage)}`,
     }]);
     setPendingQuantity(quantity); setStage(limit > 0 ? "quantity" : "clarify");
     setSuggestions(limit > 0
@@ -855,18 +857,20 @@ export function ChatDemo() {
     // Handle quantities addressed to an existing line before the new-product
     // path drops its context. "Add 16 more" means 18 total when 2 are saved.
     const lineQuantity = parseRequestedQuantity(clean);
+    if (lineQuantity.kind === "valid") pendingPackagingRef.current = requestedPackagingUnit(clean);
+    const namesNewProduct = namesDifferentEnquiryProduct(clean, currentStateProducts);
     const referencedLine = quantityEnquiryLine(clean, orderLinesRef.current, confirmedProduct?.stock_id);
-    const editsExistingLine = hasExistingOrderSummary && referencedLine && !asksProductInformation
+    const namesSavedCategory = referencedLine && positivelyRequestedCategory && productCategory(referencedLine.item) === positivelyRequestedCategory;
+    const editsExistingLine = hasExistingOrderSummary && referencedLine && (!namesNewProduct || namesSavedCategory) && !asksProductInformation
       && (!hasReplacementProductCue || /\b(?:quantity|make\s+(?:it|that))\b/i.test(clean))
       && lineQuantity.kind === "valid"
-      && (hasAdditiveProductCue || /\b(?:make|quantity|need|want|take)\b/i.test(clean));
+      && (namesSavedCategory || hasAdditiveProductCue || /\b(?:make|quantity|need|want|take)\b/i.test(clean));
     if (editsExistingLine) {
       const product = quotedProductsRef.current.get(referencedLine.code) ?? (confirmedProduct?.stock_id === referencedLine.code ? confirmedProduct : null);
       if (product) {
-        const quantity = mergedEnquiryQuantity(orderLinesRef.current, referencedLine.code, lineQuantity.value, hasAdditiveProductCue);
-        additiveQuantityRef.current = false;
+        additiveQuantityRef.current = hasAdditiveProductCue;
         setQuery("");
-        await confirmProduct(clean, product, quantity);
+        await confirmProduct(clean, product, lineQuantity.value);
         return;
       }
     }
@@ -920,6 +924,7 @@ export function ChatDemo() {
     const explicitlyAddsSeparateProduct = /\b(?:add|also|as well)\b|\btoo\b\s*[.!?]*$|(?:再加|也要|还要)/iu.test(clean);
     const startingAdditionalProduct = canUseExistingProductState && !replacesCurrentProduct && !returnsToExistingSummary && (awaitingAdditionalProduct
       || queuedRequestIndex >= 0
+      || (hasExistingOrderSummary && namesNewProduct && !asksProductInformation)
       || (hasExistingOrderSummary && explicitlyAddsSeparateProduct && !asksProductInformation)
       || (canUseExistingProductState
         && (pendingQuote !== null || stage === "submitted" || orderLinesRef.current.length > 0)
@@ -1360,6 +1365,7 @@ export function ChatDemo() {
     const startsFreshProduct = startingAdditionalProduct || startsFreshPhotoProduct || replacesCurrentProduct;
 
     if (startsFreshProduct) {
+      pendingPackagingRef.current = requestedPackagingUnit(messageForApi);
       if (!startingAdditionalProduct) additiveQuantityRef.current = replacesCurrentProduct;
       const replacedProduct = confirmedProduct ?? pendingProduct ?? lastProducts[0] ?? null;
       if (replacesCurrentProduct && replacedProduct
@@ -1393,6 +1399,7 @@ export function ChatDemo() {
             stage: startsFreshProduct ? "discover" : stage,
             activeProduct: startsFreshProduct ? null : confirmedProduct ?? pendingProduct,
             quantity: startsFreshProduct ? null : pendingQuantity ?? pendingQuote?.quantity ?? null,
+            quantityUnit: pendingPackagingRef.current,
             displayedProducts: startsFreshProduct ? [] : lastProducts.slice(0, 5),
           },
           ...(attachedImage ? { image: attachedImage } : {}),
@@ -1471,12 +1478,14 @@ export function ChatDemo() {
         const product = reply.selectedProduct;
         lastUnavailableProductRef.current = null;
         rememberShownProducts([product]);
-        const quantity = requestedQuantity(messageForApi) ?? (startingAdditionalProduct ? null : pendingQuantity);
+        const resolved = resolveProductQuantity(requestedQuantity(messageForApi) ?? (startingAdditionalProduct ? null : pendingQuantity), pendingPackagingRef.current, product, replyLanguage);
+        const quantity = resolved.quantity;
+        pendingPackagingRef.current = null;
         setPendingProduct(product); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
         setLastProducts((current) => current.some((item) => item.stock_id === product.stock_id) ? current : [product, ...current]);
         setMessages((current) => [...current, {
           id: nextId.current++, role: "assistant", needsConfirmation: true, selectedProduct: product,
-          text: `${confirmationMessage(quantity, product.uom_id, replyLanguage)}${queuedRequestNotice}`,
+          text: `${resolved.notice ? `${resolved.notice}\n\n` : ""}${confirmationMessage(quantity, product.uom_id, replyLanguage)}${queuedRequestNotice}`,
         }]);
         return;
       }
@@ -1541,13 +1550,15 @@ export function ChatDemo() {
       setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]); return;
     }
     lastUnavailableProductRef.current = null;
-    const quantity = requestedQuantity(userText) ?? pendingQuantity;
+    const resolved = resolveProductQuantity(requestedQuantity(userText) ?? pendingQuantity, pendingPackagingRef.current, product, conversationLanguage);
+    const quantity = resolved.quantity;
+    pendingPackagingRef.current = null;
     setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
     setMessages((current) => [...current,
       { id: nextId.current++, role: "user", text: userText },
       {
         id: nextId.current++, role: "assistant",
-        text: confirmationMessage(quantity, product.uom_id, conversationLanguage),
+        text: `${resolved.notice ? `${resolved.notice}\n\n` : ""}${confirmationMessage(quantity, product.uom_id, conversationLanguage)}`,
         selectedProduct: product,
         needsConfirmation: true,
       },
@@ -1559,8 +1570,11 @@ export function ChatDemo() {
     if (!product || checkingStock) return;
     setPendingProduct(null); setPendingQuote(null); setConfirmedProduct(product); setStage("clarify"); setSuggestions([]); setCheckingStock(true);
     const requested = quantityOverride === undefined ? pendingQuantity : quantityOverride;
-    const quantity = requested === null ? null : mergedEnquiryQuantity(orderLinesRef.current, product.stock_id, requested, additiveQuantityRef.current
+    const resolved = resolveProductQuantity(requested, pendingPackagingRef.current, product, conversationLanguage);
+    pendingPackagingRef.current = null;
+    const quantity = resolved.quantity === null ? null : mergedEnquiryQuantity(orderLinesRef.current, product.stock_id, resolved.quantity, additiveQuantityRef.current
       && replacingQuoteCodeRef.current !== product.stock_id);
+    setPendingQuantity(quantity);
     if (quantity !== null) additiveQuantityRef.current = false;
     const stockSession = sessionId.current;
     loadingRef.current = true; setLoading(true);
@@ -1586,11 +1600,11 @@ export function ChatDemo() {
           return;
         }
         if (quantity !== null && check.availableQuantity !== null && quantity > check.availableQuantity) {
-          showRememberedQuantityLimit(quantity, liveProduct, check.availableQuantity);
+          showRememberedQuantityLimit(quantity, liveProduct, check.availableQuantity, resolved.notice);
           return;
         }
         if (quantity !== null) {
-          showOrderReview(quantity, liveProduct);
+          showOrderReview(quantity, liveProduct, undefined, resolved.notice);
           return;
         }
         setStage("quantity");
@@ -1601,7 +1615,7 @@ export function ChatDemo() {
           : check.availableQuantity === null
             ? "The website shows it as in stock, but did not return an exact quantity."
             : `Available: ${check.availableQuantity} ${product.uom_id}.`;
-        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: conversationLanguage === "zh" ? `${availableText}\n\n您需要多少 ${product.uom_id}？` : `${availableText}\n\nHow many ${product.uom_id} do you need?`, selectedProduct: liveProduct }]);
+        setMessages((current) => [...current, { id: nextId.current++, role: "assistant", text: resolved.notice || (conversationLanguage === "zh" ? `${availableText}\n\n您需要多少 ${product.uom_id}？` : `${availableText}\n\nHow many ${product.uom_id} do you need?`), selectedProduct: liveProduct }]);
         setSuggestions(quantitySuggestions(check.availableQuantity, conversationLanguage));
       } else if (check.stockStatus === "out_of_stock") {
         setStage("clarify");
@@ -1660,6 +1674,7 @@ export function ChatDemo() {
     orderLinesRef.current = [];
     quotedProductsRef.current.clear();
     additiveQuantityRef.current = false;
+    pendingPackagingRef.current = null;
     shownProductIdsRef.current = new Set();
     pendingOrderRequestsRef.current = [];
     awaitingAdditionalProductRef.current = false;

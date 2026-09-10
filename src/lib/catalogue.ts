@@ -225,6 +225,11 @@ function matchesExplicitConstraints(query: string, product: Product) {
     if (!/\b(?:gas\s+)?torch\s+burners?\b|\btorch\b[\s\S]*\bburner\b/.test(candidate)) return false;
     if (/\bcartridges?\b/.test(productName)) return false;
   }
+  if (/\bstoves?\b|\bcooktops?\b|\bhobs?\b/.test(requested)) {
+    if (!/\bstoves?\b|\bcooktops?\b|\bhobs?\b|\b(?:portable\s+|cassette\s+)?(?:gas|butane)\s+cookers?\b/.test(productName)) return false;
+    if (/\b(?:torch|cartridge|replacement|spare|accessor(?:y|ies)|stands?)\b/.test(productName)) return false;
+    if (/\b(?:outdoor|camping)\b/.test(requested) && !/\b(?:outdoor|camping|camp)\b/.test(candidate)) return false;
+  }
   if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/.test(requested)
     && (!/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|boxes|bin|bins)|cambox)\b/.test(productName)
       || /\b(?:pail|bucket)\b/.test(productName))) return false;

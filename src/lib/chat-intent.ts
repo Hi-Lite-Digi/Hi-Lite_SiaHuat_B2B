@@ -175,6 +175,7 @@ export const productCategories = [
   { pattern: /\b(?:step\s+)?(?:ladders?|stools?)\b/i, label: "ladder" },
   { pattern: /\b(?:cassette\s+)?gas\s+torch(?:\s+burners?)?\b|\btorch\s+(?:burners?|heads?|attachments?)\b|\bburner\s+(?:heads?|attachments?)\b(?=[^.!?]{0,32}\b(?:gas|butane|cartridges?|cans?)\b)|^(?=[\s\S]*\bburner\s+(?:heads?|attachments?)\b)(?=[\s\S]*\b(?:not|no|without|don['’]?t(?:\s+(?:need|want))?|dont(?:\s+(?:need|want))?)\b[\s\S]{0,40}\b(?:gas\s+)?(?:cans?|canisters?|cartridges?)\b)[\s\S]*$|\bmetal\s+torch\s+burner\s+attachments?\b|\biwatani?\b[\s,/-]*(?:gas\s+)?torch(?:\s+burners?)?\b|\b(?:gas\s+)?torch\s+burners?\b[\s,/-]*iwatani?\b/i, label: "gas torch burner" },
   { pattern: /\b(?:butane\s+|gas\s+)?cartridges?\b/i, label: "gas cartridge" },
+  { pattern: /\bstoves?\b|\bcooktops?\b|\bhobs?\b|\b(?:portable\s+|cassette\s+)?(?:gas|butane)\s+cookers?\b/i, label: "cooking stove" },
   { pattern: /\b(?:scrub\s+)?sponges?\b/i, label: "cleaning sponge" },
   { pattern: /\b(?:kitchen\s+|paper\s+)?towels?\b/i, label: "paper towel" },
   { pattern: /\bgloves?\b/i, label: "glove" },
@@ -252,6 +253,8 @@ export function isCatalogueRequest(message: string) {
 
 export function productCategory(message: string) {
   const normalizedMessage = normalizeCommonProductTypos(message);
+  if (/\bgas\b[^.!?]{0,30}\b(?:cartons?|ctns?|cans?|packets?)\b/i.test(normalizedMessage)
+    && !/\b(?:torch|burner|stove|cooker)\b/i.test(normalizedMessage)) return "gas cartridge";
   if (/^\s*pot\s+(?:inner(?:[ -]?rim)?\s+)?(?:diameter|measurements?|dimensions?|brand\s*\/\s*model|brand|model)\s*:/i.test(normalizedMessage)) {
     return null;
   }
@@ -724,6 +727,11 @@ export function catalogueMessageWithContext(message: string, userHistory: string
     return [normalizedBrand, "gas torch burner"].filter(Boolean).join(" ");
   }
   if (activeCategory === "gas cartridge") return "gas cartridge";
+  if (activeCategory === "cooking stove") {
+    const brand = /\biwatani?\b/i.test(joinedMessages) ? "Iwatani" : null;
+    const outdoor = /\b(?:outdoor|camping|camp)\b/i.test(joinedMessages) ? "outdoor" : null;
+    return [brand, outdoor, "cooking stove"].filter(Boolean).join(" ");
+  }
   if (activeCategory === "cleaning sponge") return "scrub sponge";
   if (activeCategory === "paper towel") return "kitchen paper towel";
   if (activeCategory === "glove") return "glove";
