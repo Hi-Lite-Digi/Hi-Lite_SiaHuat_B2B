@@ -7,9 +7,17 @@ import type { Product } from "./chat-contract";
 import { requestedPackagingUnit, resolveProductQuantity } from "./enquiry-quantity";
 import { mergedEnquiryQuantity, checkedEnquiryLine, quantityEnquiryLine } from "./enquiry-order";
 import { splitMultipleProductRequest } from "./chat-turn";
+import { getFastChatReply } from "./fast-chat";
 
 const torch: Product = { stock_id: "CB-TC-CKWH", name: "Iwatani Cassette Gas Torch Burner L16cm,White", status: "Active", uom_id: "PC", list_price: 57.71 };
 const gas: Product = { stock_id: "GAS", name: "IWATANI GAS CARTRIDGE 250gm/can,3pcs/pkt,48pcs/ctn", status: "Active", uom_id: "PC", list_price: 3.85 };
+
+test("explicit product switches preserve the full request for catalogue matching", () => {
+  for (const message of ["I need GAS CARTRIDGE 12 cartons instead.", "Switch to gas cartridges", "Replace that with a CB-AK-1 cooking stove"]) {
+    assert.equal(getFastChatReply({ sessionId: "switch-catalogue-test", message,
+      history: [{ role: "user", content: "I need 2 gas torch burners" }] }), null, message);
+  }
+});
 
 test("gas wording distinguishes the cartridge line from the torch line", () => {
   const lines = [torch, gas].map(product => checkedEnquiryLine(12, { ...product, stock_status: "in_stock", available_quantity: 1000 })!);

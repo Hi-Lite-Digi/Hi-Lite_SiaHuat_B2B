@@ -900,13 +900,10 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
   }
 
   if (/\b(switch|change|replace|instead|only)\b/.test(simple) && currentCategory) {
-    if (currentCategory === lastCategory) return null;
-    const includesSearchDetail = /\b(?:chef|cleaver|boning|paring|frying|non[ -]?stick|sauce|black|white|red|blue|green|silver|round|square|oval|dinner|serving)\b/i.test(message)
-      || /\b\d+(?:\.\d+)?\s*(?:cm|mm|inch|inches|in)\b/i.test(message);
-    if (includesSearchDetail) return null;
-    const display = currentCategory === "glassware" || currentCategory === "tableware" ? currentCategory : `a ${currentCategory}`;
-    const options = currentCategory === "pan" ? ["Frying pan", "Non-stick pan", "Sauce pan"] : currentCategory === "knife" ? ["Chef’s knife", "Cleaver", "Boning knife"] : [`Search ${currentCategory}`, "Add a brand", "Add a size"];
-    return reply(`Okay—we’ll switch to ${display}. What kind do you need?`, options);
+    // The customer has already named the new category. Let catalogue matching
+    // use the whole request, including codes, quantities and packaging, rather
+    // than discarding details outside a small keyword whitelist.
+    return null;
   }
 
   if (/^keep (the )?knife$/.test(simple)) {
