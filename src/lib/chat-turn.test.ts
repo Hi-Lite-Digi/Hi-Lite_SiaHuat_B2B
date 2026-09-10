@@ -7,6 +7,7 @@ import {
   declinesUnavailableItem,
   hasUnavailableProductContext,
   multipleProductInputNotice,
+  parseRequestedQuantity,
   productForTypedConfirmation,
   requestedDisplayedProductIndex,
   requestedQuantity,
@@ -15,6 +16,17 @@ import {
   shouldStartFreshAdditionalItem,
   splitMultipleProductRequest,
 } from "./chat-turn";
+
+test("polite numeric replies remain quantities without absorbing sizes, prices or codes", () => {
+  for (const message of ["200 please", "200 pls", "200, thanks", "please 200", "200 thank you!"]) {
+    assert.deepEqual(parseRequestedQuantity(message), { kind: "valid", value: 200 }, message);
+  }
+  for (const message of ["200 cm please", "$200 please", "200% please", "AB-200 please"]) {
+    assert.deepEqual(parseRequestedQuantity(message), { kind: "none" }, message);
+  }
+  assert.deepEqual(parseRequestedQuantity("1.5 please"), { kind: "invalid", reason: "fractional" });
+  assert.deepEqual(parseRequestedQuantity("-2 please"), { kind: "invalid", reason: "range" });
+});
 
 function product(stockStatus: Product["stock_status"], availableQuantity: number | null): Product {
   return {

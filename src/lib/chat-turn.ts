@@ -475,6 +475,9 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
     .replace(/\bbudget(?:\s+(?:is|of|around|under|below|up\s+to))?\s*[:=]?\s*\d+(?:[,.]\d+)*/gi, " ")
     .replace(/\b(?:under|below|less\s+than|up\s+to|at\s+most)\s+\d+(?:[,.]\d+)*\s*(?=(?:each|ea|per\s+(?:piece|pc|unit|item))\b)/gi, " ");
   const candidates = [
+    // A polite answer to "how many?" is still a quantity. Keep this anchored
+    // so dimensions, prices and product codes do not become order counts.
+    ...collectQuantityCandidates(message, /^\s*(?:(?:please|pls|plz)\s+)?(-?\d+(?:\.\d+)?)\s*(?:[,;]?\s*(?:please|pls|plz|thanks?|thank\s+you)\s*)?[.!?]*$/gi),
     ...collectQuantityCandidates(message, /^\s*(?:actually[,\s]+(?:just\s+)?|just\s+)(-?\d+(?:\.\d+)?)\s*(?:(?:please|pls|thanks)\s*)?[.!?]*$/gi),
     ...collectEnglishQuantityCandidates(message, new RegExp(`^\\s*(?:actually[,\\s]+(?:just\\s+)?|just\\s+)(${englishQuantityPattern})\\s*(?:(?:please|pls|thanks)\\s*)?[.!?]*$`, "gi")),
     ...collectQuantityCandidates(message, /\badd\s*(-?\d+(?:\.\d+)?)(?![\w.-])/gi),
