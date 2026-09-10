@@ -6,6 +6,8 @@ The model writes the reply and may omit unsuitable catalogue candidates. Existin
 
 Replies use structured JSON, local schema validation, and one bounded style repair. The common instructions use Anthropic prompt caching. The usage log counts Anthropic's uncached input, cache reads and writes, and output separately. Unknown model prices are reported as unavailable instead of guessed.
 
+The route allows 45 seconds across catalogue/vision and wording, within a 60-second function limit. The browser waits 50 seconds to include network overhead. Individual Anthropic calls still have an 18-second timeout. This leaves wording time after a slow image lookup instead of cancelling at the former 30-second turn limit.
+
 Successful model responses expose `x-chat-provider: anthropic` and `x-chat-model: claude-sonnet-5`. A provider outage can return a verified deterministic reply labelled `deterministic-fallback`; acceptance tests must not count that as a successful Claude response. No request falls back to OpenAI.
 
 ## Verification

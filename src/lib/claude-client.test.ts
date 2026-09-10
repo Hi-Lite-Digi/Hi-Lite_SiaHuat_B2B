@@ -40,6 +40,11 @@ test("wording cannot offer to check stock before the product has been selected",
   assert.deepEqual(replyStyleIssues({ ...draft, selectedProduct: product, message }), []);
 });
 
+test("plural wording cannot bundle different missing attributes in one question", () => {
+  const reply = { ...draft, products: [], message: "Would a smaller size work, or should I look at other shapes/colours?" };
+  assert.match(replyStyleIssues(reply).join(" "), /one missing attribute/);
+});
+
 test("unsupported sales handoff claims are removed", () => {
   const reply = applyClaudeWording(draft, { message: "I have notified our sales team.", productIds: [], suggestions: [] });
   assert.doesNotMatch(reply.message, /I have notified/);

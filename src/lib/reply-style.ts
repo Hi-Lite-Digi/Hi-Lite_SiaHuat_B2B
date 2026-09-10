@@ -5,7 +5,7 @@ export function replyStyleIssues(reply: Pick<ChatReply, "message" | "products" |
   const issues: string[] = [];
   if (reply.message.length > 600) issues.push("Keep the reply within 600 characters; product cards already contain the details.");
   if ((reply.message.match(/[?？]/g) ?? []).length > 1) issues.push("Ask only one focused question.");
-  if (/\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:size|smaller|larger)\b[^?？]{0,70}\b(?:colou?r|material)\b[^?？]*[?？]|\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:colou?r|material)\b[^?？]{0,70}\b(?:size|smaller|larger)\b[^?？]*[?？]/i.test(reply.message)) {
+  if (/\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:sizes?|smaller|larger)\b[^?？]{0,70}\b(?:colou?rs?|materials?)\b[^?？]*[?？]|\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:colou?rs?|materials?)\b[^?？]{0,70}\b(?:sizes?|smaller|larger)\b[^?？]*[?？]/i.test(reply.message)) {
     issues.push("Ask about only one missing attribute; do not bundle size with colour or material.");
   }
   if (/\b(?:Noted|Kindly|Please be advised|current online catalogue|saved requirements|staff review summary|knowledge base|server (?:shows|says|facts|guidance))\b/i.test(reply.message)) {

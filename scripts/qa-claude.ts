@@ -14,7 +14,7 @@ async function conversation(name: string, messages: string[]) {
     const response = await fetch(`${baseUrl}/api/chat`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId, message, history }),
-      signal: AbortSignal.timeout(32_000),
+      signal: AbortSignal.timeout(50_000),
     });
     const body = await response.json();
     assert.equal(response.status, 200, JSON.stringify(body));
@@ -45,7 +45,7 @@ async function photo() {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ sessionId: `claude-photo-${Date.now()}`, message: "What product is this?", history: [],
       image: { name: "reference.jpg", mimeType: "image/jpeg", dataUrl: `data:image/jpeg;base64,${data.toString("base64")}` } }),
-    signal: AbortSignal.timeout(32_000),
+    signal: AbortSignal.timeout(50_000),
   });
   const body = await response.json();
   records.push({ name: "stove-photo", provider: response.headers.get("x-chat-provider"), model: response.headers.get("x-chat-model"),

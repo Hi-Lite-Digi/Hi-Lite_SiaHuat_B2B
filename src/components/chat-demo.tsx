@@ -1408,7 +1408,7 @@ export function ChatDemo() {
           },
           ...(attachedImage ? { image: attachedImage } : {}),
         }),
-        signal: AbortSignal.timeout(32_000),
+        signal: AbortSignal.timeout(50_000),
       });
       const reply = await response.json() as ChatReply & { error?: string };
       if (sessionId.current !== requestSession) return;

@@ -54,6 +54,7 @@ import { requestedPackagingUnit, resolveProductQuantity } from "@/lib/enquiry-qu
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const sessionQueues = new Map<string, Promise<void>>();
 const CUSTOMER_REPLY_DEADLINE_MS = 26_000;
@@ -2920,7 +2921,8 @@ export async function POST(request: Request) {
     const catalogueDraft = await response.json() as ChatReply;
     const draft = input.data.image ? catalogueDraft : selectFreshCatalogueProduct(input.data.message, catalogueDraft);
     try {
-      const remainingMs = Math.max(1, 30_000 - (performance.now() - turnStarted));
+      // Leave one full wording request after a slow catalogue/vision pass.
+      const remainingMs = Math.max(1, 45_000 - (performance.now() - turnStarted));
       const reply = await composeClaudeReply(input.data, draft, AbortSignal.any([request.signal, AbortSignal.timeout(Math.ceil(remainingMs))]));
       return NextResponse.json(reply, { headers: { "x-chat-provider": "anthropic", "x-chat-model": claudeModel() } });
     } catch (error) {
