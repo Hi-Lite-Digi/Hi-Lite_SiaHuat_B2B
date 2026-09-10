@@ -4,6 +4,8 @@ import { claudeModel, composeClaudeReply, inspectImageWithClaude } from "@/lib/c
 import { withModelUsage } from "@/lib/model-usage";
 import { selectFreshCatalogueProduct } from "@/lib/fresh-product-selection";
 import { recognizedPhotoReply } from "@/lib/image-recognition";
+import type { ImageInspection } from "@/lib/image-recognition";
+import { photoCatalogueQuery } from "@/lib/photo-catalogue-query";
 import { displayedPriceComparison } from "@/lib/displayed-comparison";
 import { matchesProductRequirements, requirementLookupQuery } from "@/lib/product-requirements";
 import {
@@ -31,7 +33,7 @@ import {
 } from "@/lib/image-comparison";
 import {
   classifyImageRaster,
-  imageMatchesCandidate,
+  catalogueImageSimilarity,
   knownProductReferenceMismatchMessage,
   matchKnownComparisonReference,
   matchKnownProductReference,
@@ -1997,22 +1999,7 @@ function imageCatalogueMatchMessage(catalogueMessage: string, productCount: numb
     : `These are the closest catalogue matches for your ${requestedItem}. Choose one and I’ll check availability and price.`;
 }
 
-function conciseImageCatalogueQuery(message: string): string {
-  const normalized = message.toLowerCase();
-  if (/\b(?:camtainer|insulated beverage (?:dispenser|server)|(?:beverage|drink|tea) (?:dispenser|server))\b/.test(normalized)) {
-    return "Cambro Camtainer insulated beverage dispenser";
-  }
-  if (/\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose) (?:box|bin)|cambox)\b/.test(normalized)) {
-    return "plastic utility box Cambox storage box";
-  }
-  if (/\b(?:coffee|spice) grinder\b/.test(normalized)) return "coffee grinder";
-  if (/\b(?:shoe|shoes|footwear|boot|boots)\b/.test(normalized)) return "work shoes";
-  if (/\b(?:knife|knives|cleaver)\b/.test(normalized)) return "chef knife cleaver";
-  if (/\b(?:strainer|skimmer|colander|sieve)\b/.test(normalized)) return "food strainer skimmer colander";
-  return message;
-}
-
-async function groundImageNarrativeReply(reply: ChatReply, catalogueMessage: string): Promise<ChatReply | null> {
+async function groundImageNarrativeReply(reply: ImageInspection, catalogueMessage: string): Promise<ChatReply | null> {
   const explicitCategory = productCategory(catalogueMessage);
   if (reply.products.length > 0 || reply.selectedProduct) {
     if (!explicitCategory) return reply;
@@ -2081,7 +2068,7 @@ async function groundImageNarrativeReply(reply: ChatReply, catalogueMessage: str
   // Vision can correctly identify a family but occasionally describe it in prose
   // without returning product codes. Collapse that prose to a stable catalogue
   // query so the customer still receives grounded product cards.
-  const conciseQuery = conciseImageCatalogueQuery(reply.message);
+  const conciseQuery = photoCatalogueQuery(reply.message, reply.imageCategory);
   // Image narratives contain descriptive prose (prices, colours and possible
   // alternatives). Treat the collapsed product-family query as a normal
   // catalogue search first; requiring every prose token to match can discard
@@ -2091,7 +2078,7 @@ async function groundImageNarrativeReply(reply: ChatReply, catalogueMessage: str
   if (!grounded || grounded.products.length === 0) return null;
   return {
     ...grounded,
-    message: reply.message,
+    message: imageCatalogueMatchMessage(conciseQuery, grounded.products.length),
     suggestions: [],
   };
 }
@@ -2110,6 +2097,7 @@ function keepConsistentImageProductFamily(reply: ChatReply): ChatReply {
   const anchorText = productText(anchor);
   const utilityBoxAnchor = /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|bin)|cambox)\b/i.test(anchor.name);
   const familyPatterns = [
+    /\bshakers?\b/i,
     /\b(?:camtainer|(?:beverage|drink|tea)\s+(?:dispenser|server))\b/i,
     /\b(?:(?:utility|storage|dish|bus|cutlery|rectangular|multi[\s-]?purpose)\s+(?:box|bin)|cambox)\b/i,
     /\b(?:coffee|spice)\s+grinder\b/i,
@@ -2161,19 +2149,21 @@ async function requireVisualCatalogueEvidence(
   }));
   const evidence = await Promise.all(resolved.map(async (product) => ({
     product,
-    matches: Boolean(product.image_url)
-      && await imageMatchesCandidate(image, product.image_url as string),
+    score: product.image_url ? await catalogueImageSimilarity(image, product.image_url) : null,
   })));
+  console.info("[api/chat] catalogue image similarity", evidence.map(({product, score}) => ({stockId: product.stock_id, score})));
+  // A photo copied from a listing should lead with that image's closest
+  // match, rather than whichever loosely similar result lexical search ranks first.
   const matchedById = new Map(
     evidence
-      .filter((entry) => entry.matches)
+      .filter((entry) => entry.score !== null && entry.score >= 0.68)
+      .sort((left, right) => right.score! - left.score!)
       .map((entry) => [entry.product.stock_id.toUpperCase(), entry.product]),
   );
   if (matchedById.size === 0) return null;
 
-  const products = reply.products
-    .map((product) => matchedById.get(product.stock_id.toUpperCase()))
-    .filter((product): product is Product => Boolean(product));
+  const displayedIds = new Set(reply.products.map(product => product.stock_id.toUpperCase()));
+  const products = [...matchedById.values()].filter(product => displayedIds.has(product.stock_id.toUpperCase()));
   const selectedProduct = reply.selectedProduct
     ? matchedById.get(reply.selectedProduct.stock_id.toUpperCase()) ?? null
     : null;

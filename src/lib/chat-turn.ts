@@ -461,6 +461,8 @@ export function parseRequestedQuantity(message: string): QuantityParseResult {
     .replace(/\bbudget(?:\s+(?:is|of|around|under|below|up\s+to))?\s*[:=]?\s*\d+(?:[,.]\d+)*/gi, " ")
     .replace(/\b(?:under|below|less\s+than|up\s+to|at\s+most)\s+\d+(?:[,.]\d+)*\s*(?=(?:each|ea|per\s+(?:piece|pc|unit|item))\b)/gi, " ");
   const candidates = [
+    ...collectQuantityCandidates(message, /^\s*(?:actually[,\s]+(?:just\s+)?|just\s+)(-?\d+(?:\.\d+)?)\s*(?:(?:please|pls|thanks)\s*)?[.!?]*$/gi),
+    ...collectEnglishQuantityCandidates(message, new RegExp(`^\\s*(?:actually[,\\s]+(?:just\\s+)?|just\\s+)(${englishQuantityPattern})\\s*(?:(?:please|pls|thanks)\\s*)?[.!?]*$`, "gi")),
     ...collectQuantityCandidates(message, /\badd\s*(-?\d+(?:\.\d+)?)(?![\w.-])/gi),
     ...collectQuantityCandidates(message, /(?<![\w.])(-?\d+(?:\.\d+)?)\s+more\b/gi),
     ...collectEnglishQuantityCandidates(message, new RegExp(`\\b(?:add)\\s+(${englishQuantityPattern})\\b`, "gi")),

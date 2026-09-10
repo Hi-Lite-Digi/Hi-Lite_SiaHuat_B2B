@@ -38,6 +38,7 @@ import { confirmationMessage, enquirySummaryMessage, stockLimitMessage, stockUnc
 import { requestedPackagingUnit, resolveProductQuantity, type PackagingUnit } from "@/lib/enquiry-quantity";
 import { quickQuantityChoices, quickReplyLabel, withQuickReplies } from "@/lib/quick-replies";
 import { QuickReplyButtons } from "@/components/quick-reply-buttons";
+import { answersNoPreference } from "@/lib/catalogue-followup";
 import {
   conversationPdfText,
   enquiryReceiptTotals,
@@ -1279,6 +1280,7 @@ export function ChatDemo() {
     }
 
     const declinesUnavailableRecovery = declinesUnavailableItem(clean)
+      && !answersNoPreference(clean, messages.at(-1)?.role === "assistant" ? messages.at(-1)?.text : undefined)
       && hasUnavailableProductContext({
         confirmedProduct,
         pendingProduct,

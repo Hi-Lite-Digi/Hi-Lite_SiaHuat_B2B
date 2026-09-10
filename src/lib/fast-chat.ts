@@ -26,6 +26,7 @@ import {
   type FastReply,
 } from "@/lib/chat-intent";
 import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
+import { answersNoPreference } from "./catalogue-followup";
 import { declinesUnavailableItem, requestedDisplayedProductIndex, requestedQuantity } from "@/lib/chat-turn";
 
 export { isCatalogueRequest } from "@/lib/chat-intent";
@@ -471,6 +472,8 @@ export function getFastChatReply(input: FastChatInput): FastReply | null {
       activeTask ? ["Continue with my enquiry", "Start again"] : ["Find a product", "Browse products"],
     );
   }
+
+  if (answersNoPreference(message, input.history.at(-1)?.role === "assistant" ? input.history.at(-1)?.content : undefined)) return null;
 
   if (/^(cancel|cancel this|cancel enquiry|stop|never mind|nevermind|forget it)$/.test(simple)
     || declinesUnavailableItem(message.replace(/^ok(?:ay)?\s+/i, "")) && !/^(?:thanks?|thank you|thx)$/i.test(simple)) {

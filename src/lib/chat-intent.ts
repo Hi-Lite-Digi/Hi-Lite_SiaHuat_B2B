@@ -1,6 +1,7 @@
 import type { ChatStage, HistoryItem, ImageAttachment, Product } from "@/lib/chat-contract";
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { resolveRiceDispenserModels } from "@/lib/image-comparison";
+import { answersNoPreference } from "./catalogue-followup";
 
 export type FastChatInput = {
   sessionId: string;
@@ -382,11 +383,23 @@ export function catalogueHistoryWithClarification(message: string, history: Hist
   // supply clarification context. Searching farther back can revive a stale
   // product after the customer has already switched enquiries (for example,
   // an old knife question overriding the current wok search).
+  const isContextualDetail = /\b(?:this|that|it|same|picture|photo|stock)\b|\b\d+(?:\.\d+)?\s*(?:oz|ml|litres?|cm|mm|inch)\b/i.test(message);
   const latestClarification = latestTurn?.role === "assistant"
     && productCategory(latestTurn.content) !== null
-    && assistantClarificationPattern.test(latestTurn.content)
+    && (assistantClarificationPattern.test(latestTurn.content) || isContextualDetail)
     ? latestTurn
     : null;
+
+  // A photo-led enquiry may never name the item in customer text. Recover
+  // only its family from the latest reply; offered finishes are not choices.
+  if (latestClarification && !isNumberedComparisonSelection
+    && (latestAssistantCategory === "shaker"
+      || answersNoPreference(message, latestClarification.content)
+      || !assistantClarificationPattern.test(latestClarification.content))) {
+    const family = latestAssistantCategory === "shaker" && /\bcocktail\b/i.test(latestClarification.content)
+      ? "cocktail shaker" : latestAssistantCategory!;
+    return [...userHistory, family];
+  }
 
   return latestClarification
     ? [...userHistory, latestClarification.content]
@@ -480,8 +493,11 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   const joinedMessages = customerMessages.join(" ");
 
   if (activeCategory === "shaker") {
-    const source = [...customerMessages].reverse().find((content) => /\bshakers?\b/i.test(content)) ?? message;
-    return (currentCategory ? message : `${source} ${message}`).replace(/\bshakers\b/gi, "shaker");
+    const lastOtherCategory = customerMessages.findLastIndex(content => {
+      const category = requestedProductCategory(content);
+      return category !== null && category !== "shaker";
+    });
+    return (currentCategory ? message : customerMessages.slice(lastOtherCategory + 1).join(" ")).replace(/\bshakers\b/gi, "shaker");
   }
 
   if (activeCategory === "knife sharpener") {

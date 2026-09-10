@@ -42,6 +42,15 @@ test("requires visual agreement with a proposed catalogue image", async () => {
   assert.ok(await imageSimilarity(comparison.bytes, product.bytes) < 0.68);
 });
 
+test("a thin screenshot border and uneven white margins do not outrank the original catalogue image", async () => {
+  const product = await encoded("101CA-1520CBP-110.jpg");
+  const padded = await sharp(product.bytes).resize(397, 480, {fit:"contain",background:"white"})
+    .extend({top:55,bottom:18,left:0,right:0,background:"white"})
+    .composite([{input:Buffer.from('<svg width="397" height="1"><rect width="397" height="1" fill="#cccccc"/></svg>'),top:0,left:0}])
+    .png().toBuffer();
+  assert.ok(await imageSimilarity(padded, product.bytes) >= 0.97);
+});
+
 test("recognises only the verified local product references", async () => {
   const product = await encoded("101CA-1000LCD.jpg");
   const portraitProduct = await encoded("101CA-1000LCD-portrait.jpg");

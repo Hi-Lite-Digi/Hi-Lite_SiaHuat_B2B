@@ -137,7 +137,16 @@ export async function classifyImageRaster(image: EncodedImage): Promise<RasterIm
 }
 
 async function normalizedGreyscale(bytes: Buffer) {
-  const trimmed = await trimmedPipeline(bytes);
+  const decoded = await sharp(bytes).rotate().flatten({background:"#ffffff"}).toBuffer({resolveWithObject:true});
+  // A one-pixel screenshot frame otherwise prevents white-margin trimming,
+  // making the same product look less similar than a different-sized model.
+  // Exclude only the outermost pixels; curated recognition fingerprints keep
+  // their existing preprocessing and thresholds.
+  const inset = Math.min(3, Math.round(Math.min(decoded.info.width, decoded.info.height) * 0.005));
+  const unframed = inset > 0
+    ? await sharp(decoded.data).extract({left:inset,top:inset,width:decoded.info.width-inset*2,height:decoded.info.height-inset*2}).toBuffer()
+    : decoded.data;
+  const trimmed = await trimmedPipeline(unframed);
   return trimmed
     .resize(64, 64, { fit: "contain", background: "#ffffff" })
     .greyscale()
@@ -257,19 +266,23 @@ export async function imageSimilarity(source: Buffer, candidate: Buffer) {
   return bufferSimilarity(left, right);
 }
 
-export async function imageMatchesCandidate(image: EncodedImage, candidateUrl: string) {
+export async function catalogueImageSimilarity(image: EncodedImage, candidateUrl: string): Promise<number | null> {
   try {
     const response = await fetch(candidateUrl, {
       cache: "no-store",
       signal: AbortSignal.timeout(2_500),
     });
-    if (!response.ok) return false;
+    if (!response.ok) return null;
     const length = Number(response.headers.get("content-length") ?? 0);
-    if (length > 5_000_000) return false;
+    if (length > 5_000_000) return null;
     const candidate = Buffer.from(await response.arrayBuffer());
-    if (candidate.length > 5_000_000) return false;
-    return await imageSimilarity(dataUrlBuffer(image.dataUrl), candidate) >= 0.68;
+    if (candidate.length > 5_000_000) return null;
+    return await imageSimilarity(dataUrlBuffer(image.dataUrl), candidate);
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function imageMatchesCandidate(image: EncodedImage, candidateUrl: string) {
+  return (await catalogueImageSimilarity(image, candidateUrl) ?? 0) >= 0.68;
 }

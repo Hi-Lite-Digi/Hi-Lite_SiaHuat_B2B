@@ -24,9 +24,22 @@ export function matchesShakerRequest(requested: string, candidate: string) {
   if (!/\bshakers?\b/i.test(requested)) return true;
   if (!/\bshakers?\b/i.test(candidate)) return false;
   const style = requested.match(/\b(boston|cobbler|french|salt|pepper|sugar)\b/i)?.[1];
-  if (style && !new RegExp(`\\b${style}\\b`, "i").test(candidate)) return false;
+  if (style && !new RegExp(`\\b${style}\\b`, "i").test(candidate)
+    && !(style.toLowerCase() === "cobbler" && /\b3\s*(?:pc|pcs|piece)s?\b/i.test(candidate))) return false;
   if (/\b(?:boston|cocktail|cobbler|french)\b/i.test(requested)
     && /\b(?:salt|pepper|sugar)\b/i.test(candidate)) return false;
+  if (/\b(?:not|no|without)\s+(?:the\s+)?copper\b/i.test(requested)) {
+    if (/\bcopper\b/i.test(candidate)) return false;
+  } else if (/\bcopper\b/i.test(requested) && !/\bcopper\b/i.test(candidate)) return false;
+  const capacity = [...requested.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:fl\.?\s*)?oz\b/gi)].at(-1)?.[1];
+  if (capacity) {
+    const ounces = [...candidate.matchAll(/\b(\d+(?:\.\d+)?)\s*(?:fl\.?\s*)?oz\b/gi)];
+    if (ounces.length) return ounces.some(match => Number(match[1]) === Number(capacity));
+    // Suppliers commonly round 16oz to 480ml / 0.48L. Never accept an
+    // explicitly different ounce size merely because a metric label is close.
+    return [...candidate.matchAll(/\b(\d+(?:\.\d+)?)\s*(ml|cc|l|litres?|liters?)\b/gi)]
+      .some(match => Math.abs(Number(match[1]) * (/^(?:ml|cc)$/i.test(match[2]) ? 1 : 1000) / 29.5735 - Number(capacity)) <= 0.3);
+  }
   return true;
 }
 
