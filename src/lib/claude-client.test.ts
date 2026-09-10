@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import sharp from "sharp";
 import { applyClaudeWording, composeClaudeReply, inspectImageWithClaude } from "./claude-client";
 import type { ChatReply, ChatRequest } from "./chat-contract";
 import { withModelUsage } from "./model-usage";
@@ -101,20 +102,24 @@ test("a reply referring to invisible cards receives one repair without changing 
 });
 
 test("vision sends pixels without trusting a SKU-like filename", async t => {
+  const pixels = await sharp({create:{width:200,height:100,channels:3,background:"white"}}).png().toBuffer();
   const original = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "test-secret";
   t.after(() => { if (original === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = original; });
   t.mock.method(globalThis, "fetch", async (_url: string, options: RequestInit) => {
     const body = JSON.parse(String(options.body));
     assert.doesNotMatch(String(options.body), /FAKE-SKU/);
-    assert.equal(body.messages.at(-1).content[0].source.data, "aGVsbG8=");
+    const supplied = await sharp(Buffer.from(body.messages.at(-1).content[0].source.data,"base64")).metadata();
+    assert.equal(supplied.width, 200);
     assert.equal(body.messages.length, 1);
     assert.ok(body.output_config.format.schema.required.includes("imageCategory"));
-    return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ message: "IMAGE_KIND=PRODUCT\nA round plate with an unreadable brand", imageCategory: "plate", productIds: [], suggestions: [] }) }] });
+    return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ message: "IMAGE_KIND=SCREENSHOT\nA round plate with an unreadable brand", imageSubject: "single_product", imageBounds: {left:20,top:10,right:180,bottom:90}, imageCategory: "plate", productIds: [], suggestions: [] }) }] });
   });
-  const reply = await inspectImageWithClaude({ ...input, history: [{role:"user",content:"The previous item was a knife"}], image: { name: "FAKE-SKU.png", mimeType: "image/png", dataUrl: "data:image/png;base64,aGVsbG8=" } });
+  const reply = await inspectImageWithClaude({ ...input, history: [{role:"user",content:"The previous item was a knife"}], image: { name: "FAKE-SKU.png", mimeType: "image/png", dataUrl: `data:image/png;base64,${pixels.toString("base64")}` } });
   assert.deepEqual(reply.products, []);
   assert.equal(reply.imageCategory, "plate");
+  assert.match(reply.message, /^IMAGE_KIND=PRODUCT/);
+  assert.deepEqual(reply.imageBounds, {left:100,top:100,right:900,bottom:900});
 });
 
 test("provider failures do not expose error bodies or silently use another provider", async t => {
@@ -124,6 +129,21 @@ test("provider failures do not expose error bodies or silently use another provi
   const fetchMock = t.mock.method(globalThis, "fetch", async () => new Response("private provider details", { status: 429 }));
   await assert.rejects(composeClaudeReply(input, draft), /^Error: CLAUDE_HTTP_429$/);
   assert.equal(fetchMock.mock.callCount(), 1);
+});
+
+test("a comparison document cannot supply a single-product crop or category", async t => {
+  const original = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "test-secret";
+  t.after(() => { if (original === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = original; });
+  const pixels = await sharp({create:{width:200,height:100,channels:3,background:"white"}}).png().toBuffer();
+  t.mock.method(globalThis, "fetch", async () => Response.json({ stop_reason:"end_turn", content:[{type:"text",text:JSON.stringify({
+    message:"IMAGE_KIND=SCREENSHOT. A rice dispenser comparison table.", imageSubject:"comparison_or_document", imageCategory:"rice dispenser",
+    imageBounds:{left:20,top:10,right:180,bottom:90}, productIds:[],suggestions:[],answerOptions:[],
+  })}] }));
+  const reply = await inspectImageWithClaude({...input,image:{name:"comparison.png",mimeType:"image/png",dataUrl:`data:image/png;base64,${pixels.toString("base64")}`}});
+  assert.equal(reply.imageBounds,null);
+  assert.equal(reply.imageCategory,null);
+  assert.match(reply.message,/^IMAGE_KIND=SCREENSHOT/);
 });
 
 test("a dropped connection gets one retry without switching providers", async t => {

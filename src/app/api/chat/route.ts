@@ -3,7 +3,8 @@ import { chatRequestSchema, type ChatReply, type ChatRequest, type Product } fro
 import { claudeModel, composeClaudeReply, inspectImageWithClaude } from "@/lib/claude-client";
 import { withModelUsage } from "@/lib/model-usage";
 import { selectFreshCatalogueProduct } from "@/lib/fresh-product-selection";
-import { recognizedPhotoReply } from "@/lib/image-recognition";
+import { recognizedPhotoReply, recognizedImageCategory } from "@/lib/image-recognition";
+import { cropProductPhoto } from "@/lib/product-image-crop";
 import type { ImageInspection } from "@/lib/image-recognition";
 import { photoCatalogueQuery } from "@/lib/photo-catalogue-query";
 import { lookupCatalogueImage, directCatalogueImageReply, visionValidatedLibraryReply } from "@/lib/catalogue-image-library";
@@ -2351,7 +2352,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     : undefined;
   // Compare against the entire catalogue before asking vision to name a family.
   // Exact matches still pass current product facts, user constraints and stock gates.
-  const imageLibrary = input.image && !isImageComparisonRequest(input.message) && !excludedStockIds
+  let imageLibrary = input.image && !isImageComparisonRequest(input.message) && !excludedStockIds
     ? await lookupCatalogueImage(input.image)
     : null;
   const imageLibraryReply = imageLibrary ? directCatalogueImageReply(imageLibrary, prefersChinese(input)) : null;
@@ -2611,8 +2612,18 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
     return comparisonFallback;
   }
 
+  // Website/chat frames are not part of the product. Only crop a single object
+  // independently identified by vision; tables and uncertain images keep the
+  // existing clarification path. Never trust a crop as an identity by itself.
+  const croppedPhoto = input.image && visionReply && recognizedImageCategory(visionReply)
+    && !referencesMultipleComparisonItems(input.message)
+    ? await cropProductPhoto(input.image, visionReply.imageBounds)
+    : null;
+  const cropRaster = croppedPhoto ? await classifyImageRaster(croppedPhoto) : null;
+  const evidenceImage = croppedPhoto && cropRaster === "product-like" ? croppedPhoto : input.image;
+  const evidenceRaster = evidenceImage === croppedPhoto ? cropRaster : await rasterKindPromise;
   const recognizedFallback = input.image && visionReply
-    ? recognizedPhotoReply(input, visionReply, (await rasterKindPromise) ?? "unknown")
+    ? recognizedPhotoReply(input, visionReply, evidenceRaster ?? "unknown")
     : null;
   // Preserve the identified family while the exact catalogue match is checked,
   // including if that lookup runs into the customer response deadline.
@@ -2620,28 +2631,46 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   if (input.image && visionReply) console.info("[api/chat] image classification", {
     raster: await rasterKindPromise,
     kind: visionImageKind(visionReply.message),
+    category: visionReply.imageCategory,
+    cropped: evidenceImage === croppedPhoto && Boolean(croppedPhoto),
     recognizedType: Boolean(recognizedFallback),
   });
 
-  let groundedImageReply = input.image && visionReply
-    ? await groundImageNarrativeReply(visionReply, catalogueMessage).catch((error) => {
+  if (croppedPhoto && evidenceImage === croppedPhoto && !excludedStockIds) {
+    const croppedLibrary = await lookupCatalogueImage(croppedPhoto);
+    if (croppedLibrary) imageLibrary = croppedLibrary;
+    const croppedReply = croppedLibrary ? directCatalogueImageReply(croppedLibrary, prefersChinese(input)) : null;
+    if (croppedReply) {
+      const constrained = enforceRequestedDimensions(enforceExplicitProductCategory(croppedReply, catalogueMessage), catalogueMessage);
+      if (constrained.products.length === croppedReply.products.length) {
+        rememberGrounded(constrained);
+        const liveReply = await addLiveCatalogueState(constrained);
+        return guideImageProductInformation(input, enforceLiveCheckoutGate(explainUnavailableProducts(liveReply)));
+      }
+    }
+  }
+
+  // Check the image shortlist against vision's family before running broader
+  // text search. Otherwise a recognised screenshot can lose its best candidate
+  // to a differently worded category or a slow, unnecessary catalogue search.
+  let groundedImageReply = visionReply
+    ? visionValidatedLibraryReply(imageLibrary, visionReply.imageCategory, visionReply.message)
+    : null;
+  if (!groundedImageReply && input.image && visionReply) {
+    groundedImageReply = await groundImageNarrativeReply(visionReply, catalogueMessage).catch((error) => {
         console.error("[api/chat] image narrative grounding failed", { error });
         return null;
-      })
-    : null;
-  if (!groundedImageReply?.products.length && visionReply) {
-    groundedImageReply = visionValidatedLibraryReply(imageLibrary, visionReply.imageCategory, visionReply.message) ?? groundedImageReply;
+      });
   }
   if (input.image) {
-    const rasterKind = await rasterKindPromise;
-    if (rasterKind !== "product-like") {
+    if (evidenceRaster !== "product-like") {
       const safeFallback = ambiguousPhotoReply(input);
       rememberGrounded(safeFallback);
       return safeFallback;
     }
 
     groundedImageReply = groundedImageReply
-      ? await requireVisualCatalogueEvidence(input.image, groundedImageReply)
+      ? await requireVisualCatalogueEvidence(evidenceImage!, groundedImageReply)
       : null;
     if (!groundedImageReply) {
       const safeFallback = recognizedFallback ?? ambiguousPhotoReply(input);

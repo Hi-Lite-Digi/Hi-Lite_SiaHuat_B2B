@@ -1,6 +1,9 @@
+import { productCategory } from "./chat-intent";
+
 /** Search for the main object identified by vision, not a component in its description. */
 export function photoCatalogueQuery(message: string, imageCategory?: string | null): string {
   const subject = imageCategory?.trim() || message;
+  if (productCategory(subject) === "gas torch burner") return "gas torch burner";
   if (/\bshakers?\b/i.test(subject)) {
     const finish = /\bcopper\b/i.test(message) ? "copper" : "";
     const type = /\b(?:salt|pepper|sugar)\b/i.test(subject)

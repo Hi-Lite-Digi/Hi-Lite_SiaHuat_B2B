@@ -67,6 +67,15 @@ test("a merely similar image cannot replace vision's independently recognised fa
   assert.equal(visionValidatedLibraryReply(result, "chef knife", "steel knife"), null);
 });
 
+test("a screenshot below the direct threshold keeps its torch candidate after vision confirmation", () => {
+  const result = {kind: "candidates" as const, matches:[match("CB-TC-CKWH",0.9816)], products:[product("CB-TC-CKWH","Iwatani Cassette Gas Torch Burner L16cm,White")], totalProducts:1};
+  const reply = visionValidatedLibraryReply(result,"torch lighter","A white handheld Iwatani torch lighter");
+  assert.equal(reply!.products[0].stock_id,"CB-TC-CKWH");
+  assert.equal(reply!.selectedProduct,null);
+  assert.match(reply!.message,/exact model.*not confirmed/);
+  assert.equal(visionValidatedLibraryReply(result,"coffee grinder","A white coffee grinder"),null);
+});
+
 test("an unavailable image index falls back without failing the photo request", async () => {
   const originalFetch = globalThis.fetch;
   const saved = { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_PUBLISHABLE_KEY };
