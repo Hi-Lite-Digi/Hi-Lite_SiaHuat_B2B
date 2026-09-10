@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { beginModelCall, calculateModelUsage, withModelUsage } from "./model-usage";
+import { beginModelCall, calculateModelUsage, calculateClaudeUsage, withModelUsage } from "./model-usage";
+
+test("Claude includes separate cache tokens once and charges each cache duration", () => {
+  const usage = calculateClaudeUsage("claude-sonnet-5", { input_tokens: 1000, output_tokens: 300,
+    cache_read_input_tokens: 3000, cache_creation_input_tokens: 1000,
+    cache_creation: { ephemeral_5m_input_tokens: 800, ephemeral_1h_input_tokens: 200 } });
+  assert.equal(usage?.inputTokens, 5000);
+  assert.ok(Math.abs(usage!.estimatedUsd! - 0.0084) < 1e-12);
+  assert.equal(calculateClaudeUsage("unknown", { input_tokens: 1, output_tokens: 1 })?.estimatedUsd, null);
+  assert.equal(calculateClaudeUsage("claude-sonnet-5", { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 1, cache_creation: { ephemeral_1h_input_tokens: 2 } }), null);
+});
 
 test("Luna charges cache reads and writes separately without double-counting reasoning", () => {
   const usage = calculateModelUsage("gpt-5.6-luna", { input_tokens: 5000, output_tokens: 300,

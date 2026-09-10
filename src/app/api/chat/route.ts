@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { chatRequestSchema, type ChatReply, type ChatRequest, type Product } from "@/lib/chat-contract";
-import { composeLunaReply, inspectImageWithLuna } from "@/lib/luna-client";
+import { claudeModel, composeClaudeReply, inspectImageWithClaude } from "@/lib/claude-client";
 import { withModelUsage } from "@/lib/model-usage";
 import { selectFreshCatalogueProduct } from "@/lib/fresh-product-selection";
 import { recognizedPhotoReply } from "@/lib/image-recognition";
@@ -2534,7 +2534,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   }
 
   const visionAbortController = new AbortController();
-  const visionReplyPromise = (input.image ? inspectImageWithLuna(
+  const visionReplyPromise = (input.image ? inspectImageWithClaude(
     workflowMessage === input.message ? input : { ...input, message: workflowMessage },
     visionAbortController.signal,
   ) : Promise.resolve<ChatReply>({
@@ -2543,7 +2543,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   })).catch((error) => {
     if (visionAbortController.signal.aborted) return null;
     visionError = error;
-    console.error("[api/chat] Luna reply failed", error);
+    console.error("[api/chat] Claude reply failed", error);
     return null;
   });
   const groundedReply = input.image
@@ -2564,7 +2564,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   }
   const visionReply = groundedReply ? null : await visionReplyPromise;
   if (!groundedReply && !visionReply) {
-    if (visionError instanceof Error && visionError.message === "LUNA_NOT_CONFIGURED") throw visionError;
+    if (visionError instanceof Error && visionError.message === "CLAUDE_NOT_CONFIGURED") throw visionError;
     return quickFallback(input, null);
   }
 
@@ -2867,7 +2867,7 @@ async function processChat(input: ChatRequest) {
         }, CUSTOMER_REPLY_DEADLINE_MS);
       }),
     ]);
-    console.log("[api/chat] Luna brain reply", {
+    console.log("[api/chat] Claude brain reply", {
       durationMs: Math.round(performance.now() - startedAt),
       productCount: reply.products.length,
       stage: reply.stage,
@@ -2875,7 +2875,7 @@ async function processChat(input: ChatRequest) {
     return NextResponse.json(customerReply(reply, input));
   } catch (error) {
     console.error("Chat failed", error);
-    if (error instanceof Error && error.message === "LUNA_NOT_CONFIGURED") {
+    if (error instanceof Error && error.message === "CLAUDE_NOT_CONFIGURED") {
       return NextResponse.json(
         { error: "The conversational assistant is not configured yet." },
         { status: 503 },
@@ -2910,7 +2910,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!process.env.OPENAI_API_KEY) {
+  if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json({ error: "The conversational assistant is not configured yet." }, { status: 503 });
   }
   return inSessionOrder(input.data.sessionId, () => withModelUsage(async () => {
@@ -2921,10 +2921,10 @@ export async function POST(request: Request) {
     const draft = input.data.image ? catalogueDraft : selectFreshCatalogueProduct(input.data.message, catalogueDraft);
     try {
       const remainingMs = Math.max(1, 30_000 - (performance.now() - turnStarted));
-      const reply = await composeLunaReply(input.data, draft, AbortSignal.any([request.signal, AbortSignal.timeout(Math.ceil(remainingMs))]));
-      return NextResponse.json(reply, { headers: { "x-chat-provider": "openai", "x-chat-model": process.env.OPENAI_MODEL || "gpt-5.6-luna" } });
+      const reply = await composeClaudeReply(input.data, draft, AbortSignal.any([request.signal, AbortSignal.timeout(Math.ceil(remainingMs))]));
+      return NextResponse.json(reply, { headers: { "x-chat-provider": "anthropic", "x-chat-model": claudeModel() } });
     } catch (error) {
-      console.warn("[api/chat] Luna wording unavailable", { reason: error instanceof Error ? error.message : "unknown" });
+      console.warn("[api/chat] Claude wording unavailable", { reason: error instanceof Error ? error.message : "unknown" });
       // Keep verified product data usable during an outage; never call the old provider.
       return NextResponse.json(draft, { headers: { "x-chat-provider": "deterministic-fallback" } });
     }

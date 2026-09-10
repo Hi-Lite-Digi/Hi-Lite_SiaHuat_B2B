@@ -1,8 +1,8 @@
 # Hi-Lite × Sia Huat Product Assistant
 
-Phase 1 is a conversational product-enquiry web application using OpenAI GPT-5.6 Luna for replies and image analysis, Deepgram for voice transcription, and a Sia Huat catalogue in Supabase Postgres. The web application's runtime no longer calls the former n8n workflows or Anthropic.
+Phase 1 is a conversational product-enquiry web application using Claude Sonnet 5 for replies and image analysis, Deepgram for voice transcription, and a Sia Huat catalogue in Supabase Postgres. The web application's runtime does not call the former n8n workflows or OpenAI.
 
-See [docs/LUNA-MIGRATION.md](docs/LUNA-MIGRATION.md) for the provider configuration, reply behaviour, verification, and release checklist.
+See [docs/CLAUDE-RESTORATION.md](docs/CLAUDE-RESTORATION.md) for the current provider configuration and verification.
 
 ## Live demo
 
@@ -18,7 +18,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design, trust bo
 
 ## Local setup
 
-1. Copy `.env.example` to `.env.local` and add the server-only OpenAI and Deepgram keys and existing catalogue configuration.
+1. Copy `.env.example` to `.env.local` and add the server-only Anthropic and Deepgram keys and existing catalogue configuration.
 2. Install dependencies with `pnpm install`.
 3. Run `pnpm dev`.
 4. Open `http://localhost:3000` or the port printed by Next.js.
@@ -26,8 +26,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design, trust bo
 Required application variables:
 
 ```text
-OPENAI_API_KEY=your-openai-key
-OPENAI_MODEL=gpt-5.6-luna
+ANTHROPIC_API_KEY=your-anthropic-key
+ANTHROPIC_MODEL=claude-sonnet-5
 DEEPGRAM_API_KEY=your-deepgram-key
 DEEPGRAM_MODEL=nova-3
 SUPABASE_URL=https://your-project.supabase.co
@@ -69,7 +69,7 @@ The local test flow should cover:
 3. Confirm that displayed products match Supabase.
 4. Select a product and enter a quantity.
 5. Verify the calculated total and human-review wording.
-6. Upload a product photo. Luna inspects the actual pixels; catalogue
+6. Upload a product photo. Claude inspects the actual pixels; catalogue
    lookups verify any potential match. Filenames are never visual evidence.
 
 ## Deployment policy

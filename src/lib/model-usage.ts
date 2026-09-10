@@ -8,6 +8,14 @@ export type ResponsesUsage = {
   output_tokens_details?: { reasoning_tokens?: number };
 };
 
+export type ClaudeUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
+};
+
 type UsageRecord = {
   model: string;
   inputTokens: number;
@@ -54,6 +62,32 @@ export function recordModelUsage(model: string, usage: ResponsesUsage | undefine
   const record = calculateModelUsage(model, usage);
   // No customer messages, images, catalogue contents or credentials in usage logs.
   console.info("[ai/usage]", JSON.stringify({ provider: "openai", requestId,
+    ...(record ?? { model, usage: "unavailable" }) }));
+  return record;
+}
+
+/** Anthropic reports uncached input separately from cache reads/writes. */
+export function calculateClaudeUsage(model: string, usage?: ClaudeUsage): UsageRecord | null {
+  if (!usage || !count(usage.input_tokens) || !count(usage.output_tokens)) return null;
+  const cachedTokens = usage.cache_read_input_tokens ?? 0;
+  const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+  const hourWrites = usage.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+  const shortWrites = usage.cache_creation?.ephemeral_5m_input_tokens ?? cacheWriteTokens - hourWrites;
+  if (![cachedTokens, cacheWriteTokens, hourWrites, shortWrites].every(count) || hourWrites + shortWrites !== cacheWriteTokens) return null;
+  const inputRate = model === "claude-sonnet-5" ? 2 : model === "claude-opus-5" ? 5 : null;
+  const outputRate = inputRate === null ? null : inputRate * 5;
+  const estimatedUsd = inputRate === null || outputRate === null ? null : (
+    usage.input_tokens * inputRate + cachedTokens * inputRate * 0.1
+    + shortWrites * inputRate * 1.25 + hourWrites * inputRate * 2
+    + usage.output_tokens * outputRate
+  ) / 1_000_000;
+  return { model, inputTokens: usage.input_tokens + cachedTokens + cacheWriteTokens,
+    cachedTokens, cacheWriteTokens, outputTokens: usage.output_tokens, reasoningTokens: 0, estimatedUsd };
+}
+
+export function recordClaudeUsage(model: string, usage: ClaudeUsage | undefined, requestId: string | null) {
+  const record = calculateClaudeUsage(model, usage);
+  console.info("[ai/usage]", JSON.stringify({ provider: "anthropic", requestId,
     ...(record ?? { model, usage: "unavailable" }) }));
   return record;
 }

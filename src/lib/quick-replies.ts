@@ -8,6 +8,9 @@ export function isGroundedAnswer(answer: string, message: string) {
   const value = answer.trim();
   const question = message.match(/[^.!?。！？\n]*[?？]/g)?.at(-1) ?? "";
   if (!question || !value || value.length > 60 || /[\n?？]|https?:|\b(?:buy|pay|checkout|order now|notify|contact|call|send|download|submit|discount|free shipping)\b/i.test(value)) return false;
+  // Even a bare "Yes" would be an unsupported command for a stock-check offer.
+  if (/\b(?:check|confirm|verify|recheck) (?:the )?(?:live )?(?:stock|availability)\b|\bstock check\b/i.test(question)) return false;
+  if (/\b(?:check|confirm|verify|recheck)\b.*\b(?:stock|availability)|\badd\b.*\b(?:enquiry|quote|cart)\b|(?:检查|查看|确认|查询)库存|加入(?:询价|报价|购物车)/i.test(value)) return false;
   // Bare numbers could be interpreted as a product index or order quantity.
   if (/^\d+$/.test(value)) return false;
   if (/^(?:yes|no)(?:,?\s+(?:please|thanks|thank you))?[.!]?$/i.test(value)) {

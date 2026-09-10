@@ -55,6 +55,16 @@ test("removing products does not resurrect old numbered choices", () => {
   assert.deepEqual(reply.suggestions, ["Choose another item"]);
 });
 
+test("generated stock-check actions cannot replace product selection", () => {
+  const message = "This is the cartridge I found; want me to check live stock before adding it to your enquiry?";
+  assert.equal(isGroundedAnswer("Yes, check stock", message), false);
+  assert.equal(isGroundedAnswer("Check live stock", message), false);
+  assert.equal(isGroundedAnswer("Yes", message), false);
+  const product = { stock_id: "GAS", name: "Gas cartridge", status: "Active", list_price: 3.85, uom_id: "PC" };
+  const reply = withQuickReplies({ ...empty, message, products: [product] }, ["Yes, check stock"], ["1"]);
+  assert.deepEqual(reply.suggestions, ["1"]);
+});
+
 test("quantity shortcuts respect known stock and remain distinct from product options", () => {
   assert.deepEqual(quickQuantityChoices(1), ["1", "Choose another item"]);
   assert.deepEqual(quickQuantityChoices(0), ["Choose another item"]);

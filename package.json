@@ -20,7 +20,7 @@
     "db:verify": "tsx scripts/verify-database.ts",
     "catalogue:crawl": "tsx scripts/crawl-siahuat.ts",
     "catalogue:import": "tsx scripts/crawl-siahuat.ts --limit=1 --import",
-    "qa:luna": "tsx scripts/qa-luna.ts"
+    "qa:claude": "tsx scripts/qa-claude.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
