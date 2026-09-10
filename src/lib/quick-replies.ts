@@ -1,7 +1,7 @@
 import type { ChatReply } from "./chat-contract";
 import { suggestionLabel } from "./enquiry-copy";
 
-type Reply = Pick<ChatReply, "message" | "stage" | "products" | "selectedProduct" | "suggestions">;
+type Reply = Pick<ChatReply, "message" | "stage" | "products" | "selectedProduct" | "suggestions" | "imageMatch">;
 
 /** Generated choices are customer answers, never new workflow commands or facts. */
 export function isGroundedAnswer(answer: string, message: string) {
@@ -32,8 +32,9 @@ export function withQuickReplies<T extends Reply>(reply: T, answers: string[] = 
   let choices = reply.suggestions.filter(usableAction);
   const refersToSummaryOffer = /^\s*(?:want me to|would you like me to|shall i|can i)\s+(?:do that|go ahead|prepare (?:it|that)|put that together)[?\s]*$/i.test(question)
     && /\b(?:summary|requirements|pdf)\b/i.test(reply.message) && /\b(?:sales|share)\b/i.test(reply.message);
-  if (reply.selectedProduct && reply.stage === "clarify"
-    && /^\s*(?:(?:just\s+)?to confirm[,—–-]?\s*)?(?:would|could|can|do|does|is|are|shall|want|will)\b/i.test(question)) {
+  const verifiedPhoto = reply.imageMatch?.kind === "direct" && reply.products.length === 1;
+  if ((reply.selectedProduct || verifiedPhoto) && reply.stage === "clarify"
+    && (verifiedPhoto || /^\s*(?:(?:just\s+)?to confirm[,—–-]?\s*)?(?:would|could|can|do|does|is|are|shall|want|will)\b/i.test(question))) {
     choices = zh ? ["是的，就是这款", "选择其他商品"] : ["Yes, this is it", "Choose another item"];
   } else if (/\b(?:summary|requirements|pdf)\b/i.test(question) && /\b(?:sales|share|prepare|put|send)\b/i.test(question)
     || /(?:摘要|需求|PDF).*(?:销售|准备|整理)|(?:准备|整理).*(?:摘要|需求)/i.test(question) || refersToSummaryOffer) {

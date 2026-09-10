@@ -50,13 +50,14 @@ Set `CATALOGUE_IMAGE_LOOKUP_ENABLED=false` to disable this enhancement and use t
 
 ## Verification
 
-- All 158 automated tests (including the four voice-route checks) passed; lint and production build passed.
+- All 159 automated tests (including the four voice-route checks) passed; lint and production build passed.
 - Final catalogue sample: 48/48 original, resized JPEG and bordered-image checks retrieved the expected SKU. A low-detail reference was explicitly skipped. Earlier broader sampling also retrieved 51/51 after replacing approximate retrieval with exhaustive shortlist ranking.
 - Blank image produced no library match. The alternate-angle outdoor stove photo scored approximately 0.85 and required Claude validation, rather than becoming an automatic exact match.
 - Final sample lookup latency: median 597 ms, p95 702 ms, max 954 ms. The much larger stove photo took about 4.4 seconds including image decoding; these timings exclude the final conversational reply.
 - Local browser: customer's torch photo returned CB-TC-CKWH; typed confirmation checked 883 available; 1,000 PC was rejected; changing to 12 PC produced $692.52 ex GST.
 - Local browser: copper shaker photo returned CSD16C; reused Camtainer photo offered both 5.7 L and 44.5 L variants; alternate stove photo completed the existing Claude validation flow and returned CB-ODX-1-BK.
 - Live browser: correct shaker and shared Camtainer variants verified. The alternate stove photo retained its cooking-stove identification and asked for model confirmation when exact matching could not finish confidently. A follow-up quantity parsing fix accepts polite replies such as "200 please" while keeping stock limits and specification/price exclusions intact.
+- Verified single-photo matches always include an affirmative confirmation button, even when the wording model proposes only a negative answer. Ambiguous matches retain separate variant choices.
 
 Run the repeatable image check after indexing (uses locally cached catalogue images):
 

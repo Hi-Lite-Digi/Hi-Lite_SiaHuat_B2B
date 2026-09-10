@@ -17,6 +17,14 @@ test("a selected-product confirmation always includes a working affirmative acti
   assert.deepEqual(reply.suggestions, ["Yes, this is it", "Choose another item"]);
 });
 
+test("a verified photo always offers confirmation before any product is selected", () => {
+  const product = { stock_id: "CSD16C", name: "Copper Cocktail Shaker", status: "Active", list_price: 19.82, uom_id: "PC" };
+  const direct = { ...empty, message: "Is that the one you meant?", products: [product], imageMatch: { source: "catalogue_image_library" as const, kind: "direct" as const, score: 1 } };
+  assert.deepEqual(withQuickReplies(direct, ["No, not this one"]).suggestions, ["Yes, this is it", "Choose another item"]);
+  const ambiguous = { ...direct, message: "Which size do you need?", products: [product, { ...product, stock_id: "CSD24C" }], imageMatch: { ...direct.imageMatch, kind: "ambiguous" as const } };
+  assert.deepEqual(withQuickReplies(ambiguous).suggestions, ["1", "2"]);
+});
+
 test("the pizza-cutter screenshot's summary offer always has a working action", () => {
   const reply = withQuickReplies({ ...empty, message: "I couldn't find a pizza cutter. Want me to put your requirements together as a summary you can share with sales?" });
   assert.deepEqual(reply.suggestions, ["Prepare sales summary", "Choose another item"]);
