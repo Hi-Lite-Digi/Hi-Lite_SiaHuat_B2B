@@ -70,6 +70,11 @@ export const chatReplySchema = z.object({
   selectedProduct: productSchema.nullable().default(null),
   refreshedProduct: productSchema.nullable().optional(),
   suggestions: z.array(z.string()).default([]),
+  imageMatch: z.object({
+    source: z.literal("catalogue_image_library"),
+    kind: z.enum(["direct", "ambiguous"]),
+    score: z.number().min(0).max(1),
+  }).optional(),
 });
 
 export type ChatStage = z.infer<typeof chatStageSchema>;

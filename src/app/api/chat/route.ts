@@ -6,6 +6,7 @@ import { selectFreshCatalogueProduct } from "@/lib/fresh-product-selection";
 import { recognizedPhotoReply } from "@/lib/image-recognition";
 import type { ImageInspection } from "@/lib/image-recognition";
 import { photoCatalogueQuery } from "@/lib/photo-catalogue-query";
+import { lookupCatalogueImage, directCatalogueImageReply, visionValidatedLibraryReply } from "@/lib/catalogue-image-library";
 import { displayedPriceComparison } from "@/lib/displayed-comparison";
 import { matchesProductRequirements, requirementLookupQuery } from "@/lib/product-requirements";
 import {
@@ -2348,6 +2349,21 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
         ...(input.context?.displayedProducts ?? []).map((product) => product.stock_id),
       ])
     : undefined;
+  // Compare against the entire catalogue before asking vision to name a family.
+  // Exact matches still pass current product facts, user constraints and stock gates.
+  const imageLibrary = input.image && !isImageComparisonRequest(input.message) && !excludedStockIds
+    ? await lookupCatalogueImage(input.image)
+    : null;
+  const imageLibraryReply = imageLibrary ? directCatalogueImageReply(imageLibrary, prefersChinese(input)) : null;
+  if (imageLibraryReply) {
+    const constrained = enforceRequestedDimensions(enforceExplicitProductCategory(imageLibraryReply, catalogueMessage), catalogueMessage);
+    const unchangedCandidates = constrained.products.length === imageLibraryReply.products.length;
+    if (unchangedCandidates) {
+      rememberGrounded(constrained);
+      const liveReply = await addLiveCatalogueState(constrained);
+      return guideImageProductInformation(input, enforceLiveCheckoutGate(explainUnavailableProducts(liveReply)));
+    }
+  }
   const pantsSizingReply = !input.image
     ? await groundedPantsSizingReply(input).catch((error) => {
         console.error("[api/chat] pants sizing lookup failed", { message: input.message, error });
@@ -2528,7 +2544,7 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
   const visionReplyPromise = (input.image ? inspectImageWithClaude(
     workflowMessage === input.message ? input : { ...input, message: workflowMessage },
     visionAbortController.signal,
-  ) : Promise.resolve<ChatReply>({
+  ) : Promise.resolve<ImageInspection>({
     message: "What would you like help choosing?",
     products: [], selectedProduct: null, suggestions: [], stage: "clarify",
   })).catch((error) => {
@@ -2613,6 +2629,9 @@ async function buildBrainReply(input: ChatRequest, rememberGrounded: (reply: Cha
         return null;
       })
     : null;
+  if (!groundedImageReply?.products.length && visionReply) {
+    groundedImageReply = visionValidatedLibraryReply(imageLibrary, visionReply.imageCategory, visionReply.message) ?? groundedImageReply;
+  }
   if (input.image) {
     const rasterKind = await rasterKindPromise;
     if (rasterKind !== "product-like") {

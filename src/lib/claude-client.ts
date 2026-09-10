@@ -128,6 +128,9 @@ export function applyClaudeWording(draft: ChatReply, wording: Wording): ChatRepl
   if (wording.productIds.some(id => !allowedIds.has(id))) throw new Error("CLAUDE_UNGROUNDED_PRODUCT");
   if (wording.suggestions.some(suggestion => !draft.suggestions.includes(suggestion))) throw new Error("CLAUDE_UNSUPPORTED_ACTION");
   const chosen = new Set(wording.productIds);
+  if (draft.imageMatch && draft.products.some(product => !chosen.has(product.stock_id))) {
+    throw new Error("CLAUDE_REMOVED_VERIFIED_IMAGE_MATCH");
+  }
   const products = draft.selectedProduct ? draft.products : draft.products.filter(product => chosen.has(product.stock_id));
   const removedAll = draft.products.length > 0 && products.length === 0 && !draft.selectedProduct;
   return {
