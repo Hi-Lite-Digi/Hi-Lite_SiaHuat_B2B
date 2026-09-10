@@ -35,7 +35,7 @@ export function withQuickReplies<T extends Reply>(reply: T, answers: string[] = 
   const verifiedPhoto = reply.imageMatch?.kind === "direct" && reply.products.length === 1;
   if ((reply.selectedProduct || verifiedPhoto) && reply.stage === "clarify"
     && (verifiedPhoto || /^\s*(?:(?:just\s+)?to confirm[,—–-]?\s*)?(?:would|could|can|do|does|is|are|shall|want|will)\b/i.test(question))) {
-    choices = zh ? ["是的，就是这款", "选择其他商品"] : ["Yes, this is it", "Choose another item"];
+    choices = zh ? ["是的，就是这件商品。", "选择其他商品"] : ["Yes, this is it", "Choose another item"];
   } else if (/\b(?:summary|requirements|pdf)\b/i.test(question) && /\b(?:sales|share|prepare|put|send)\b/i.test(question)
     || /(?:摘要|需求|PDF).*(?:销售|准备|整理)|(?:准备|整理).*(?:摘要|需求)/i.test(question) || refersToSummaryOffer) {
     choices = zh ? ["准备询价摘要", "选择其他商品"] : ["Prepare sales summary", "Choose another item"];

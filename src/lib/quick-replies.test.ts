@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isGroundedAnswer, quickQuantityChoices, quickReplyLabel, withQuickReplies } from "./quick-replies";
-import { requestsStaffReview } from "./chat-turn";
+import { productForTypedConfirmation, requestsStaffReview } from "./chat-turn";
 import type { ChatReply } from "./chat-contract";
 
 const empty: ChatReply = { message: "", stage: "clarify", products: [], selectedProduct: null, suggestions: [] };
@@ -21,6 +21,8 @@ test("a verified photo always offers confirmation before any product is selected
   const product = { stock_id: "CSD16C", name: "Copper Cocktail Shaker", status: "Active", list_price: 19.82, uom_id: "PC" };
   const direct = { ...empty, message: "Is that the one you meant?", products: [product], imageMatch: { source: "catalogue_image_library" as const, kind: "direct" as const, score: 1 } };
   assert.deepEqual(withQuickReplies(direct, ["No, not this one"]).suggestions, ["Yes, this is it", "Choose another item"]);
+  const chinese = withQuickReplies({ ...direct, message: "是您要的这件商品吗？" });
+  assert.equal(productForTypedConfirmation(chinese.suggestions[0], null, [product]), product);
   const ambiguous = { ...direct, message: "Which size do you need?", products: [product, { ...product, stock_id: "CSD24C" }], imageMatch: { ...direct.imageMatch, kind: "ambiguous" as const } };
   assert.deepEqual(withQuickReplies(ambiguous).suggestions, ["1", "2"]);
 });
