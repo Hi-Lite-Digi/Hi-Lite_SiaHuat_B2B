@@ -3,9 +3,11 @@ import test from "node:test";
 import type { Product } from "./chat-contract";
 import {
   additionalProductTarget,
+  confirmsDisplayedProduct,
   declinesUnavailableItem,
   hasUnavailableProductContext,
   multipleProductInputNotice,
+  productForTypedConfirmation,
   requestedDisplayedProductIndex,
   requestedQuantity,
   requestsAdditionalProduct,
@@ -25,6 +27,31 @@ function product(stockStatus: Product["stock_status"], availableQuantity: number
     available_quantity: availableQuantity,
   };
 }
+
+test("typed confirmation selects a single displayed product before a quantity is supplied", () => {
+  const torch = {...product("in_stock", 883), stock_id:"CB-TC-CKWH", name:"Iwatani Cassette Gas Torch Burner L16cm,White"};
+  for (const message of ["yes", "yes, this is the item", "yes this item", "this is the item", "this is the product", "that is the one", "that's the one", "yep", "是的，就是这件商品。", "yes, I need 12 pieces"]) {
+    assert.equal(confirmsDisplayedProduct(message), true, message);
+    assert.equal(productForTypedConfirmation(message, null, [torch]), torch, message);
+    assert.equal(productForTypedConfirmation(message, torch, []), torch, message);
+  }
+});
+
+test("a typed yes targets the new gas item instead of the previous torch enquiry", () => {
+  const torch = {...product("in_stock", 883), stock_id:"CB-TC-CKWH", name:"Iwatani Cassette Gas Torch Burner L16cm,White"};
+  const gas = {...product("in_stock", 2733), stock_id:"GAS", name:"IWATANI GAS CARTRIDGE 250gm/can, 3pcs/pkt, 48pcs/ctn"};
+  assert.equal(productForTypedConfirmation("yes this item", null, [gas]), gas);
+  assert.equal(productForTypedConfirmation("yes", gas, [torch,gas]), gas);
+  assert.equal(productForTypedConfirmation("yes", null, [torch,gas]), null);
+  assert.equal(productForTypedConfirmation("yes", null, []), null);
+  assert.equal(productForTypedConfirmation("yes, need GAS 12 cartons", torch, [torch]), null);
+});
+
+test("negative replies and corrections are not product confirmations", () => {
+  for (const message of ["no", "this is not the item", "yes, but not this item", "yes, a different item", "that's not the one", "is this the item?", "this is the item instead", "不是这个"]) {
+    assert.equal(productForTypedConfirmation(message, product("in_stock",3), []), null, message);
+  }
+});
 
 test("recognises natural English and Chinese unavailable-item declines", () => {
   for (const message of [

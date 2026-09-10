@@ -1,5 +1,5 @@
 import type { Product } from "@/lib/chat-contract";
-import { hasUnrelatedPotOrBasketMeaning, normalizeCommonProductTypos, rejectsCurrentProductReference } from "@/lib/chat-intent";
+import { hasUnrelatedPotOrBasketMeaning, normalizeCommonProductTypos, productCategory, rejectsCurrentProductReference, requestedProductCategory } from "@/lib/chat-intent";
 
 export function requestedProductIndex(message: string, productCount: number) {
   const numbered = message.trim().match(/^(\d+)$/)?.[1]
@@ -124,12 +124,26 @@ export function referencesSingleDisplayedProduct(message: string, productCount: 
 }
 
 export function confirmsDisplayedProduct(message: string) {
-  const positive = /^(?:yes|yup|yeah|correct|confirm|this is it)\b/i.test(message.trim())
+  const positive = /^(?:yes|yup|yep|yeah|correct|confirm|this is it)\b/i.test(message.trim())
+    || /^(?:this|that)(?:\s+one)?\s+(?:is|['’]s)\s+(?:the\s+)?(?:item|product|one)(?:\s+i\s+(?:want|need))?[.!\s]*$/i.test(message.trim())
+    || /^(?:this|that)(?:['’]s|s)\s+(?:the\s+)?(?:one|item|product)[.!\s]*$/i.test(message.trim())
     || /^(?:(?:是|对|正确)(?:的)?(?:[，,、]\s*)?)?(?:就是这个|就是这件(?:商品)?|这个|这件商品)[。.!\s]*$/u.test(message.trim())
     || /^(?:是|对|正确|确认)(?:的|商品)?[。.!\s]*$/u.test(message.trim());
   const negative = /\b(?:no|not|wrong|another|other|different|instead)\b/i.test(message)
     || /(?:不是|不对|其他|另外)/u.test(message);
   return positive && !negative;
+}
+
+/** A typed yes selects the same unambiguous item as the confirmation button. */
+export function productForTypedConfirmation(message: string, pendingProduct: Product | null, displayedProducts: Product[]) {
+  if (!confirmsDisplayedProduct(message)) return null;
+  const product = pendingProduct ?? (displayedProducts.length === 1 ? displayedProducts[0] : null);
+  if (!product) return null;
+  // "Yes, I need gas cartridges" starts another product request, rather
+  // than confirming a torch merely because it begins with "yes".
+  const category = requestedProductCategory(message);
+  if (category && category !== productCategory(product.name)) return null;
+  return product;
 }
 
 export function confirmsOrderRequest(message: string) {

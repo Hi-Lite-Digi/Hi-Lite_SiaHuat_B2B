@@ -14,7 +14,6 @@ import type {
 import {
   additionalProductTarget,
   asksForRecommendation,
-  confirmsDisplayedProduct,
   confirmsOrderRequest,
   declinesUnavailableItem,
   hasUnavailableProductContext,
@@ -23,6 +22,7 @@ import {
   isProductRefinementOnly,
   multipleProductInputNotice,
   parseRequestedQuantity,
+  productForTypedConfirmation,
   referencesSingleDisplayedProduct,
   requestedDisplayedProductIndex,
   requestedQuantity,
@@ -1047,10 +1047,13 @@ export function ChatDemo() {
       return;
     }
 
-    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && !asksProductInformation && pendingProduct && confirmsDisplayedProduct(clean)) {
+    const typedConfirmationProduct = productForTypedConfirmation(clean, pendingProduct, lastProducts);
+    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && !asksProductInformation
+      && typedConfirmationProduct
+      && (!pendingQuote || pendingProduct || typedConfirmationProduct.stock_id !== confirmedProduct?.stock_id)) {
       syncHandledTurnWithN8n(clean);
       setQuery("");
-      await confirmProduct(clean, pendingProduct, confirmedQuantity ?? undefined);
+      await confirmProduct(clean, typedConfirmationProduct, confirmedQuantity ?? undefined);
       return;
     }
 
@@ -1064,13 +1067,6 @@ export function ChatDemo() {
     if (canUseExistingProductState && pendingProduct && (/^(no|nope|wrong item|not this|(?:no[,\s-]*)?(?:that's|thats) not it|no[,\s-]*(?:show|give)( me)? (the )?(other|others|alternatives|options))([.!\s]*)$/i.test(clean)
       || /^(?:不是|不对|不是这个|查看其他|显示其他)[。.!\s]*$/u.test(clean))) {
       syncHandledTurnWithN8n(clean); setQuery(""); rejectProduct(clean); return;
-    }
-
-    if (canUseExistingProductState && !startingAdditionalProduct && !replacesCurrentProduct && !asksProductInformation && !pendingProduct && lastProducts.length === 1 && confirmsDisplayedProduct(clean) && confirmedQuantity !== null) {
-      syncHandledTurnWithN8n(clean);
-      setQuery("");
-      await confirmProduct(clean, lastProducts[0], confirmedQuantity);
-      return;
     }
 
     const canSelectDisplayedProduct = canUseExistingProductState && !asksProductInformation && !startingAdditionalProduct && stage !== "quantity" && !pendingQuote && !pendingProduct;
