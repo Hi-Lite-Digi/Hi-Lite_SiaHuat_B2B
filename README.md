@@ -1,6 +1,6 @@
 # Hi-Lite × Sia Huat Product Assistant
 
-Phase 1 is a conversational product-enquiry web application using Claude Sonnet 5 for replies and image analysis, Deepgram for voice transcription, and a Sia Huat catalogue in Supabase Postgres. The web application's runtime does not call the former n8n workflows or OpenAI.
+Phase 1 is a conversational product-enquiry web application using Claude Sonnet 5 for replies and image analysis, OpenAI `gpt-transcribe` for voice transcription, and a Sia Huat catalogue in Supabase Postgres. The web application's runtime does not call the former n8n workflows.
 
 See [docs/CLAUDE-RESTORATION.md](docs/CLAUDE-RESTORATION.md) for the current provider configuration and verification.
 
@@ -18,7 +18,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design, trust bo
 
 ## Local setup
 
-1. Copy `.env.example` to `.env.local` and add the server-only Anthropic and Deepgram keys and existing catalogue configuration.
+1. Copy `.env.example` to `.env.local` and add the server-only Anthropic and OpenAI keys and existing catalogue configuration.
 2. Install dependencies with `pnpm install`.
 3. Run `pnpm dev`.
 4. Open `http://localhost:3000` or the port printed by Next.js.
@@ -28,8 +28,8 @@ Required application variables:
 ```text
 ANTHROPIC_API_KEY=your-anthropic-key
 ANTHROPIC_MODEL=claude-sonnet-5
-DEEPGRAM_API_KEY=your-deepgram-key
-DEEPGRAM_MODEL=nova-3
+OPENAI_API_KEY=your-openai-key
+OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 ```

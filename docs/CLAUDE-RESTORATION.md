@@ -1,6 +1,6 @@
 # Claude restoration — 2026-09-10
 
-The web application uses Anthropic Messages with `claude-sonnet-5` for customer replies and product-photo inspection. `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` are server-only settings. The former Luna adapter has been removed; legacy client `brain` values remain accepted but cannot select a different provider. Deepgram remains the voice-transcription provider.
+The web application uses Anthropic Messages with `claude-sonnet-5` for customer replies and product-photo inspection. `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` are server-only settings. The former Luna adapter has been removed; legacy client `brain` values remain accepted but cannot select a different provider. Voice notes use OpenAI `gpt-transcribe` with the server-only `OPENAI_API_KEY` and optional `OPENAI_TRANSCRIPTION_MODEL` settings. The resulting text follows the same catalogue and Claude reply flow as typed messages.
 
 The model writes the reply and may omit unsuitable catalogue candidates. Existing catalogue matching, stock checks, carton conversions, selected-product state, and quote totals remain controlled by application code. Seeing a product type in a photo does not confirm its exact catalogue model.
 
@@ -8,7 +8,7 @@ Replies use structured JSON, local schema validation, and one bounded style repa
 
 The route allows 45 seconds across catalogue/vision and wording, within a 60-second function limit. The browser waits 50 seconds to include network overhead. Individual Anthropic calls still have an 18-second timeout. This leaves wording time after a slow image lookup instead of cancelling at the former 30-second turn limit.
 
-Successful model responses expose `x-chat-provider: anthropic` and `x-chat-model: claude-sonnet-5`. A provider outage can return a verified deterministic reply labelled `deterministic-fallback`; acceptance tests must not count that as a successful Claude response. No request falls back to OpenAI.
+Successful model responses expose `x-chat-provider: anthropic` and `x-chat-model: claude-sonnet-5`. A provider outage can return a verified deterministic reply labelled `deterministic-fallback`; acceptance tests must not count that as a successful Claude response. Chat replies do not fall back to OpenAI; OpenAI is used only for voice transcription.
 
 ## Verification
 

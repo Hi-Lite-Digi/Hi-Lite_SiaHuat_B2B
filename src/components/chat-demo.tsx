@@ -537,12 +537,13 @@ export function ChatDemo() {
     try {
       const audioResponse = await fetch(draft.audioUrl);
       const audio = await audioResponse.blob();
+      if (audio.size > 4 * 1024 * 1024) throw new Error("AUDIO_TOO_LARGE");
       const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
       const formData = new FormData();
       formData.append("audio", audio, `voice-note.${extension}`);
       formData.append("sessionId", sessionId.current);
 
-      const response = await fetch("/api/transcribe", { method: "POST", body: formData });
+      const response = await fetch("/api/transcribe", { method: "POST", body: formData, signal: AbortSignal.timeout(40_000) });
       const body = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
       transcript = body?.transcript?.trim() ?? "";
 
@@ -551,12 +552,33 @@ export function ChatDemo() {
       console.error("[voice] multilingual transcription failed", error);
       transcript = browserTranscript;
       if (!transcript) {
+        const code = error instanceof Error ? error.message : "VOICE_TRANSCRIPTION_FAILED";
         setVoiceError(conversationLanguage === "zh"
-          ? "这段语音没有成功转成文字。录音仍然保留，您可以重试，或在下方输入商品名称。"
-          : "That voice note wasn’t transcribed. The recording is still here, so you can retry or type the product name below.");
+          ? code === "VOICE_TRANSCRIPTION_NOT_CONFIGURED"
+            ? "语音服务暂时无法使用。录音仍然保留，请稍后重试，或输入商品名称。"
+            : code === "VOICE_TRANSCRIPT_EMPTY"
+              ? "这段录音没有识别到语音。请靠近麦克风重新录音，或输入商品名称。"
+              : code === "AUDIO_TOO_LARGE"
+                ? "这段录音太大，请重新录制一段较短的语音。"
+                : "这段语音没有成功转成文字。录音仍然保留，您可以重试，或在下方输入商品名称。"
+          : code === "VOICE_TRANSCRIPTION_NOT_CONFIGURED"
+            ? "Voice notes are temporarily unavailable. Your recording is saved here. Please try again later or type the product name."
+            : code === "VOICE_TRANSCRIPT_EMPTY"
+              ? "I couldn’t hear any speech in that recording. Please record again closer to the microphone, or type the product name."
+              : code === "AUDIO_TOO_LARGE"
+                ? "That recording is too large to send. Please record a shorter voice note."
+                : "That voice note wasn’t transcribed. The recording is still here, so you can retry or type the product name below.");
         setTranscribingVoice(false);
         return;
       }
+    }
+
+    if (transcript.length > 500) {
+      setVoiceError(conversationLanguage === "zh"
+        ? "这段语音的文字超过了单条消息的长度限制。录音仍然保留，请重新录制一段较短的语音，或分条输入要求。"
+        : "That voice note is too long for one message. Your recording is still here. Please record a shorter note or type your requirements in separate messages.");
+      setTranscribingVoice(false);
+      return;
     }
 
     const understoodVoiceNote = { ...draft, transcript };
@@ -565,8 +587,11 @@ export function ChatDemo() {
     setVoiceTranscript("");
     latestTranscriptRef.current = "";
     setQuery("");
-    await submit(transcript, understoodVoiceNote);
-    setTranscribingVoice(false);
+    try {
+      await submit(transcript, understoodVoiceNote);
+    } finally {
+      setTranscribingVoice(false);
+    }
   }
 
   function rememberShownProducts(products: Product[]) {
