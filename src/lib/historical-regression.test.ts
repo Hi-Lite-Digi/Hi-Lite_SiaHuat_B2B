@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { catalogueHistoryWithClarification, catalogueMessageWithContext, rememberedActiveCategories } from "./chat-intent";
+import { catalogueHistoryWithClarification, catalogueMessageWithContext, rememberedActiveCategories, replacesEarlierRequest } from "./chat-intent";
 import { confirmsOrderRequest, isProductRefinementOnly, requestedDisplayedProductIndex, requestedQuantity } from "./chat-turn";
 import { getFastChatReply } from "./fast-chat";
 import { matchesProductRequirements, requirementLookupQuery } from "./product-requirements";
@@ -111,4 +111,25 @@ test("PDF 10 and 19: human requests and missing listing photos get honest next s
   const photo = getFastChatReply({sessionId:"history-photo",message:"the listing doesnt have a picture also",history:[{role:"user",content:"electric whisk"}]});
   assert.match(photo?.message ?? "", /can't verify/);
   assert.doesNotMatch(photo?.message ?? "", /official photos|can't send/i);
+});
+
+test("a replacement inside the same family drops the abandoned item's size", () => {
+  // Reported 24 September 2026: after "20cm" for chef knives, switching to a
+  // paring knife searched "paring knife 20cm" and reported no stock at all.
+  const history = ["I need chef knives", "20cm", "actually make it a paring knife instead"];
+  assert.equal(catalogueMessageWithContext("how many do you have", history), "paring knife");
+  assert.equal(catalogueMessageWithContext("actually make it a paring knife instead", ["I need chef knives", "20cm"]), "paring knife");
+});
+
+test("only an explicit replacement that names a product restarts the requirements", () => {
+  assert.ok(replacesEarlierRequest("actually make it a paring knife instead"));
+  assert.ok(replacesEarlierRequest("switch to a bread knife"));
+  // References to what is already on screen must keep the earlier context.
+  assert.ok(!replacesEarlierRequest("I would rather have the smaller one instead"));
+  assert.ok(!replacesEarlierRequest("how many do you have"));
+  assert.ok(!replacesEarlierRequest("20cm"));
+});
+
+test("an ordinary refinement still keeps the size the customer gave", () => {
+  assert.match(catalogueMessageWithContext("black handle", ["20cm chef knife"]), /20cm/);
 });
