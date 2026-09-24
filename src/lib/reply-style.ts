@@ -1,8 +1,16 @@
-import type { ChatReply } from "./chat-contract";
+import type { ChatReply, ChatRequest } from "./chat-contract";
+import { loopingQuestionIssues } from "./conversation-memory";
+
+/** What the conversation has already covered, so a circling reply is repairable. */
+type StyleContext = { history?: ChatRequest["history"]; currentMessage?: string };
 
 /** Observable WhatsApp-style requirements; catalogue truth is checked separately. */
-export function replyStyleIssues(reply: Pick<ChatReply, "message" | "products" | "selectedProduct">) {
+export function replyStyleIssues(
+  reply: Pick<ChatReply, "message" | "products" | "selectedProduct">,
+  context: StyleContext = {},
+) {
   const issues: string[] = [];
+  issues.push(...loopingQuestionIssues(reply.message, context.history ?? [], context.currentMessage ?? ""));
   if (reply.message.length > 600) issues.push("Keep the reply within 600 characters; product cards already contain the details.");
   if ((reply.message.match(/[?？]/g) ?? []).length > 1) issues.push("Ask only one focused question.");
   if (/\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:sizes?|smaller|larger)\b[^?？]{0,70}\b(?:colou?rs?|materials?)\b[^?？]*[?？]|\b(?:would|could|can|what|which|do|does|is|are)\b[^?？]{0,120}\b(?:colou?rs?|materials?)\b[^?？]{0,70}\b(?:sizes?|smaller|larger)\b[^?？]*[?？]/i.test(reply.message)) {

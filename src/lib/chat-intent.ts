@@ -465,6 +465,19 @@ function excludedBrandConstraint(messages: string[]) {
   return excludedBrand;
 }
 
+/**
+ * An explicit replacement: "actually make it a paring knife instead". The
+ * product family can be unchanged — chef knife to paring knife is still a
+ * knife — so the category comparison below cannot see it, and a size or finish
+ * given for the abandoned item would otherwise be searched against the new one.
+ * Requiring a named product keeps references to what is already on screen
+ * ("I'd rather have the smaller one instead") out of this rule.
+ */
+export function replacesEarlierRequest(message: string) {
+  if (requestedProductCategory(message) === null) return false;
+  return /\b(?:instead|actually)\b|\b(?:switch|switching|change|changing)\s+(?:it\s+)?to\b|\bmake\s+it\b|\brather\s+(?:have|get|go\s+with)\b|\bforget\s+(?:the|that)\b/i.test(message);
+}
+
 export function catalogueMessageWithContext(message: string, userHistory: string[]) {
   message = normalizeCommonProductTypos(message);
   // An explicit positive code selection replaces the preceding type/size
@@ -487,9 +500,15 @@ export function catalogueMessageWithContext(message: string, userHistory: string
   const activeCategory = currentCategory ?? previousCategory;
   // A plainly stated new product starts a fresh catalogue search. Earlier
   // constraints from the previous item must not leak into it.
+  const allMessages = [...userHistory, message];
+  // A replacement inside the same family starts its constraints over from that
+  // message, so an abandoned size or finish is not searched against the new item.
+  const switchIndex = allMessages.findLastIndex(replacesEarlierRequest);
   const customerMessages = currentCategory && previousCategory && currentCategory !== previousCategory
     ? [message]
-    : [...userHistory, message];
+    : switchIndex > 0
+      ? allMessages.slice(switchIndex)
+      : allMessages;
   const joinedMessages = customerMessages.join(" ");
 
   if (activeCategory === "shaker") {

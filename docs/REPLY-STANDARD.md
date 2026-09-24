@@ -51,3 +51,121 @@ The opening greeting has no buttons. Once a customer sends a message, the latest
 Claude can supply short answers grounded in its final question, such as “Home baking” / “Commercial use”. Workflow commands stay separately controlled. Summary offers always provide “Prepare sales summary” / “Choose another item”, including indirect wording such as “Want me to do that?”. Product-index labels and quantity labels remain distinct, and quantity presets do not exceed known stock. Customers can still type other answers.
 
 Verified locally: all 118 automated tests passed; the final affected tests, type checking, ESLint and production build passed. All 12 live quality turns used Anthropic and returned buttons. Browser checks covered a clean/reset greeting without buttons; choosing home baking, product and quantity entirely by buttons; blocking 2 mixers against 1 available; restoring the 1-piece $73.30 enquiry; and finishing it. A rejected 12cm pizza-cutter request exposed the summary buttons, and clicking Prepare sales summary produced the requirements summary and PDF action. No order or sales notification was sent. These additions have not been deployed.
+
+## Conversation memory — 24 September 2026
+
+Reported symptom: the replies read like a robot and kept looping back to the
+question they had already asked. A four-turn cafe-plate enquiry reproduced it on
+the second turn. The customer answered "for a cafe" and Claire replied with
+"What kind of dishes are you mostly plating, mains or desserts?" — the same
+question as her opening "main courses, desserts, or small bites?", in new words.
+
+The cause was missing state rather than wording. The wording model receives the
+recent history and a short server guidance line such as "Here are 3 options:",
+but nothing marked which questions the conversation had already put to the
+customer, so each turn re-derived the next move and often re-derived the same
+one.
+
+### Added
+
+`src/lib/conversation-memory.ts` derives, deterministically from the history:
+
+- `asked` — question topics already put to the customer (use case, size, colour,
+  material, shape, brand, quantity, budget), taken only from assistant question
+  sentences.
+- `answered` / `settled` — topics the customer has supplied, including in the
+  message being handled now, so the very next reply cannot ask for them again.
+- `loopingQuestionIssues` — a repeated topic, or a question whose meaningful
+  words mostly coincide with an earlier one after light stemming ("main courses"
+  → "mains", "small bites" → "smaller bites").
+
+These reach the model as `alreadyAsked`, `alreadySettled` and
+`conversationGuidance` in the evidence, and reach `replyStyleIssues` as an
+observable fault, so a circling reply is repaired by the existing single repair
+pass with the chosen product IDs fixed.
+
+### Exemptions
+
+Offering a concrete alternative is progress, not a repeat, and the standard
+above requires it. Questions that propose a different value — "I couldn't find a
+25cm match. Would a 23cm plate work?", or "Would 17 PC work for you?" after an
+overstock — are never treated as looping. A bare unit mention ("$13.12 per PC")
+does not count as asking the quantity.
+
+### Fallback
+
+When the repair still circles, the reply no longer falls back to the bare server
+guidance line. The written reply is kept and only the circling question is
+removed, with its answer buttons. A short statement of what was found reads far
+better than "Here are 3 options:".
+
+### Prompt
+
+`CLAIRE_INSTRUCTIONS` was reorganised into sections with the conversational
+rules first and every existing accuracy constraint preserved. The new section is
+KEEP MOVING: never re-ask a topic in `alreadyAsked`; when an answer is vague,
+assume, say what was assumed, and move on; prefer showing results over asking a
+second question; drop requirements that no longer apply after a product switch.
+
+### Verification
+
+185 automated tests, type checking and ESLint pass. The same four-turn cafe
+enquiry now answers "for a cafe" with three suitable plates and a reason for
+each, and no repeated question. Stock and pricing remain server-derived: 30 ×
+$13.12 = $393.60 against verified availability.
+
+Known issue, unchanged by this work: a size given for one product family can
+still carry into the next. After "20cm" for chef knives and a switch to paring
+knives, the search reports "no 20cm paring knife" rather than dropping the size.
+That lives in the catalogue search path, not the reply layer.
+
+## Abandoned requirements — 24 September 2026
+
+The known issue noted above is fixed. `catalogueMessageWithContext` already
+started a fresh search when the customer named a different product family, but
+chef knife to paring knife is one family, so the comparison could not see the
+switch and the abandoned "20cm" was searched against the new item.
+
+`replacesEarlierRequest` in `src/lib/chat-intent.ts` recognises an explicit
+replacement that names a product — "actually make it a paring knife instead",
+"switch to a bread knife" — and the remembered request restarts from that
+message. A named product is required, so "I'd rather have the smaller one
+instead" still refers to the cards on screen and keeps its context, and an
+ordinary refinement such as "black handle" after "20cm chef knife" still keeps
+the size.
+
+Before: "I don't have a 20cm paring knife in stock right now."
+After: three paring knives with 48, 67 and 68 in stock.
+
+## Regression measurement — 24 September 2026
+
+`pnpm qa:text` is a live-model suite, so a single run cannot tell a regression
+from variance. Two runs of identical code disagreed on 22 of its 302 cases,
+about seven per cent. Every conclusion below therefore compares a case's verdict
+across four runs of this branch against one run of `main`.
+
+| Run | Failed |
+| --- | --- |
+| `main` | 96 of 302 |
+| this branch, run 1 | 93 |
+| this branch, run 2 | 85 |
+| this branch, run 3 | 85 |
+| this branch, run 4 | 80 |
+
+Twenty cases that failed on `main` now pass, and no case that passed on `main`
+failed in all four runs. Three regressions survived the variance filter and were
+fixed:
+
+- `CASE-024` and `CASE-034` offered "a summary for our sales team", which is
+  honest but does not tell the customer that the summary is the PDF they
+  download or that it goes to Sia Huat sales. `withManualNextStep` in
+  `src/lib/honest-handoff.ts` now names both. It only touches replies already
+  discussing a summary, sourcing or a sales team.
+- `SAFE-004` wanted the literal phrase "Sia Huat products" and the reply said
+  "Sia Huat's products". The prompt now states the scope refusal plainly. This
+  one is a weak test: the reply was already a correct refusal, and the case
+  turns on an apostrophe.
+
+The remaining 80 failures are inherited from `main` and are not addressed here.
+They include latency budgets, checkers keyed to exact phrasings, and owner-guide
+contract cases whose copy has since changed.
