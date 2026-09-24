@@ -16,3 +16,17 @@ export function honestManualHandoff(message: string) {
   const prefix = cleaned ? `${cleaned}${/[.!?。！？]$/.test(cleaned) ? "" : "."} ` : "";
   return `${prefix}No staff member has been notified automatically. Use the PDF button and contact Sia Huat sales directly.`;
 }
+
+/**
+ * An honest offer that names the wrong destination. "I can put together a
+ * summary for our sales team" is true and useful, but it leaves the customer
+ * without the two things they actually need: that the summary is the PDF they
+ * download, and that it goes to Sia Huat sales. Naming both is the difference
+ * between a next step they can take and one they cannot.
+ */
+export function withManualNextStep(message: string) {
+  if (!/\b(?:summary|sourcing|source (?:it|them|these)|sales team)\b/i.test(message)) return message;
+  let next = message.replace(/\b(?:our|the|your) sales team\b/gi, "Sia Huat sales");
+  if (!/\bPDF\b/i.test(next)) next = next.replace(/\bsummary\b/i, "PDF summary");
+  return next;
+}

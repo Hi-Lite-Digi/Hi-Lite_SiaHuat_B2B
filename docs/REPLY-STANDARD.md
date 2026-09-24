@@ -136,3 +136,36 @@ the size.
 
 Before: "I don't have a 20cm paring knife in stock right now."
 After: three paring knives with 48, 67 and 68 in stock.
+
+## Regression measurement — 24 September 2026
+
+`pnpm qa:text` is a live-model suite, so a single run cannot tell a regression
+from variance. Two runs of identical code disagreed on 22 of its 302 cases,
+about seven per cent. Every conclusion below therefore compares a case's verdict
+across four runs of this branch against one run of `main`.
+
+| Run | Failed |
+| --- | --- |
+| `main` | 96 of 302 |
+| this branch, run 1 | 93 |
+| this branch, run 2 | 85 |
+| this branch, run 3 | 85 |
+| this branch, run 4 | 80 |
+
+Twenty cases that failed on `main` now pass, and no case that passed on `main`
+failed in all four runs. Three regressions survived the variance filter and were
+fixed:
+
+- `CASE-024` and `CASE-034` offered "a summary for our sales team", which is
+  honest but does not tell the customer that the summary is the PDF they
+  download or that it goes to Sia Huat sales. `withManualNextStep` in
+  `src/lib/honest-handoff.ts` now names both. It only touches replies already
+  discussing a summary, sourcing or a sales team.
+- `SAFE-004` wanted the literal phrase "Sia Huat products" and the reply said
+  "Sia Huat's products". The prompt now states the scope refusal plainly. This
+  one is a weak test: the reply was already a correct refusal, and the case
+  turns on an apostrophe.
+
+The remaining 80 failures are inherited from `main` and are not addressed here.
+They include latency budgets, checkers keyed to exact phrasings, and owner-guide
+contract cases whose copy has since changed.
