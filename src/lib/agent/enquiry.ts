@@ -1,0 +1,113 @@
+// src/lib/agent/enquiry.ts
+import "server-only";
+import type { Product } from "@/lib/chat-contract";
+import { enquiryReceiptTotals, type EnquiryReceiptLine } from "@/lib/conversation-export";
+import { checkedEnquiryLine, mergedEnquiryQuantity } from "@/lib/enquiry-order";
+import { resolveProductQuantity } from "@/lib/enquiry-quantity";
+import { liveCheck, type CheckedProduct, type FactDeps } from "./facts";
+
+export type EnquiryEcho = { stockId: string; quantity: number };
+export type EnquiryAction = {
+  action: "add" | "set" | "remove" | "clear";
+  stock_id?: string;
+  quantity?: number;
+  unit?: "uom" | "carton" | "packet";
+};
+export type EnquiryError =
+  | "QTY_NOT_STATED" | "OUT_OF_STOCK" | "OVER_STOCK" | "STOCK_UNVERIFIED"
+  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS";
+export type EnquiryResult =
+  | { ok: true; lines: EnquiryReceiptLine[]; notice: string; product?: CheckedProduct }
+  | { ok: false; error: EnquiryError; available?: number | null; notice?: string; product?: CheckedProduct };
+
+export function enquiryTotals(lines: EnquiryReceiptLine[]) {
+  const totals = enquiryReceiptTotals(lines);
+  return { ...totals, grandTotal: Math.round(totals.grandTotal * 100) / 100 };
+}
+
+const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+
+/**
+ * True when one of the customer's recent typed messages contains this number
+ * as a quantity-like token. Numbers inside codes or sizes ("H5cm", "12QT") do not count.
+ */
+export function quantityStated(quantity: number, customerTexts: string[]) {
+  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?${quantity}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
+  const word = numberWords[quantity];
+  return customerTexts.some((text) => digits.test(text) || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text)));
+}
+
+export async function applyEnquiryAction(
+  lines: EnquiryReceiptLine[],
+  action: EnquiryAction,
+  customerTexts: string[],
+  deps: FactDeps,
+): Promise<EnquiryResult> {
+  if (action.action === "clear") return { ok: true, lines: [], notice: "" };
+  if (!action.stock_id) return { ok: false, error: "MISSING_FIELDS" };
+  const code = action.stock_id.trim();
+  if (action.action === "remove") {
+    return { ok: true, lines: lines.filter((line) => line.code.toLowerCase() !== code.toLowerCase()), notice: "" };
+  }
+  if (!action.quantity) return { ok: false, error: "MISSING_FIELDS" };
+  if (!quantityStated(action.quantity, customerTexts)) return { ok: false, error: "QTY_NOT_STATED" };
+  const catalogueProduct = await deps.findByCode(code).catch(() => null);
+  if (!catalogueProduct) return { ok: false, error: "NOT_FOUND" };
+  const checked = await liveCheck(catalogueProduct, deps);
+  if (!checked.verified) return { ok: false, error: "STOCK_UNVERIFIED", product: checked };
+  const unit = action.unit === "carton" || action.unit === "packet" ? action.unit : null;
+  const resolved = resolveProductQuantity(action.quantity, unit, checked.product);
+  if (resolved.quantity === null) return { ok: false, error: "PACK_SIZE_UNKNOWN", notice: resolved.notice, product: checked };
+  const { product } = checked;
+  if (product.stock_status === "out_of_stock" || product.available_quantity === 0) return { ok: false, error: "OUT_OF_STOCK", product: checked };
+  const available = product.available_quantity;
+  if (typeof available !== "number") return { ok: false, error: "STOCK_UNVERIFIED", product: checked };
+  const total = mergedEnquiryQuantity(lines, product.stock_id, resolved.quantity, action.action === "add");
+  if (total > available) return { ok: false, error: "OVER_STOCK", available, product: checked };
+  const line = checkedEnquiryLine(total, product);
+  if (!line) return { ok: false, error: "INVALID_QTY", product: checked };
+  const existing = lines.find((item) => item.code.toLowerCase() === product.stock_id.toLowerCase());
+  const next = existing ? lines.map((item) => (item === existing ? line : item)) : [...lines, line];
+  return { ok: true, lines: next, notice: resolved.notice, product: checked };
+}
+
+function lineFromSnapshot(quantity: number, product: Product): EnquiryReceiptLine {
+  return {
+    item: product.name, code: product.stock_id, pricePerItem: product.list_price, quantity,
+    total: Math.round(product.list_price * 100) * quantity / 100, uom: product.uom_id, sourceUrl: product.source_url,
+  };
+}
+
+/** Re-checks the customer's echoed enquiry against the catalogue and the live store. */
+export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps) {
+  const notes: string[] = [];
+  const products = new Map<string, CheckedProduct>();
+  const checkedLines = await Promise.all(echo.map(async ({ stockId, quantity }) => {
+    const catalogueProduct = await deps.findByCode(stockId).catch(() => null);
+    if (!catalogueProduct) {
+      notes.push(`${stockId} is no longer in the catalogue and was removed.`);
+      return null;
+    }
+    const result = await liveCheck(catalogueProduct, deps);
+    products.set(result.product.stock_id, result);
+    const label = `${result.product.name} (${result.product.stock_id})`;
+    if (!result.verified) {
+      notes.push(`${label} could not be re-checked live just now; its last known price is kept.`);
+      return lineFromSnapshot(quantity, catalogueProduct);
+    }
+    const line = checkedEnquiryLine(quantity, result.product);
+    if (line) return line;
+    const available = result.product.available_quantity;
+    if (result.product.stock_status === "out_of_stock" || available === 0) {
+      notes.push(`${label} is now out of stock and was removed.`);
+      return null;
+    }
+    if (typeof available === "number" && available < quantity) {
+      notes.push(`Only ${available} ${result.product.uom_id} of ${label} are available now; the line was reduced from ${quantity}.`);
+      return checkedEnquiryLine(available, result.product);
+    }
+    notes.push(`${label} could not be kept on the enquiry.`);
+    return null;
+  }));
+  return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products };
+}
