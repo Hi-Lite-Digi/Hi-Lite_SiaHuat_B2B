@@ -34,6 +34,20 @@ test("search honours exclusions and budget", async () => {
   assert.deepEqual(body.products.map((item) => item.stock_id), ["BTS-8026D"]);
 });
 
+test("search results past the first 6 carry no stock figures", async () => {
+  const torches = Array.from({ length: 8 }, (_, index) => product({ stock_id: `T${index + 1}`, name: `TORCH ${index + 1}` }));
+  const ctx = context(fakeDeps(torches));
+  const outcome = await runTool("search_catalogue", { queries: ["torch"] }, ctx);
+  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string; stock: string; available_quantity: number | null; price_and_stock_verified_live: boolean }> };
+  assert.equal(body.products.length, 8);
+  assert.ok(body.products.slice(0, 6).every((item) => item.price_and_stock_verified_live && item.available_quantity === 50));
+  for (const item of body.products.slice(6)) {
+    assert.deepEqual([item.stock, item.available_quantity, item.price_and_stock_verified_live], ["unknown", null, false]);
+    const remembered = ctx.seen.get(item.stock_id)?.product;
+    assert.deepEqual([remembered?.in_stock, remembered?.available_quantity], [null, null]);
+  }
+});
+
 test("search outage is reported as a tool error", async () => {
   const deps = fakeDeps([blowtorch]);
   deps.searchDirect = async () => { throw new Error("down"); };
@@ -49,11 +63,25 @@ test("get_product resolves a pasted store link", async () => {
   assert.ok(ctx.seen.has("BTS-8026D"));
 });
 
+async function alternativeIds(deps: ReturnType<typeof fakeDeps>, minQty: number) {
+  const outcome = await runTool("find_alternatives", { stock_id: "970S", min_qty: minQty }, context(deps));
+  return (JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> }).products.map((item) => item.stock_id);
+}
+
 test("alternatives are live-checked, in stock and exclude the source", async () => {
-  const outcome = await runTool("find_alternatives", { stock_id: "970S", min_qty: 1 }, context());
-  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> };
-  assert.ok(!body.products.some((item) => item.stock_id === "970S"));
-  assert.ok(body.products.length <= 3);
+  assert.deepEqual(await alternativeIds(fakeDeps([blowtorch, mastrad, safico]), 1), ["F46700", "BTS-8026D"]);
+});
+
+test("alternatives drop products that are out of stock or fail the live check", async () => {
+  const outOfStock = fakeDeps([blowtorch, mastrad, safico], { "BTS-8026D": { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 } });
+  assert.deepEqual(await alternativeIds(outOfStock, 1), ["F46700"]);
+  const liveDown = fakeDeps([blowtorch, mastrad, safico], { "BTS-8026D": "fail" });
+  assert.deepEqual(await alternativeIds(liveDown, 1), ["F46700"]);
+});
+
+test("alternatives drop products with less stock than the customer needs", async () => {
+  const short = fakeDeps([blowtorch, mastrad, safico], { "BTS-8026D": { available_quantity: 5 } });
+  assert.deepEqual(await alternativeIds(short, 10), ["F46700"]);
 });
 
 test("match_photo needs a photo in this turn", async () => {

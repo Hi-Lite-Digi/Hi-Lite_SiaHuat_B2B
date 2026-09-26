@@ -120,7 +120,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const top = merged.slice(0, 10);
   const checked = await Promise.all(top.map((item, index) => (index < 6
     ? liveCheck(item, ctx.deps)
-    : Promise.resolve<CheckedProduct>({ product: { ...item, stock_status: "unknown" }, verified: false }))));
+    : Promise.resolve<CheckedProduct>({ product: { ...item, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false }))));
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
   return ok({
     products: affordable.map((item) => remember(ctx, item)),
