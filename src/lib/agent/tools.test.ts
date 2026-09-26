@@ -110,6 +110,15 @@ test("a line that could not be re-checked can be removed or cleared, but not cha
   assert.deepEqual(ctx.uncheckedCodes, []);
 });
 
+test("while a line is unchecked, update_enquiry results tell Claude not to quote a total or item count", async () => {
+  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"] });
+  const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { unchecked?: string };
+  assert.match(added.unchecked ?? "", /Unchecked lines \(kept by the customer, not in these lines or totals\): F46700\./);
+  assert.match(added.unchecked ?? "", /Don't quote an enquiry total or item count/);
+  const removed = JSON.parse((await runTool("update_enquiry", { action: "remove", stock_id: "F46700" }, ctx)).content) as { unchecked?: string };
+  assert.equal(removed.unchecked, undefined);
+});
+
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {
   const refused = await runTool("update_enquiry", { action: "clear" }, context(undefined, { customerTexts: ["blow torch"], clearTexts: ["blow torch"] }));
   assert.match(refused.content, /CLEAR_NOT_REQUESTED/);

@@ -164,13 +164,27 @@ async function matchPhotoTool(ctx: TurnContext) {
   return ok({ kind: result.kind, exact_product: result.kind === "direct", products: checked.map((item) => remember(ctx, item)) });
 }
 
+/**
+ * While some lines could not be re-checked, the lines and totals Claude sees are not what the enquiry bar shows
+ * (the browser adds those lines back), so Claude must not quote a total or an item count.
+ */
+export function uncheckedNote(codes: string[]) {
+  return codes.length
+    ? `Unchecked lines (kept by the customer, not in these lines or totals): ${codes.join(", ")}. Don't quote an enquiry total or item count; the enquiry bar shows the full enquiry.`
+    : undefined;
+}
+
+function enquiryState(ctx: TurnContext) {
+  return { lines: ctx.lines, totals: enquiryTotals(ctx.lines), unchecked: uncheckedNote(ctx.uncheckedCodes) };
+}
+
 async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext) {
   // A line that could not be re-checked stays as the browser has it: it can be removed or cleared, not changed.
   const code = input.stock_id?.toLowerCase();
   if (input.action !== "clear" && ctx.uncheckedCodes.some((item) => item.toLowerCase() === code)) {
     if (input.action !== "remove") return fail("STOCK_UNVERIFIED");
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
-    return ok({ lines: ctx.lines, totals: enquiryTotals(ctx.lines) });
+    return ok(enquiryState(ctx));
   }
   const result = await applyEnquiryAction(ctx.lines, {
     action: input.action,
@@ -182,7 +196,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   if (!result.ok) return fail(result.error, { available: result.available ?? undefined, notice: result.notice || undefined });
   ctx.lines = result.lines;
   if (input.action === "clear") ctx.uncheckedCodes = [];
-  return ok({ lines: result.lines, totals: enquiryTotals(result.lines), notice: result.notice || undefined });
+  return ok({ ...enquiryState(ctx), notice: result.notice || undefined });
 }
 
 export async function runTool(name: string, rawInput: unknown, ctx: TurnContext): Promise<ToolOutcome> {

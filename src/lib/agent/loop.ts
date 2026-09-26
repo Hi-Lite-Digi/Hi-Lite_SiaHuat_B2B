@@ -10,7 +10,7 @@ import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import { CHIP_ISSUE, MONEY_ISSUE_PREFIX, allowedCents, chipAllowed, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts, type FinalAnswer } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, runTool, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
 
 export type AgentClient = {
   messages: {
@@ -93,9 +93,10 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
     }
   }
   const shown = [...ctx.shownIds].slice(-40).join(", ") || "none";
+  const unchecked = uncheckedNote(ctx.uncheckedCodes);
   blocks.push({
     type: "text",
-    text: `[Context from the system, not the customer] Current enquiry: ${JSON.stringify({ lines: ctx.lines, totals: enquiryTotals(ctx.lines) })}${notes.length ? `\nEnquiry changes since last turn: ${notes.join(" ")}` : ""}\nItem codes already shown as cards: ${shown}`,
+    text: `[Context from the system, not the customer] Current enquiry: ${JSON.stringify({ lines: ctx.lines, totals: enquiryTotals(ctx.lines) })}${unchecked ? `\n${unchecked}` : ""}${notes.length ? `\nEnquiry changes since last turn: ${notes.join(" ")}` : ""}\nItem codes already shown as cards: ${shown}`,
   });
   return blocks;
 }

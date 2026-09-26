@@ -234,6 +234,23 @@ test("a line whose lookup times out is left for the browser to keep, and Claude 
   assert.match(JSON.stringify(bodies[0].messages.at(-1)), /970S could not be checked just now; it stays on the enquiry/);
 });
 
+test("while a line is unchecked, the context tells Claude not to quote a total or item count", async () => {
+  const stuck = deps();
+  stuck.findByCode = (stockId) => stockId === "970S" ? new Promise(() => undefined) : Promise.resolve(safico);
+  const { client, bodies } = fakeClient([answer({ message: "What else do you need?" })]);
+  await within(runAgentTurn({
+    request: request({ enquiry: [{ stockId: "970S", quantity: 2 }, { stockId: "BTS-8026D", quantity: 1 }] }),
+    deps: stuck, client, model: "claude-sonnet-5", deadlineMs: 13_000,
+  }), 2_500);
+  const context = JSON.stringify(bodies[0].messages.at(-1));
+  assert.match(context, /Unchecked lines \(kept by the customer, not in these lines or totals\): 970S\./);
+  assert.match(context, /Don't quote an enquiry total or item count/);
+
+  const checked = fakeClient([answer({ message: "What else do you need?" })]);
+  await runAgentTurn({ request: request({ enquiry: [{ stockId: "BTS-8026D", quantity: 1 }] }), deps: deps(), client: checked.client, model: "claude-sonnet-5" });
+  assert.doesNotMatch(JSON.stringify(checked.bodies[0].messages.at(-1)), /Unchecked lines/);
+});
+
 test("a chip can ask to clear the enquiry", async () => {
   const { client, bodies } = fakeClient([
     toolCall("t1", "update_enquiry", { action: "clear" }),
