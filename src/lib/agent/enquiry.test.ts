@@ -17,6 +17,19 @@ test("a quantity counts only when the customer typed it as a quantity", () => {
   assert.equal(quantityStated(2, ["blow torch"]), false);
 });
 
+test("sizes written with a space and prices do not count as quantities", () => {
+  assert.equal(quantityStated(5, ["the 5 cm torch"]), false);
+  assert.equal(quantityStated(12, ["Stainless Steel Pot 12 QT"]), false);
+  assert.equal(quantityStated(24, ["24 cm pot"]), false);
+  assert.equal(quantityStated(5, ["5 L"]), false);
+  assert.equal(quantityStated(2, ["2 kg bag"]), false);
+  assert.equal(quantityStated(23, ["is it $23?"]), false);
+  assert.equal(quantityStated(23, ["S$ 23 each?"]), false);
+  assert.equal(quantityStated(20, ["20 more"]), true);
+  assert.equal(quantityStated(5, ["5 large pots"]), true);
+  assert.equal(quantityStated(2, ["2 gas cans"]), true);
+});
+
 test("adding needs a stated quantity", async () => {
   const deps = fakeDeps([torch]);
   const refused = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["blow torch"], deps);
@@ -60,6 +73,15 @@ test("remove and clear", async () => {
   assert.deepEqual(cleared.ok && cleared.lines, []);
 });
 
+test("removing a code that is not on the enquiry is refused", async () => {
+  const deps = fakeDeps([torch]);
+  const empty = await applyEnquiryAction([], { action: "remove", stock_id: "ZZZ" }, [], deps);
+  assert.equal(empty.ok ? null : empty.error, "NOT_FOUND");
+  const lines = [{ item: torch.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];
+  const wrongCode = await applyEnquiryAction(lines, { action: "remove", stock_id: "GAS" }, [], deps);
+  assert.equal(wrongCode.ok ? null : wrongCode.error, "NOT_FOUND");
+});
+
 test("re-verification refreshes prices, trims to stock and removes sold-out lines", async () => {
   const deps = fakeDeps([torch, gas], {
     "BTS-8026D": { price_ex_gst: 25, available_quantity: 3 },
@@ -68,6 +90,15 @@ test("re-verification refreshes prices, trims to stock and removes sold-out line
   const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 5 }, { stockId: "GAS", quantity: 48 }], deps);
   assert.deepEqual(result.lines.map((line) => [line.code, line.quantity, line.pricePerItem]), [["BTS-8026D", 3, 25]]);
   assert.equal(result.notes.length, 2);
+});
+
+test("re-verification combines duplicate echo lines by code before checking stock", async () => {
+  const deps = fakeDeps([torch], { "BTS-8026D": { available_quantity: 5 } });
+  const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 4 }, { stockId: "bts-8026d", quantity: 4 }], deps);
+  assert.deepEqual(result.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 5]]);
+  assert.match(result.notes[0], /reduced from 8/);
+  const withinStock = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }, { stockId: "BTS-8026D", quantity: 2 }], deps);
+  assert.deepEqual(withinStock.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 4]]);
 });
 
 test("a line that cannot be re-checked keeps its catalogue price with a note", async () => {

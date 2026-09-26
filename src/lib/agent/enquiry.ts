@@ -29,10 +29,12 @@ const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seve
 
 /**
  * True when one of the customer's recent typed messages contains this number
- * as a quantity-like token. Numbers inside codes or sizes ("H5cm", "12QT") do not count.
+ * as a quantity-like token. Numbers inside codes, sizes ("H5cm", "12 QT", "24 cm")
+ * and prices ("$23", "S$ 23") do not count.
+ * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?${quantity}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
+  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${quantity}(?!\\s*(?:cm|mm|m|l|litres?|ml|qt|inch(?:es)?|in|kg|g|gm|oz)\\b|\\s*%)(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
   const word = numberWords[quantity];
   return customerTexts.some((text) => digits.test(text) || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text)));
 }
@@ -47,7 +49,9 @@ export async function applyEnquiryAction(
   if (!action.stock_id) return { ok: false, error: "MISSING_FIELDS" };
   const code = action.stock_id.trim();
   if (action.action === "remove") {
-    return { ok: true, lines: lines.filter((line) => line.code.toLowerCase() !== code.toLowerCase()), notice: "" };
+    const kept = lines.filter((line) => line.code.toLowerCase() !== code.toLowerCase());
+    if (kept.length === lines.length) return { ok: false, error: "NOT_FOUND" };
+    return { ok: true, lines: kept, notice: "" };
   }
   if (!action.quantity) return { ok: false, error: "MISSING_FIELDS" };
   if (!quantityStated(action.quantity, customerTexts)) return { ok: false, error: "QTY_NOT_STATED" };
@@ -78,11 +82,22 @@ function lineFromSnapshot(quantity: number, product: Product): EnquiryReceiptLin
   };
 }
 
+/** The echo comes from the browser: duplicate codes (any case) are added together into one line. */
+function combinedEcho(echo: EnquiryEcho[]) {
+  const combined = new Map<string, EnquiryEcho>();
+  for (const { stockId, quantity } of echo) {
+    const key = stockId.toLowerCase();
+    const existing = combined.get(key);
+    combined.set(key, existing ? { stockId: existing.stockId, quantity: existing.quantity + quantity } : { stockId, quantity });
+  }
+  return [...combined.values()];
+}
+
 /** Re-checks the customer's echoed enquiry against the catalogue and the live store. */
 export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps) {
   const notes: string[] = [];
   const products = new Map<string, CheckedProduct>();
-  const checkedLines = await Promise.all(echo.map(async ({ stockId, quantity }) => {
+  const checkedLines = await Promise.all(combinedEcho(echo).map(async ({ stockId, quantity }) => {
     const catalogueProduct = await deps.findByCode(stockId).catch(() => null);
     if (!catalogueProduct) {
       notes.push(`${stockId} is no longer in the catalogue and was removed.`);
