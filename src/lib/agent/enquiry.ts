@@ -31,16 +31,34 @@ const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|s
 // A number right before one of these is a size, a count of parts, a pack size or an ordinal ("3-tier", "4 outlets", "48pcs/ctn", "2nd").
 const notQuantityAfter = String.raw`(?![-\s]*(?:tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th)\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b))`;
 
+const chineseDigits = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+
+/** How 1-99 is written in Chinese: 2 → 二/两, 12 → 十二, 20 → 二十, 25 → 二十五. */
+function chineseNumerals(quantity: number) {
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) return [];
+  if (quantity === 2) return ["二", "两"];
+  const tens = Math.floor(quantity / 10);
+  if (tens === 0) return [chineseDigits[quantity]];
+  return [`${tens === 1 ? "" : chineseDigits[tens]}十${chineseDigits[quantity % 10]}`];
+}
+
 /**
  * True when one of the customer's recent typed messages contains this number
  * as a quantity-like token. Numbers inside codes, sizes ("H5cm", "12 QT", "24 cm"),
  * prices ("$23", "S$ 23"), option/model numbers, tiers, burners and outlet counts do not count.
+ * Chinese numerals count only before a measure word (两个, 五箱) or at the end of the text.
  * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
   const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
   const word = numberWords[quantity];
-  return customerTexts.some((text) => digits.test(text) || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text)));
+  const chinese = chineseNumerals(quantity);
+  const chineseQuantity = chinese.length
+    ? new RegExp(`(?<![一二两三四五六七八九十百千万零])(?:${chinese.join("|")})(?=[个件只把套箱包盒台支张条打瓶罐双]|\\s*$)`)
+    : null;
+  return customerTexts.some((text) => digits.test(text)
+    || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text))
+    || (chineseQuantity !== null && chineseQuantity.test(text)));
 }
 
 export async function applyEnquiryAction(

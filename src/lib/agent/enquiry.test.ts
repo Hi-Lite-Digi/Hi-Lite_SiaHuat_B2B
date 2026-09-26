@@ -51,6 +51,15 @@ test("option numbers, sizes, tiers, burners and outlet counts are not quantities
   for (const [quantity, text] of quantities) assert.equal(quantityStated(quantity, [text]), true, text);
 });
 
+test("Chinese numbers count as quantities only before a measure word or at the end", () => {
+  assert.equal(quantityStated(2, ["我要两个"]), true);
+  assert.equal(quantityStated(12, ["十二个"]), true);
+  assert.equal(quantityStated(5, ["来五箱"]), true);
+  assert.equal(quantityStated(3, ["要3个"]), true);
+  assert.equal(quantityStated(3, ["三层架"]), false);
+  assert.equal(quantityStated(2, ["两头炉"]), false);
+});
+
 test("adding needs a stated quantity", async () => {
   const deps = fakeDeps([torch]);
   const refused = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["blow torch"], deps);
