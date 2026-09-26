@@ -116,6 +116,11 @@ test("a phone number or email that isn't Sia Huat's sales contact is removed and
     ["请拨打62231732。", "请拨打Sia Huat sales (details below)。"],
     ["Toll-free: 1800 123 4567.", "Toll-free: Sia Huat sales (details below)."],
     ["Our HQ is on +44 20 7946 0958.", "Our HQ is on Sia Huat sales (details below)."],
+    ["Tel: 65 6223 1732", "Tel: Sia Huat sales (details below)"],
+    ["Tel: 65-6223-1732", "Tel: Sia Huat sales (details below)"],
+    ["Call 1-800-123-4567.", "Call Sia Huat sales (details below)."],
+    ["Tel.62231732", "Tel.Sia Huat sales (details below)"],
+    ["Call 62231732,91234567", "Call Sia Huat sales (details below),Sia Huat sales (details below)"],
   ];
   for (const [text, expected] of cases) assert.deepEqual(customerMessage(text), { message: expected, showContact: true }, text);
 });

@@ -106,11 +106,12 @@ const HANDOFF_SENTENCE = "No staff member has been notified automatically. Use t
 // Used when the staff claim was the whole message, so the contact block never arrives without words.
 const CONTACT_LINE = "You can reach our sales team directly below.";
 
-// A phone number: a Singapore number (optional +65, then 8 digits starting 3, 6, 8 or 9, split only 4+4), a 1800 toll-free
-// number, or a longer number that starts with a + country code. Item codes (218455-20), dates and lists of sizes don't fit.
-const phone = String.raw`(?:\+65[ -]?)?[3689]\d{3}[ -]?\d{4}|1800[ -]?\d{3}[ -]?\d{4}|\+\d(?:[ -]?\d){7,}`;
-// An email address, or a phone number standing on its own (not part of a longer run of numbers).
-const contactPattern = new RegExp(String.raw`[\w.+-]+@[\w-]+(?:\.[\w-]+)+|(?<![\w$.,+-]|\d[ -])(?:${phone})(?![ -]?\d|\w)`, "gi");
+// A phone number: a Singapore number (optional 65 or +65, then 8 digits starting 3, 6, 8 or 9, split only 4+4), a 1800 or
+// 1-800 toll-free number, or a longer number that starts with a + country code. Item codes (218455-20), dates and lists of
+// sizes don't fit.
+const phone = String.raw`(?:\+?65[ -]?)?[3689]\d{3}[ -]?\d{4}|1[ -]?800[ -]?\d{3}[ -]?\d{4}|\+\d(?:[ -]?\d){7,}`;
+// An email address, or a phone number standing on its own (not part of a longer run of numbers or a decimal).
+const contactPattern = new RegExp(String.raw`[\w.+-]+@[\w-]+(?:\.[\w-]+)+|(?<![\w$+-]|\d[ .-])(?:${phone})(?![ -]?\d|\w)`, "gi");
 const OTHER_CONTACT = "Sia Huat sales (details below)";
 const phoneDigits = (text: string) => text.replace(/\D/g, "").replace(/^65(?=\d{8}$)/, "");
 const isSalesContact = (found: string) => (found.includes("@")
