@@ -126,6 +126,19 @@ test("a Claude outage returns the backup reply", async () => {
   assert.ok(reply.cards.some((card) => card.stock_id === "970S"));
 });
 
+test("the backup-reply log carries only a reason code, never error text", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const outage = fakeClient([new Error("customer wrote: blow torch for my shop")]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: outage.client, model: "claude-sonnet-5" });
+  const cutOff = fakeClient([{ ...answer({ message: "Here" }), stop_reason: "max_tokens" } as Anthropic.Message]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: cutOff.client, model: "claude-sonnet-5" });
+  const rejected = fakeClient([answer({ message: "Try this.", card_ids: ["FAKE-1"] }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: rejected.client, model: "claude-sonnet-5" });
+  assert.deepEqual(warn.mock.calls.map((call) => call.arguments[1]), [
+    { reason: "Error" }, { reason: "AGENT_STOP_MAX_TOKENS" }, { reason: "AGENT_REPLY_REJECTED" },
+  ]);
+});
+
 const CLAUDE_IMAGE_LIMIT = 5 * 1024 * 1024; // the API measures the base64 text
 const photoRequest = (bytes: Buffer) => request({
   event: { type: "image", image: { dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`, mimeType: "image/jpeg", name: "photo.jpg" } },

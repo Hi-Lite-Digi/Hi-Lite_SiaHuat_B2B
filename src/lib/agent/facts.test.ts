@@ -33,3 +33,9 @@ test("product facts flag verification and earlier display", () => {
   assert.equal(fact.price_and_stock_verified_live, true);
   assert.equal(fact.shown_before, true);
 });
+
+test("an unverified product carries no price, so Claude cannot quote it", () => {
+  const item = product({ stock_id: "A", list_price: 12 });
+  assert.equal(productFact({ product: item, verified: false }).price_ex_gst, null);
+  assert.equal(productFact({ product: item, verified: true }).price_ex_gst, 12);
+});

@@ -99,8 +99,19 @@ test("remove and clear", async () => {
   ];
   const removed = await applyEnquiryAction(lines, { action: "remove", stock_id: "bts-8026d" }, [], deps);
   assert.deepEqual(removed.ok && removed.lines.map((line) => line.code), ["GAS"]);
-  const cleared = await applyEnquiryAction(lines, { action: "clear" }, [], deps);
+  const cleared = await applyEnquiryAction(lines, { action: "clear" }, ["please clear everything"], deps);
   assert.deepEqual(cleared.ok && cleared.lines, []);
+});
+
+test("clearing needs the customer to ask for it", async () => {
+  const deps = fakeDeps([torch]);
+  const lines = [{ item: torch.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];
+  const refused = await applyEnquiryAction(lines, { action: "clear" }, ["blow torch", "2 please"], deps);
+  assert.equal(refused.ok ? null : refused.error, "CLEAR_NOT_REQUESTED");
+  for (const text of ["Let's start over", "cancel everything please", "清空"]) {
+    const cleared = await applyEnquiryAction(lines, { action: "clear" }, [text], deps);
+    assert.deepEqual(cleared.ok && cleared.lines, [], text);
+  }
 });
 
 test("removing a code that is not on the enquiry is refused", async () => {

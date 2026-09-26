@@ -114,7 +114,7 @@ async function callClaude(client: AgentClient, model: string, messages: Anthropi
 }
 
 function parseFinal(response: Anthropic.Message): FinalAnswer {
-  if (response.stop_reason !== "end_turn") throw new Error(`AGENT_STOP_${response.stop_reason}`);
+  if (response.stop_reason !== "end_turn") throw new Error(`AGENT_STOP_${String(response.stop_reason).toUpperCase()}`);
   const text = response.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")
     .map((block) => block.text)
@@ -228,7 +228,9 @@ export async function runAgentTurn(input: {
       provider: "anthropic",
     };
   } catch (error) {
-    console.warn("[api/agent] fallback reply", { reason: error instanceof Error ? error.message : "unknown" });
+    // Only a reason code is logged: error text could echo customer or model content.
+    const reason = !(error instanceof Error) ? "unknown" : /^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name;
+    console.warn("[api/agent] fallback reply", { reason });
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
     return buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });

@@ -76,7 +76,7 @@ export const agentTools: Anthropic.Tool[] = [
 ];
 
 const searchInput = z.object({
-  queries: z.array(z.string().trim().min(2).max(80)).min(1).max(3),
+  queries: z.array(z.string().trim().min(1).max(80)).min(1).max(3),
   max_price: z.number().positive().nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),
 });

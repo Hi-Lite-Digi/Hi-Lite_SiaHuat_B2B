@@ -75,14 +75,14 @@ export function storeProductUrl(text: string): string | null {
   return id ? `https://store.siahuat.com/product/${id}` : null;
 }
 
-/** Compact product facts for tool results. */
+/** Compact product facts for tool results. An unverified price is left out so it is never quoted. */
 export function productFact({ product, verified }: CheckedProduct, shownBefore = false) {
   return {
     stock_id: product.stock_id,
     name: product.name,
     brand: product.brand ?? null,
     size: product.size ?? product.dimensions ?? null,
-    price_ex_gst: product.list_price,
+    price_ex_gst: verified ? product.list_price : null,
     uom: product.uom_id,
     stock: product.stock_status ?? "unknown",
     available_quantity: product.available_quantity ?? null,

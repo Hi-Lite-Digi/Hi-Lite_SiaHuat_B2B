@@ -15,7 +15,7 @@ export type EnquiryAction = {
 };
 export type EnquiryError =
   | "QTY_NOT_STATED" | "OUT_OF_STOCK" | "OVER_STOCK" | "STOCK_UNVERIFIED"
-  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS";
+  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS" | "CLEAR_NOT_REQUESTED";
 export type EnquiryResult =
   | { ok: true; lines: EnquiryReceiptLine[]; notice: string; product?: CheckedProduct }
   | { ok: false; error: EnquiryError; available?: number | null; notice?: string; product?: CheckedProduct };
@@ -61,13 +61,19 @@ export function quantityStated(quantity: number, customerTexts: string[]) {
     || (chineseQuantity !== null && chineseQuantity.test(text)));
 }
 
+const clearRequest = /\b(?:clear|start over|reset|remove all|delete all|cancel all|cancel everything)\b|清空|全部取消|重新开始/i;
+
 export async function applyEnquiryAction(
   lines: EnquiryReceiptLine[],
   action: EnquiryAction,
   customerTexts: string[],
   deps: FactDeps,
 ): Promise<EnquiryResult> {
-  if (action.action === "clear") return { ok: true, lines: [], notice: "" };
+  if (action.action === "clear") {
+    // The whole enquiry is only wiped when the customer asked for it in their own words.
+    if (!customerTexts.some((text) => clearRequest.test(text))) return { ok: false, error: "CLEAR_NOT_REQUESTED" };
+    return { ok: true, lines: [], notice: "" };
+  }
   if (!action.stock_id) return { ok: false, error: "MISSING_FIELDS" };
   const code = action.stock_id.trim();
   if (action.action === "remove") {

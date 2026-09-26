@@ -98,6 +98,11 @@ test("update_enquiry changes the turn's enquiry", async () => {
   assert.ok(ctx.seen.has("BTS-8026D"));
 });
 
+test("a one-character search such as 刀 is accepted", async () => {
+  const outcome = await runTool("search_catalogue", { queries: ["刀"] }, context());
+  assert.equal(outcome.isError, false);
+});
+
 test("invalid input is rejected without running the tool", async () => {
   const outcome = await runTool("search_catalogue", { queries: [] }, context());
   assert.equal(outcome.isError, true);

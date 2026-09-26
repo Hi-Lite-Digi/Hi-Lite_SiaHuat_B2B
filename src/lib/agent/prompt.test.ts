@@ -11,6 +11,10 @@ test("Claire's agent prompt carries the sales voice and the hard rules", () => {
   assert.match(CLAIRE_AGENT_PROMPT, /customer's own words/);
 });
 
+test("Claire summarises the enquiry in one line instead of listing it", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked what's in the enquiry, give a one-line summary (item count and total from the context); the enquiry bar shows the lines, so don't list them."));
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });
