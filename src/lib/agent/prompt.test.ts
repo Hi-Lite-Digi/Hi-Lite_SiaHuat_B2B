@@ -29,6 +29,10 @@ test("Claire only states product facts the tools gave", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Only state a product's material, features, capacity, size, compatibility or origin if it appears in the tool facts (name, size, dimensions, description). If it isn't there, say you can't confirm it and share the product link."));
 });
 
+test("Claire knows product cards have no photos", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });
