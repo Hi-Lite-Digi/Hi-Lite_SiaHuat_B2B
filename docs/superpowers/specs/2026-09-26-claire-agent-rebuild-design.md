@@ -117,7 +117,7 @@ The client keeps the enquiry lines only as an echo. The server re-verifies them 
 2. The route validates the request and serialises turns per session (same pattern as `inSessionOrder`).
 3. `enquiry.ts` re-verifies the echoed lines. Stale prices are refreshed; lines that are now out of stock or over the limit are flagged for Claire to mention.
 4. `loop.ts` calls Claude with the prompt, history, current event, verified enquiry and tools. Claude may call tools for at most 3 rounds. Calls within a round run in parallel.
-5. Claude finishes by calling `send_reply` with `{message, card_ids, chips, show_contact}`.
+5. Claude finishes with a structured JSON answer `{message, card_ids, chips, show_contact}` (API `output_config.format`), so no tool call has to be forced.
 6. `guards.ts` checks the reply (see Guards). One repair round is allowed; otherwise the fallback reply is used.
 7. Code builds the cards from tool results (never from Claude's text) and returns the reply with the authoritative enquiry.
 
@@ -132,7 +132,6 @@ Tools are Claude's only way to learn facts. Every product returned carries code,
 | `find_alternatives` | `stock_id`, `min_qty?`, `exclude_ids?` | Up to 3 similar live-verified in-stock products | `findAvailableCatalogueAlternatives` |
 | `match_photo` | none (uses this turn's image) | `{kind: direct \| ambiguous \| candidates \| type_only \| none, category, products}`. Only `direct` means "this exact product". | Existing photo pipeline, thresholds unchanged (0.985 direct, 0.025 margin) |
 | `update_enquiry` | `action: set \| add \| remove \| clear`, `stock_id?`, `quantity?`, `unit?: uom \| carton \| packet` | `{ok, enquiry}` or an error: `OUT_OF_STOCK`, `OVER_STOCK {available}`, `STOCK_UNVERIFIED`, `PACK_SIZE_UNKNOWN`, `INVALID_QTY`, `QTY_NOT_STATED` | `resolveProductQuantity`, `mergedEnquiryQuantity`, `checkedEnquiryLine`, fresh live check |
-| `send_reply` | `message`, `card_ids[]`, `chips[]`, `show_contact` | Ends the turn | Guards |
 
 Tool rules enforced in code:
 
@@ -184,7 +183,7 @@ Tool rules enforced in code:
 
 ## Contact details (to confirm before any switch-over)
 
-The salesperson's quotations show **Tel 6268 3922** and **enquiry@siahuat.com.sg**. An earlier check of the website found a different number (+65 6223 1732) and enquiry@siahuat.com. The owner confirms which to use. They live in one constant in `prompt.ts`.
+The salesperson's quotations show **Tel 6268 3922** and **enquiry@siahuat.com.sg**. An earlier check of the website found a different number (+65 6223 1732) and enquiry@siahuat.com. The owner confirms which to use. They live in one constant in `prompt.ts`. Until confirmed, `src/lib/agent/contact.ts` holds the placeholders `[SALES PHONE]` and `[SALES EMAIL]`.
 
 ## Testing and acceptance
 
