@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type Anthropic from "@anthropic-ai/sdk";
+import sharp from "sharp";
 import type { AgentRequest } from "./contract";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, product } from "./testing";
@@ -99,6 +100,16 @@ test("an unverified amount that survives the repair is removed", async () => {
   assert.deepEqual(reply.chips, ["Show others"]);
 });
 
+test("a made-up card that survives the repair gets the backup reply", async () => {
+  const { client } = fakeClient([
+    answer({ message: "Try this.", card_ids: ["FAKE-1"] }),
+    answer({ message: "Try this.", card_ids: ["FAKE-1"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "fallback");
+  assert.ok(!reply.cards.some((card) => card.stock_id === "FAKE-1"));
+});
+
 test("after the tool-round cap Claude must answer without tools", async () => {
   const calls = Array.from({ length: MAX_TOOL_ROUNDS }, (_, index) => toolCall(`t${index}`, "search_catalogue", { queries: ["torch"] }));
   const { client, bodies } = fakeClient([...calls, answer({ message: "Here are the torches." })]);
@@ -112,6 +123,34 @@ test("a Claude outage returns the backup reply", async () => {
   assert.equal(reply.provider, "fallback");
   assert.equal(reply.showContact, true);
   assert.ok(reply.cards.some((card) => card.stock_id === "970S"));
+});
+
+const CLAUDE_IMAGE_LIMIT = 5 * 1024 * 1024; // the API measures the base64 text
+const photoRequest = (bytes: Buffer) => request({
+  event: { type: "image", image: { dataUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`, mimeType: "image/jpeg", name: "photo.jpg" } },
+});
+const sentBlocks = (body: Anthropic.MessageCreateParamsNonStreaming) => body.messages[0].content as Anthropic.ContentBlockParam[];
+
+test("a large phone photo is shrunk below Claude's image limit and cached across rounds", async () => {
+  const photo = await sharp({ create: { width: 2600, height: 1950, channels: 3, background: "#808080", noise: { type: "gaussian", mean: 128, sigma: 40 } } }).jpeg({ quality: 95 }).toBuffer();
+  assert.ok(photo.toString("base64").length > CLAUDE_IMAGE_LIMIT && photo.length < 5_000_000);
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "match_photo", {}),
+    answer({ message: "What is this used for?" }),
+  ]);
+  const reply = await runAgentTurn({ request: photoRequest(photo), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  const image = sentBlocks(bodies[0]).find((block) => block.type === "image") as Anthropic.ImageBlockParam;
+  assert.ok((image.source as Anthropic.Base64ImageSource).data.length <= CLAUDE_IMAGE_LIMIT);
+  assert.deepEqual(image.cache_control, { type: "ephemeral" });
+});
+
+test("a photo that cannot be opened is not sent to Claude, which asks for another", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "Could you send a smaller photo?" })]);
+  const reply = await runAgentTurn({ request: photoRequest(Buffer.alloc(5_100_000)), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.ok(!sentBlocks(bodies[0]).some((block) => block.type === "image"));
+  assert.match(JSON.stringify(sentBlocks(bodies[0])), /could not be opened/);
 });
 
 test("customer texts exclude taps and include the current message", () => {

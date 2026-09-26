@@ -3,6 +3,7 @@ import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
+import { prepareVisionPhoto } from "@/lib/product-image-crop";
 import type { AgentReply, AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
@@ -64,11 +65,17 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
     blocks.push({ type: "text", text: `${event.voice ? "Customer (voice note, transcribed)" : "Customer"}: ${event.text}` });
   }
   if (event.type === "image") {
-    const match = event.image.dataUrl.match(/^data:(image\/(?:jpeg|png|webp));base64,([\s\S]+)$/);
-    if (match) {
-      blocks.push({ type: "image", source: { type: "base64", media_type: match[1] as "image/jpeg" | "image/png" | "image/webp", data: match[2] } });
+    // Raw phone photos can pass Claude's 5 MB base64 limit; the shrunk copy also costs fewer tokens.
+    const photo = await prepareVisionPhoto(event.image).catch(() => null);
+    const sent = `Customer sent a photo${event.caption ? ` with the message: ${event.caption}` : ""}`;
+    if (photo) {
+      const data = photo.image.dataUrl.slice(photo.image.dataUrl.indexOf(",") + 1);
+      // Cached so later tool rounds in this turn re-read the photo instead of paying for it again.
+      blocks.push({ type: "image", source: { type: "base64", media_type: photo.image.mimeType, data }, cache_control: { type: "ephemeral" } });
+      blocks.push({ type: "text", text: `${sent}. Use match_photo to check the catalogue.` });
+    } else {
+      blocks.push({ type: "text", text: `${sent}, but it could not be opened. Ask for a smaller photo or a short description.` });
     }
-    blocks.push({ type: "text", text: `Customer sent a photo${event.caption ? ` with the message: ${event.caption}` : ""}. Use match_photo to check the catalogue.` });
   }
   if (event.type === "select_product") {
     const found = await ctx.deps.findByCode(event.stockId).catch(() => null);
