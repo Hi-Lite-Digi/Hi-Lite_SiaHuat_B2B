@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { replyStyleIssues } from "@/lib/reply-style";
+import { SALES_CONTACT } from "./contact";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 
 test("Claire's agent prompt carries the sales voice and the hard rules", () => {
@@ -48,4 +49,10 @@ test("the example replies in the Choosing rule pass the reply style guard", () =
   for (const message of examples) {
     assert.deepEqual(replyStyleIssues({ message, products: [], selectedProduct: null }), [], message);
   }
+});
+
+test("Claire gives only Sia Huat's sales contact, never another phone number or email", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked for a phone number or email, give exactly these and set show_contact true. Never give any other phone number, email or address."));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes(SALES_CONTACT.phone));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes(SALES_CONTACT.email));
 });

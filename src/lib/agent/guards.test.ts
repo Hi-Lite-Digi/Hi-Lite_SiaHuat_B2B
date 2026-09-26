@@ -1,6 +1,7 @@
 // src/lib/agent/guards.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts } from "./guards";
 import { product } from "./testing";
@@ -106,4 +107,21 @@ test("a reply that was only a staff claim still has words", () => {
 
 test("块 as a counting word is not money", () => {
   assert.deepEqual(unverifiedAmounts("好的，已加入3块砧板。还需要别的吗？", allowed), []);
+});
+
+test("a phone number or email that isn't Sia Huat's sales contact is removed and the contact block shown", () => {
+  const cases: Array<[string, string]> = [
+    ["Call us at 6223 1732", "Call us at Sia Huat sales (details below)"],
+    ["Call +65 6223-1732 or email sales@example.com.", "Call Sia Huat sales (details below) or email Sia Huat sales (details below)."],
+    ["请拨打62231732。", "请拨打Sia Huat sales (details below)。"],
+  ];
+  for (const [text, expected] of cases) assert.deepEqual(customerMessage(text), { message: expected, showContact: true }, text);
+});
+
+test("Sia Huat's sales contact, prices and item codes pass unchanged", () => {
+  const text = `You can reach Sia Huat sales at ${SALES_CONTACT.phone} or ${SALES_CONTACT.email}.`;
+  assert.deepEqual(customerMessage(text), { message: text, showContact: false });
+  for (const safe of ["Got it: 2 BTS-8026D torches, $46.72.", "The total is $1,234,567.89.", "Item 12345678D is in stock."]) {
+    assert.deepEqual(customerMessage(safe), { message: safe, showContact: false }, safe);
+  }
 });

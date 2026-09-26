@@ -3,6 +3,7 @@ import type { Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { honestManualHandoff } from "@/lib/honest-handoff";
 import { replyStyleIssues } from "@/lib/reply-style";
+import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
@@ -105,10 +106,22 @@ const HANDOFF_SENTENCE = "No staff member has been notified automatically. Use t
 // Used when the staff claim was the whole message, so the contact block never arrives without words.
 const CONTACT_LINE = "You can reach our sales team directly below.";
 
-/** Final safety pass on the words the customer sees. A removed staff claim turns the contact block on. */
+// An email address, or a phone number: 8+ digits, optionally after +65, with spaces or dashes between them.
+const contactPattern = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+|(?<![\w$.,+-])(?:\+65[ -]?)?\d(?:[ -]?\d){7,}(?!\w)/gi;
+const OTHER_CONTACT = "Sia Huat sales (details below)";
+const phoneDigits = (text: string) => text.replace(/\D/g, "").replace(/^65(?=\d{8}$)/, "");
+const isSalesContact = (found: string) => (found.includes("@")
+  ? found.toLowerCase() === SALES_CONTACT.email.toLowerCase()
+  : phoneDigits(found) === phoneDigits(SALES_CONTACT.phone));
+
+/**
+ * Final safety pass on the words the customer sees. A phone number or email that isn't Sia Huat's sales
+ * contact is replaced with a pointer to the contact block; that, or a removed staff claim, turns the block on.
+ */
 export function customerMessage(message: string) {
   const trimmed = message.trim();
-  const checked = honestManualHandoff(trimmed);
-  if (checked === trimmed) return { message: trimmed, showContact: false };
+  const contactChecked = trimmed.replace(contactPattern, (found) => (isSalesContact(found) ? found : OTHER_CONTACT));
+  const checked = honestManualHandoff(contactChecked);
+  if (checked === contactChecked) return { message: contactChecked, showContact: contactChecked !== trimmed };
   return { message: checked.replace(HANDOFF_SENTENCE, "").trim() || CONTACT_LINE, showContact: true };
 }
