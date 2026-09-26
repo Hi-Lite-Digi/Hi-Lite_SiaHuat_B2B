@@ -632,3 +632,40 @@ export async function findAvailableCatalogueAlternatives(
 export async function findCatalogueProductByCode(stockId: string) {
   return findProductForStockCheck(stockId.trim());
 }
+
+/**
+ * Searches with the caller's words unchanged: no query rewriting and no
+ * phrase-triggered filters. Used by the agent, which chooses its own queries.
+ */
+export async function searchCatalogueDirect(query: string, limit = 10) {
+  const search = query.replace(/\s+/g, " ").trim();
+  if (search.length < 2) return [];
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
+  const response = await fetch(`${url}/rest/v1/rpc/search_products`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: key, authorization: `Bearer ${key}` },
+    body: JSON.stringify({ search_query: search, result_limit: Math.min(Math.max(limit, 1), 10) }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(4_000),
+  });
+  if (!response.ok) throw new Error(`SUPABASE_SEARCH_${response.status}`);
+  return productSearchSchema.array().parse(await response.json())
+    .filter((product) => product.status === "Active" || product.status === "New");
+}
+
+/** Resolves a pasted store.siahuat.com/product/<id> link to its catalogue row. */
+export async function findCatalogueProductBySourceUrl(sourceUrl: string) {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
+  const query = new URLSearchParams({ source_url: `eq.${sourceUrl}`, select: productSelect, limit: "1" });
+  const response = await fetch(`${url}/rest/v1/products?${query}`, {
+    headers: { apikey: key, authorization: `Bearer ${key}` },
+    cache: "no-store",
+    signal: AbortSignal.timeout(4_000),
+  });
+  if (!response.ok) throw new Error(`SUPABASE_PRODUCT_${response.status}`);
+  return catalogueProductSchema.array().parse(await response.json())[0] ?? null;
+}
