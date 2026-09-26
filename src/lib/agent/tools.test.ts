@@ -244,6 +244,11 @@ test("a product the customer didn't pick out of several is refused", async () =>
   }
 });
 
+test("a PRODUCT_NOT_CHOSEN refusal tells Claude to show the product as a card first", async () => {
+  const outcome = await addSafico({ customerTexts: ["2 torches"], previousCards: twoCards });
+  assert.deepEqual(JSON.parse(outcome.content), { error: "PRODUCT_NOT_CHOSEN", note: "Show this product as a card and let the customer tap it or say which one first." });
+});
+
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {
   const refused = await runTool("update_enquiry", { action: "clear" }, context(undefined, { customerTexts: ["blow torch"], clearTexts: ["blow torch"] }));
   assert.match(refused.content, /CLEAR_NOT_REQUESTED/);

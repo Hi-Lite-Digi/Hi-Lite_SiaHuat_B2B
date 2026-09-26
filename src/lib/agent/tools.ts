@@ -231,7 +231,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
     return ok(enquiryState(ctx));
   }
   if ((input.action === "add" || input.action === "set") && input.stock_id && !customerChose(input.stock_id, ctx)) {
-    return fail("PRODUCT_NOT_CHOSEN");
+    return fail("PRODUCT_NOT_CHOSEN", { note: "Show this product as a card and let the customer tap it or say which one first." });
   }
   const result = await applyEnquiryAction(ctx.lines, {
     action: input.action,
