@@ -8,6 +8,8 @@ import { enquiryTotals } from "./enquiry";
 import { liveCheck, retryOnce, withTimeout, type FactDeps } from "./facts";
 
 const FALLBACK_TIMEOUT_MS = 9_000;
+// A customer saying they don't need something is not asking for products.
+const declines = /\b(?:no need|don['’]?t need|not needed|nvm|never mind|cancel|no thanks|no thank you|not this)\b|不要|不用/i;
 
 /** Used when Claude is unavailable or its reply fails the guards twice. Search and live checks together stay within timeoutMs. */
 export async function buildFallbackReply(input: { searchText: string | null; lines: EnquiryReceiptLine[]; deps: FactDeps; timeoutMs?: number }): Promise<AgentReply> {
@@ -15,7 +17,7 @@ export async function buildFallbackReply(input: { searchText: string | null; lin
   const started = performance.now();
   let cards: Product[] = [];
   const search = input.searchText?.trim() ?? "";
-  if (search.length >= 2) {
+  if (search.length >= 3 && !declines.test(search)) {
     try {
       const found = await withTimeout(retryOnce(() => input.deps.searchDirect(search.slice(0, 80), 10)), timeoutMs, null);
       const left = Math.floor(timeoutMs - (performance.now() - started));

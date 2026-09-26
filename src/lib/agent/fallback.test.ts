@@ -29,6 +29,16 @@ test("the backup reply retries a failed search once", async () => {
   assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
 });
 
+test("the backup reply does not search on a no-need or cancel message, or a very short one", async () => {
+  const glove = product({ stock_id: "GL1", name: "NITRILE GLOVE NO NEED HERE STILL HAVE" });
+  for (const searchText of ["glove no need, here still have", "nvm", "不用了", "ok"]) {
+    const deps = fakeDeps([glove]);
+    const reply = await buildFallbackReply({ searchText, lines: [], deps });
+    assert.deepEqual(deps.calls, [], searchText);
+    assert.deepEqual(reply.cards, [], searchText);
+  }
+});
+
 test("a search outage still returns a polite reply", async () => {
   const deps = fakeDeps([torch]);
   deps.searchDirect = async () => { throw new Error("down"); };
