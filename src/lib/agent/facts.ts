@@ -26,6 +26,13 @@ export type CheckedProduct = { product: Product; verified: boolean };
 
 export const LIVE_CHECK_TIMEOUT_MS = 5_000;
 
+/** Settles with `late` when the work has not finished within ms (the work itself keeps running). */
+export function withTimeout<T, L>(work: Promise<T>, ms: number, late: L): Promise<T | L> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<L>((resolve) => { timer = setTimeout(() => resolve(late), Math.max(1, ms)); });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
 export function defaultFactDeps(): FactDeps {
   return {
     searchDirect: searchCatalogueDirect,

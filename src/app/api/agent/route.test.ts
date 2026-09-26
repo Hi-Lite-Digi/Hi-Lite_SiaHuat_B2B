@@ -55,7 +55,7 @@ test("a turn queued behind the same session only gets what is left of the route'
   const first = POST(agentRequest("queue-budget-1"));
   const second = POST(agentRequest("queue-budget-1"));
   await firstStarted;
-  clock = 39_990; // the first turn used almost the whole budget while the second one waited
+  clock = 44_990; // the first turn used almost the whole budget while the second one waited
   releaseFirst();
 
   assert.equal((await first).headers.get("x-chat-provider"), "fallback");

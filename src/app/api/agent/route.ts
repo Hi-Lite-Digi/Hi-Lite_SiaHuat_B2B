@@ -10,8 +10,9 @@ import { withModelUsage } from "@/lib/model-usage";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-// Claude's share of maxDuration, counted from arrival so time queued behind the same session is included.
-const TURN_BUDGET_MS = 40_000;
+// The whole turn's share of maxDuration (Claude, tools and the backup reply),
+// counted from arrival so time queued behind the same session is included.
+const TURN_BUDGET_MS = 45_000;
 
 export async function POST(request: Request) {
   const arrived = performance.now();

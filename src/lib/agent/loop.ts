@@ -20,7 +20,8 @@ export type AgentClient = {
 
 export const MAX_TOOL_ROUNDS = 3;
 export const AGENT_EFFORT = "low" as const;
-const TURN_DEADLINE_MS = 40_000;
+const TURN_DEADLINE_MS = 45_000;
+const FALLBACK_RESERVE_MS = 10_000;
 const TAP_PREFIX = "[tap]";
 
 const finalSchema: Record<string, unknown> = {
@@ -120,6 +121,17 @@ function parseFinal(response: Anthropic.Message): FinalAnswer {
   return finalAnswerSchema.parse(JSON.parse(text));
 }
 
+/** Rejects when the signal fires, so a stuck step cannot hold the turn past its deadline (the step itself keeps running). */
+function beforeDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort = () => {};
+  const expired = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new Error("AGENT_DEADLINE"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([work, expired]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
 async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext): Promise<Anthropic.ToolResultBlockParam[]> {
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   const outcomes = new Map<string, ToolOutcome>();
@@ -143,10 +155,18 @@ export async function runAgentTurn(input: {
   deps: FactDeps;
   client: AgentClient;
   model: string;
+  /** The whole turn's remaining time, backup reply included. */
   deadlineMs?: number;
+  /** The last part of deadlineMs, kept back for the backup reply. */
+  fallbackReserveMs?: number;
 }): Promise<AgentReply> {
+  const started = performance.now();
   const { request, deps, client, model } = input;
-  const verified = await verifyEnquiry(request.enquiry, deps);
+  const deadlineMs = input.deadlineMs ?? TURN_DEADLINE_MS;
+  const fallbackReserveMs = input.fallbackReserveMs ?? FALLBACK_RESERVE_MS;
+  const workMs = Math.max(1, Math.floor(deadlineMs - fallbackReserveMs));
+  const deadline = AbortSignal.timeout(workMs);
+  const verified = await verifyEnquiry(request.enquiry, deps, Math.max(1, Math.min(5_000, Math.floor(workMs / 3))));
   const ctx: TurnContext = {
     deps,
     seen: new Map(verified.products),
@@ -156,19 +176,18 @@ export async function runAgentTurn(input: {
     shownIds: new Set(request.shownProductIds),
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
-  const deadline = AbortSignal.timeout(input.deadlineMs ?? TURN_DEADLINE_MS);
 
   try {
     const messages: Anthropic.MessageParam[] = [
       ...historyMessages(request),
-      { role: "user", content: await eventContent(request, ctx, verified.notes) },
+      { role: "user", content: await beforeDeadline(eventContent(request, ctx, verified.notes), deadline) },
     ];
     let result: { final: FinalAnswer; content: Anthropic.ContentBlock[] } | null = null;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       const response = await callClaude(client, model, messages, round < MAX_TOOL_ROUNDS ? "auto" : "none", deadline);
       if (response.stop_reason === "tool_use") {
         messages.push({ role: "assistant", content: response.content });
-        messages.push({ role: "user", content: await runToolBlocks(response.content, ctx) });
+        messages.push({ role: "user", content: await beforeDeadline(runToolBlocks(response.content, ctx), deadline) });
         continue;
       }
       result = { final: parseFinal(response), content: response.content };
@@ -208,6 +227,8 @@ export async function runAgentTurn(input: {
     };
   } catch (error) {
     console.warn("[api/agent] fallback reply", { reason: error instanceof Error ? error.message : "unknown" });
-    return buildFallbackReply({ searchText, lines: ctx.lines, deps });
+    // The backup reply gets the reserve, or less if the turn started with less than that left.
+    const left = deadlineMs - (performance.now() - started);
+    return buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });
   }
 }

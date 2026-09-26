@@ -4,7 +4,7 @@ import type { Product } from "@/lib/chat-contract";
 import { enquiryReceiptTotals, type EnquiryReceiptLine } from "@/lib/conversation-export";
 import { checkedEnquiryLine, mergedEnquiryQuantity } from "@/lib/enquiry-order";
 import { resolveProductQuantity } from "@/lib/enquiry-quantity";
-import { liveCheck, type CheckedProduct, type FactDeps } from "./facts";
+import { LIVE_CHECK_TIMEOUT_MS, liveCheck, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 
 export type EnquiryEcho = { stockId: string; quantity: number };
 export type EnquiryAction = {
@@ -93,17 +93,24 @@ function combinedEcho(echo: EnquiryEcho[]) {
   return [...combined.values()];
 }
 
-/** Re-checks the customer's echoed enquiry against the catalogue and the live store. */
-export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps) {
+/**
+ * Re-checks the customer's echoed enquiry against the catalogue and the live store.
+ * Each line's catalogue lookup and live check are bounded by timeoutMs.
+ */
+export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS) {
   const notes: string[] = [];
   const products = new Map<string, CheckedProduct>();
   const checkedLines = await Promise.all(combinedEcho(echo).map(async ({ stockId, quantity }) => {
-    const catalogueProduct = await deps.findByCode(stockId).catch(() => null);
+    const catalogueProduct = await withTimeout(deps.findByCode(stockId).catch(() => null), timeoutMs, "timeout" as const);
+    if (catalogueProduct === "timeout") {
+      notes.push(`${stockId} could not be checked just now and was taken off the enquiry; it can be added again.`);
+      return null;
+    }
     if (!catalogueProduct) {
       notes.push(`${stockId} is no longer in the catalogue and was removed.`);
       return null;
     }
-    const result = await liveCheck(catalogueProduct, deps);
+    const result = await liveCheck(catalogueProduct, deps, timeoutMs);
     products.set(result.product.stock_id, result);
     const label = `${result.product.name} (${result.product.stock_id})`;
     if (!result.verified) {

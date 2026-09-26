@@ -5,17 +5,25 @@ import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { SALES_CONTACT } from "./contact";
 import type { AgentReply } from "./contract";
 import { enquiryTotals } from "./enquiry";
-import { liveCheck, type FactDeps } from "./facts";
+import { liveCheck, withTimeout, type FactDeps } from "./facts";
 
-/** Used when Claude is unavailable or its reply fails the guards twice. */
-export async function buildFallbackReply(input: { searchText: string | null; lines: EnquiryReceiptLine[]; deps: FactDeps }): Promise<AgentReply> {
+const FALLBACK_TIMEOUT_MS = 9_000;
+
+/** Used when Claude is unavailable or its reply fails the guards twice. Search and live checks together stay within timeoutMs. */
+export async function buildFallbackReply(input: { searchText: string | null; lines: EnquiryReceiptLine[]; deps: FactDeps; timeoutMs?: number }): Promise<AgentReply> {
+  const timeoutMs = input.timeoutMs ?? FALLBACK_TIMEOUT_MS;
+  const started = performance.now();
   let cards: Product[] = [];
   const search = input.searchText?.trim() ?? "";
   if (search.length >= 2) {
     try {
-      const found = await input.deps.searchDirect(search.slice(0, 80), 10);
-      const checked = await Promise.all(found.slice(0, 3).map((item) => liveCheck(item, input.deps)));
-      cards = checked.map((item) => item.product);
+      const found = await withTimeout(input.deps.searchDirect(search.slice(0, 80), 10), timeoutMs, null);
+      const left = Math.floor(timeoutMs - (performance.now() - started));
+      // If the search used up the time, skip the live checks and show no cards.
+      if (found && left > 0) {
+        const checked = await Promise.all(found.slice(0, 3).map((item) => liveCheck(item, input.deps, left)));
+        cards = checked.map((item) => item.product);
+      }
     } catch {
       cards = [];
     }

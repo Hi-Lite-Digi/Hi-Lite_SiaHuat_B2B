@@ -4,6 +4,7 @@ import test from "node:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import sharp from "sharp";
 import type { AgentRequest } from "./contract";
+import { verifyEnquiry } from "./enquiry";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, product } from "./testing";
 
@@ -151,6 +152,48 @@ test("a photo that cannot be opened is not sent to Claude, which asks for anothe
   assert.equal(reply.provider, "anthropic");
   assert.ok(!sentBlocks(bodies[0]).some((block) => block.type === "image"));
   assert.match(JSON.stringify(sentBlocks(bodies[0])), /could not be opened/);
+});
+
+function within<T>(promise: Promise<T>, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`still running after ${ms} ms`)), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+/** A Claude call that never answers until its signal aborts. */
+const hangingClient: AgentClient = {
+  messages: {
+    create: (_body, options) => new Promise((_, reject) => {
+      const abort = () => reject(new DOMException("aborted", "AbortError"));
+      if (options?.signal?.aborted) return abort();
+      options?.signal?.addEventListener("abort", abort, { once: true });
+    }),
+  },
+};
+
+test("a Claude call that never answers still leaves time for the backup reply", async () => {
+  const turn = runAgentTurn({ request: request({}), deps: deps(), client: hangingClient, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500 });
+  const reply = await within(turn, 2_500);
+  assert.equal(reply.provider, "fallback");
+});
+
+test("a tool that never answers still leaves time for the backup reply", async () => {
+  const stuck = deps();
+  stuck.searchDirect = () => new Promise(() => undefined);
+  const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] })]);
+  const turn = runAgentTurn({ request: request({}), deps: stuck, client, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500 });
+  const reply = await within(turn, 2_500);
+  assert.equal(reply.provider, "fallback");
+  assert.deepEqual(reply.cards, []);
+});
+
+test("a slow catalogue lookup cannot hold up enquiry re-verification", async () => {
+  const slow = deps();
+  slow.findByCode = (stockId) => new Promise((resolve) => setTimeout(() => resolve(stockId === "970S" ? blowtorch : null), 2_000));
+  const started = performance.now();
+  const result = await verifyEnquiry([{ stockId: "970S", quantity: 2 }], slow, 300);
+  assert.ok(performance.now() - started < 700, "re-verification waited for the slow lookup");
+  assert.equal(result.notes.length, 1);
 });
 
 test("customer texts exclude taps and include the current message", () => {
