@@ -21,6 +21,7 @@ type ChatItem = {
   showContact?: boolean;
   imageUrl?: string;
   tap?: boolean;
+  chip?: boolean;
 };
 
 const GREETING = "Hi, I'm Claire from Sia Huat 👋 What are you looking for today? You can send me a photo too.";
@@ -40,7 +41,7 @@ function historyFor(items: ChatItem[]) {
   return items.slice(-30).map((item) => ({
     role: item.role,
     content: (item.role === "user"
-      ? item.tap ? `[tap] ${item.text}` : item.imageUrl ? `[photo] ${item.text || "(no caption)"}` : item.text
+      ? item.tap ? `[tap] ${item.text}` : item.chip ? `[chip] ${item.text}` : item.imageUrl ? `[photo] ${item.text || "(no caption)"}` : item.text
       : `${item.text}${item.cards?.length ? `\n[cards shown: ${item.cards.map((card) => `${card.stock_id} ${card.name}`).join("; ")}]` : ""}`
     ).slice(0, 2_000),
   })).filter((item) => item.content.trim().length > 0);
@@ -265,7 +266,7 @@ export function AgentChat() {
           <p className={`mt-2 text-[10px] text-[#667a74]/80 ${item.role === "user" ? "text-right" : ""}`}>{item.role === "user" ? "Sent" : "Received"} · {item.time}</p>
         </div>
         {item.role === "assistant" && item.id === latestAssistantId && item.chips?.length ? <div className="mt-2 flex flex-wrap gap-2">
-          {item.chips.map((chip) => <button key={chip} type="button" disabled={loading} onClick={() => void send({ type: "text", text: chip }, { text: chip })} className="rounded-full border border-[#176853]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#176853] hover:bg-[#eef7f3] disabled:opacity-50">{chip}</button>)}
+          {item.chips.map((chip) => <button key={chip} type="button" disabled={loading} onClick={() => void send({ type: "text", text: chip, chip: true }, { text: chip, chip: true })} className="rounded-full border border-[#176853]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#176853] hover:bg-[#eef7f3] disabled:opacity-50">{chip}</button>)}
         </div> : null}
       </div>)}
       {loading && <div aria-label="Sia Huat is typing" aria-live="polite" className="flex w-fit items-center gap-1.5 rounded-2xl bg-white px-4 py-3 shadow-sm"><i className="typing-dot" /><i className="typing-dot" /><i className="typing-dot" /></div>}

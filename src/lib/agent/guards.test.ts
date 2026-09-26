@@ -36,9 +36,13 @@ test("chips get the same money check as the message", () => {
   assert.doesNotMatch(review.issues.join(" "), /\$23\.36/);
 });
 
-test("chips are short and never bare numbers", () => {
-  const review = reviewAnswer({ message: "How many do you need?", card_ids: [], chips: ["2"], show_contact: false }, seen, allowed);
-  assert.match(review.issues.join(" "), /never bare numbers/);
+test("chips are short and never numbers or quantities", () => {
+  const chipIssues = (chips: string[]) => reviewAnswer({ message: "How many do you need?", card_ids: [], chips, show_contact: false }, seen, allowed)
+    .issues.filter((issue) => issue.startsWith("Chips:"));
+  for (const chips of [["2"], ["5 pcs"], ["two"], ["两个"]]) {
+    assert.deepEqual(chipIssues(chips), ["Chips: at most 3 short answers under 40 characters, never numbers or quantities."], chips[0]);
+  }
+  assert.deepEqual(chipIssues(["Cooking", "Desserts"]), []);
 });
 
 test("a clean answer has no issues", () => {

@@ -196,6 +196,24 @@ test("a slow catalogue lookup cannot hold up enquiry re-verification", async () 
   assert.equal(result.notes.length, 1);
 });
 
+test("customer texts exclude chip taps, earlier and current", () => {
+  const texts = recentCustomerTexts(request({
+    event: { type: "text", text: "5 pcs", chip: true },
+    history: [{ role: "user", content: "[chip] 10 pcs" }, { role: "user", content: "blow torch" }],
+  }));
+  assert.deepEqual(texts, ["blow torch"]);
+});
+
+test("a chip tap is never a quantity: the enquiry tool refuses", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 5 }),
+    answer({ message: "Good choice. How many do you need?" }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "5 pcs", chip: true } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /QTY_NOT_STATED/);
+});
+
 test("customer texts exclude taps and include the current message", () => {
   const texts = recentCustomerTexts(request({
     event: { type: "text", text: "3 please" },

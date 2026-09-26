@@ -3,7 +3,7 @@ import { z } from "zod";
 import { imageAttachmentSchema, productSchema } from "@/lib/chat-contract";
 
 export const agentEventSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(500), voice: z.boolean().optional() }),
+  z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(500), voice: z.boolean().optional(), chip: z.boolean().optional() }),
   z.object({ type: z.literal("select_product"), stockId: z.string().trim().min(1).max(100) }),
   z.object({ type: z.literal("image"), image: imageAttachmentSchema, caption: z.string().trim().max(500).optional() }),
 ]);

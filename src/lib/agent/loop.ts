@@ -8,7 +8,7 @@ import type { AgentReply, AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
-import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts, type FinalAnswer } from "./guards";
+import { CHIP_ISSUE, MONEY_ISSUE_PREFIX, allowedCents, chipAllowed, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts, type FinalAnswer } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, runTool, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -23,6 +23,7 @@ export const AGENT_EFFORT = "low" as const;
 const TURN_DEADLINE_MS = 45_000;
 const FALLBACK_RESERVE_MS = 10_000;
 const TAP_PREFIX = "[tap]";
+const CHIP_PREFIX = "[chip]";
 
 const finalSchema: Record<string, unknown> = {
   type: "object",
@@ -42,12 +43,12 @@ const finalAnswerSchema = z.object({
   show_contact: z.boolean(),
 });
 
-/** The customer's last two typed messages (taps excluded), newest first. */
+/** The customer's last two typed messages (card and chip taps excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
   const event = request.event;
-  const current = event.type === "text" ? [event.text] : event.type === "image" && event.caption ? [event.caption] : [];
+  const current = event.type === "text" && !event.chip ? [event.text] : event.type === "image" && event.caption ? [event.caption] : [];
   const earlier = request.history
-    .filter((item) => item.role === "user" && !item.content.startsWith(TAP_PREFIX))
+    .filter((item) => item.role === "user" && !item.content.startsWith(TAP_PREFIX) && !item.content.startsWith(CHIP_PREFIX))
     .map((item) => item.content.replace(/^\[photo\]\s*/, ""))
     .reverse();
   return [...current, ...earlier].slice(0, 2);
@@ -206,11 +207,12 @@ export async function runAgentTurn(input: {
       final = parseFinal(await callClaude(client, model, messages, "none", deadline));
       allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
       review = reviewAnswer(final, ctx.seen, allowed);
-      if (review.issues.length && review.issues.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX))) {
+      if (review.issues.length && review.issues.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX) || issue === CHIP_ISSUE)) {
+        // Chips never carry digits, so dropping the disallowed ones also drops any amount in a chip.
         final = {
           ...final,
           message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)),
-          chips: final.chips.filter((chip) => unverifiedAmounts(chip, allowed).length === 0),
+          chips: final.chips.filter(chipAllowed),
         };
         review = { ...review, issues: [] };
       }

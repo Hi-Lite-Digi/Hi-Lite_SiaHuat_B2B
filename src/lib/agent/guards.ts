@@ -9,6 +9,13 @@ export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]
 export type Review = { issues: string[]; cards: Product[] };
 
 export const MONEY_ISSUE_PREFIX = "These amounts";
+export const CHIP_ISSUE = "Chips: at most 3 short answers under 40 characters, never numbers or quantities.";
+const chipNumberPattern = /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen)\b|[一二两三四五六七八九十百]/i;
+
+/** A chip is sent as the customer's answer, so it must be short and never carry a number or quantity. */
+export function chipAllowed(chip: string) {
+  return chip.length <= 40 && !chipNumberPattern.test(chip);
+}
 const moneyPattern = /\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?/g;
 const toCents = (whole: string, fraction?: string) => Number(whole.replace(/,/g, "")) * 100 + Number((fraction ?? "0").padEnd(2, "0"));
 
@@ -44,9 +51,7 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   const amounts = [answer.message, ...answer.chips].flatMap((text) => unverifiedAmounts(text, allowed));
   if (amounts.length) issues.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
   issues.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
-  if (answer.chips.length > 3 || answer.chips.some((chip) => chip.length > 40 || /^\s*\d+\s*$/.test(chip))) {
-    issues.push("Chips: at most 3 short answers under 40 characters, never bare numbers.");
-  }
+  if (answer.chips.length > 3 || !answer.chips.every(chipAllowed)) issues.push(CHIP_ISSUE);
   return { issues, cards };
 }
 
