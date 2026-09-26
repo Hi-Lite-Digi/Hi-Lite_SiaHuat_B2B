@@ -86,7 +86,16 @@ test("a clean answer has no issues", () => {
 });
 
 test("staff-contact claims are removed from the customer message", () => {
-  assert.doesNotMatch(customerMessage("I've notified our sales team. They will call you soon."), /will call you/);
+  assert.doesNotMatch(customerMessage("I've notified our sales team. They will call you soon.").message, /will call you/);
+});
+
+test("a removed staff claim shows the contact block instead of a fixed sentence", () => {
+  const cleaned = customerMessage("I've notified our sales team. Anything else you need?");
+  assert.doesNotMatch(cleaned.message, /notified our sales team/);
+  assert.doesNotMatch(cleaned.message, /No staff member has been notified automatically/);
+  assert.equal(cleaned.message, "Anything else you need?");
+  assert.equal(cleaned.showContact, true);
+  assert.deepEqual(customerMessage(" Which size do you need? "), { message: "Which size do you need?", showContact: false });
 });
 
 test("块 as a counting word is not money", () => {

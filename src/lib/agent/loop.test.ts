@@ -185,6 +185,14 @@ test("the history's card notes and previous message feed the repetition checks",
   assert.deepEqual(reply.cards, []);
 });
 
+test("a staff claim is removed and the reply shows the sales contact", async () => {
+  const { client } = fakeClient([answer({ message: "I've notified our sales team." })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.doesNotMatch(reply.message, /notified/);
+  assert.equal(reply.showContact, true);
+});
+
 test("after the tool-round cap Claude must answer without tools", async () => {
   const calls = Array.from({ length: MAX_TOOL_ROUNDS }, (_, index) => toolCall(`t${index}`, "search_catalogue", { queries: ["torch"] }));
   const { client, bodies } = fakeClient([...calls, answer({ message: "Here are the torches." })]);

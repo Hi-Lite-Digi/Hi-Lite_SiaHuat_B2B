@@ -267,12 +267,13 @@ export async function runAgentTurn(input: {
       if (review.style.length) final = { ...final, message: tidyMessage(final.message) };
     }
 
+    const cleaned = customerMessage(final.message);
     return {
-      message: customerMessage(final.message),
+      message: cleaned.message,
       cards: review.cards,
       chips: review.chips,
       enquiry: replyEnquiry(ctx),
-      showContact: final.show_contact,
+      showContact: final.show_contact || cleaned.showContact,
       provider: "anthropic",
     };
   } catch (error) {
