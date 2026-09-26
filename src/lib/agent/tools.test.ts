@@ -223,8 +223,15 @@ test("the only product card in Claire's previous reply can be added", async () =
 
 test("a product named by a word no other card in the previous reply shares can be added", async () => {
   assert.equal((await addSafico({ customerTexts: ["the safico one, 2 pcs"], previousCards: twoCards })).isError, false);
-  // With no cards in the previous reply, the name comes from the catalogue.
-  assert.equal((await addSafico({ customerTexts: ["I need 2 safico torches"] })).isError, false);
+});
+
+test("a named product that wasn't a card in the previous reply is refused", async () => {
+  // First message: the search finds several torches and nothing has been shown yet, so none of them was chosen.
+  const ctx = context(undefined, { customerTexts: ["I need 2 blow torches"] });
+  await runTool("search_catalogue", { queries: ["torch"] }, ctx);
+  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
+  assert.match(outcome.content, /PRODUCT_NOT_CHOSEN/);
+  assert.match((await addSafico({ customerTexts: ["I need 2 safico torches"] })).content, /PRODUCT_NOT_CHOSEN/);
 });
 
 test("a product the customer didn't pick out of several is refused", async () => {

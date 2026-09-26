@@ -98,6 +98,12 @@ test("a removed staff claim shows the contact block instead of a fixed sentence"
   assert.deepEqual(customerMessage(" Which size do you need? "), { message: "Which size do you need?", showContact: false });
 });
 
+test("a reply that was only a staff claim still has words", () => {
+  for (const text of ["I've notified our sales team.", "I've passed this to our sales team, they will contact you!"]) {
+    assert.deepEqual(customerMessage(text), { message: "You can reach our sales team directly below.", showContact: true }, text);
+  }
+});
+
 test("块 as a counting word is not money", () => {
   assert.deepEqual(unverifiedAmounts("好的，已加入3块砧板。还需要别的吗？", allowed), []);
 });

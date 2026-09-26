@@ -102,11 +102,13 @@ export function tidyMessage(message: string) {
 
 // honestManualHandoff appends this after removing a claim; the reply's contact block says it better.
 const HANDOFF_SENTENCE = "No staff member has been notified automatically. Use the PDF button and contact Sia Huat sales directly.";
+// Used when the staff claim was the whole message, so the contact block never arrives without words.
+const CONTACT_LINE = "You can reach our sales team directly below.";
 
 /** Final safety pass on the words the customer sees. A removed staff claim turns the contact block on. */
 export function customerMessage(message: string) {
   const trimmed = message.trim();
   const checked = honestManualHandoff(trimmed);
   if (checked === trimmed) return { message: trimmed, showContact: false };
-  return { message: checked.replace(HANDOFF_SENTENCE, "").trim(), showContact: true };
+  return { message: checked.replace(HANDOFF_SENTENCE, "").trim() || CONTACT_LINE, showContact: true };
 }

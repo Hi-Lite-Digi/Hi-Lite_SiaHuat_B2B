@@ -190,6 +190,7 @@ test("a staff claim is removed and the reply shows the sales contact", async () 
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
   assert.doesNotMatch(reply.message, /notified/);
+  assert.notEqual(reply.message.trim(), "");
   assert.equal(reply.showContact, true);
 });
 
