@@ -21,6 +21,7 @@
     "catalogue:crawl": "tsx scripts/crawl-siahuat.ts",
     "catalogue:import": "tsx scripts/crawl-siahuat.ts --limit=1 --import",
     "catalogue:images": "tsx scripts/index-catalogue-images.ts",
+    "catalogue:nouns": "tsx scripts/generate-catalogue-nouns.ts",
     "qa:claude": "tsx scripts/qa-claude.ts"
   },
   "dependencies": {
