@@ -17,6 +17,8 @@ test("a failed or mismatched live check leaves the product unverified", async ()
   const failed = await liveCheck(torch, fakeDeps([torch], { "970S": "fail" }));
   assert.equal(failed.verified, false);
   assert.equal(failed.product.stock_status, "unknown");
+  assert.equal(failed.product.in_stock, null);
+  assert.equal(failed.product.available_quantity, null);
   const mismatch = await liveCheck(torch, fakeDeps([torch], { "970S": { stock_id: "OTHER" } }));
   assert.equal(mismatch.verified, false);
 });

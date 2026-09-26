@@ -39,7 +39,7 @@ export function defaultFactDeps(): FactDeps {
 
 /** Overwrites price and stock from the live store page. Any failure leaves the product unverified. */
 export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS): Promise<CheckedProduct> {
-  const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown" }, verified: false };
+  const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
   if (!product.source_url) return unverified;
   try {
     const live = await deps.fetchLive(product.source_url, timeoutMs);
