@@ -621,3 +621,12 @@ export function requestedQuantity(message: string) {
   const parsed = parseRequestedQuantity(message);
   return parsed.kind === "valid" ? parsed.value : null;
 }
+
+/**
+ * Quantity stated alongside a displayed-product choice. A bare number ("2",
+ * sent by the "Choose option 2" button or a card tap) is the choice itself,
+ * not an order for 2 pieces.
+ */
+export function quantityBesidesProductChoice(message: string) {
+  return /^\s*\d+\s*$/.test(message) ? null : requestedQuantity(message);
+}

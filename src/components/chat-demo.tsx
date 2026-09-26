@@ -25,6 +25,7 @@ import {
   productForTypedConfirmation,
   referencesSingleDisplayedProduct,
   requestedDisplayedProductIndex,
+  quantityBesidesProductChoice,
   requestedQuantity,
   requestsAdditionalProduct,
   requestsAnotherOption,
@@ -1564,7 +1565,7 @@ export function ChatDemo() {
     if (loading) return;
     rememberShownProducts([product]);
     if (product.stock_status === "out_of_stock") {
-      const quantity = requestedQuantity(userText) ?? pendingQuantity;
+      const quantity = quantityBesidesProductChoice(userText) ?? pendingQuantity;
       lastUnavailableProductRef.current = product;
       setPendingProduct(null); setPendingQuantity(quantity); setConfirmedProduct(null); setStage("clarify");
       setMessages((current) => [...current,
@@ -1577,7 +1578,7 @@ export function ChatDemo() {
       setSuggestions(conversationLanguage === "zh" ? ["选择其他商品", "准备人工审核摘要"] : ["Choose another item", "Prepare staff review summary"]); return;
     }
     lastUnavailableProductRef.current = null;
-    const resolved = resolveProductQuantity(requestedQuantity(userText) ?? pendingQuantity, pendingPackagingRef.current, product, conversationLanguage);
+    const resolved = resolveProductQuantity(quantityBesidesProductChoice(userText) ?? pendingQuantity, pendingPackagingRef.current, product, conversationLanguage);
     const quantity = resolved.quantity;
     pendingPackagingRef.current = null;
     setPendingProduct(product); setPendingQuantity(quantity); setPendingQuote(null); setConfirmedProduct(null); setStage("clarify"); setSuggestions([]);
