@@ -114,14 +114,24 @@ test("a phone number or email that isn't Sia Huat's sales contact is removed and
     ["Call us at 6223 1732", "Call us at Sia Huat sales (details below)"],
     ["Call +65 6223-1732 or email sales@example.com.", "Call Sia Huat sales (details below) or email Sia Huat sales (details below)."],
     ["请拨打62231732。", "请拨打Sia Huat sales (details below)。"],
+    ["Toll-free: 1800 123 4567.", "Toll-free: Sia Huat sales (details below)."],
+    ["Our HQ is on +44 20 7946 0958.", "Our HQ is on Sia Huat sales (details below)."],
   ];
   for (const [text, expected] of cases) assert.deepEqual(customerMessage(text), { message: expected, showContact: true }, text);
 });
 
-test("Sia Huat's sales contact, prices and item codes pass unchanged", () => {
+test("Sia Huat's sales contact, prices, item codes, dates and size lists pass unchanged", () => {
   const text = `You can reach Sia Huat sales at ${SALES_CONTACT.phone} or ${SALES_CONTACT.email}.`;
   assert.deepEqual(customerMessage(text), { message: text, showContact: false });
-  for (const safe of ["Got it: 2 BTS-8026D torches, $46.72.", "The total is $1,234,567.89.", "Item 12345678D is in stock."]) {
+  for (const safe of [
+    "Got it: 2 BTS-8026D torches, $46.72.",
+    "The total is $1,234,567.89.",
+    "Item 12345678D is in stock.",
+    "Got it: 2 Giesser knives (218455-20). Anything else?",
+    "Delivery is on 2026-09-26.",
+    "We have sizes 10 12 14 16.",
+    "It comes in 3000 4000 5000 ml.",
+  ]) {
     assert.deepEqual(customerMessage(safe), { message: safe, showContact: false }, safe);
   }
 });
