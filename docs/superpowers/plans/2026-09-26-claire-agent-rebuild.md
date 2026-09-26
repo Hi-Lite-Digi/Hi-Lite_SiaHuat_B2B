@@ -1198,7 +1198,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CheckedProduct } from "./facts";
-import { allowedCents, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts } from "./guards";
+import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts } from "./guards";
 import { product } from "./testing";
 
 const seen = new Map<string, CheckedProduct>([
@@ -1218,6 +1218,18 @@ test("only live-checked prices and enquiry totals may appear as amounts", () => 
   assert.deepEqual(unverifiedAmounts("Noted: 2 torches, $46.72 ($23.36 each).", allowed), []);
   assert.deepEqual(unverifiedAmounts("That one is $99 and delivery is $15.", allowed), ["$99", "$15"]);
   assert.equal(removeAmounts("It's $99 now.", ["$99"]), "It's the listed price now.");
+});
+
+test("removing an amount leaves longer amounts that start with it intact", () => {
+  assert.equal(removeAmounts("Was $23, now $23.36.", ["$23"]), "Was the listed price, now $23.36.");
+  assert.equal(removeAmounts("It's $9 or $99.", ["$9"]), "It's the listed price or $99.");
+});
+
+test("chips get the same money check as the message", () => {
+  const review = reviewAnswer({ message: "Which one would you like?", card_ids: [], chips: ["Yes, $99 one", "$23.36 one"], show_contact: false }, seen, allowed);
+  assert.equal(review.issues.filter((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)).length, 1);
+  assert.match(review.issues.join(" "), /\$99/);
+  assert.doesNotMatch(review.issues.join(" "), /\$23\.36/);
 });
 
 test("chips are short and never bare numbers", () => {
@@ -1276,7 +1288,7 @@ export function unverifiedAmounts(message: string, allowed: ReadonlySet<number>)
 }
 
 export function removeAmounts(message: string, amounts: string[]) {
-  return amounts.reduce((text, amount) => text.split(amount).join("the listed price"), message);
+  return message.replace(moneyPattern, (match) => (amounts.includes(match) ? "the listed price" : match));
 }
 
 export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProduct>, allowed: ReadonlySet<number>): Review {
@@ -1286,7 +1298,7 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   if (unknown.length) issues.push(`card_ids must come from a tool result in this turn; not found: ${unknown.join(", ")}.`);
   if (ids.length > 5) issues.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
-  const amounts = unverifiedAmounts(answer.message, allowed);
+  const amounts = [answer.message, ...answer.chips].flatMap((text) => unverifiedAmounts(text, allowed));
   if (amounts.length) issues.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
   issues.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
   if (answer.chips.length > 3 || answer.chips.some((chip) => chip.length > 40 || /^\s*\d+\s*$/.test(chip))) {
@@ -1304,7 +1316,7 @@ export function customerMessage(message: string) {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `node --conditions=react-server --import tsx --test src/lib/agent/guards.test.ts`
-Expected: `# pass 5`, `# fail 0`.
+Expected: `# pass 7`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -1549,11 +1561,12 @@ test("a made-up card is sent back for one repair", async () => {
 
 test("an unverified amount that survives the repair is removed", async () => {
   const { client } = fakeClient([
-    answer({ message: "That one is $99." }),
-    answer({ message: "That one is $99." }),
+    answer({ message: "That one is $99.", chips: ["Yes, $99 one", "Show others"] }),
+    answer({ message: "That one is $99.", chips: ["Yes, $99 one", "Show others"] }),
   ]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.doesNotMatch(reply.message, /\$99/);
+  assert.deepEqual(reply.chips, ["Show others"]);
 });
 
 test("after the tool-round cap Claude must answer without tools", async () => {
@@ -1771,7 +1784,11 @@ export async function runAgentTurn(input: {
       allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
       review = reviewAnswer(final, ctx.seen, allowed);
       if (review.issues.length && review.issues.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX))) {
-        final = { ...final, message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)) };
+        final = {
+          ...final,
+          message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)),
+          chips: final.chips.filter((chip) => unverifiedAmounts(chip, allowed).length === 0),
+        };
         review = { ...review, issues: [] };
       }
       if (review.issues.length) throw new Error("AGENT_REPLY_REJECTED");

@@ -31,7 +31,7 @@ export function unverifiedAmounts(message: string, allowed: ReadonlySet<number>)
 }
 
 export function removeAmounts(message: string, amounts: string[]) {
-  return amounts.reduce((text, amount) => text.split(amount).join("the listed price"), message);
+  return message.replace(moneyPattern, (match) => (amounts.includes(match) ? "the listed price" : match));
 }
 
 export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProduct>, allowed: ReadonlySet<number>): Review {
@@ -41,7 +41,7 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   if (unknown.length) issues.push(`card_ids must come from a tool result in this turn; not found: ${unknown.join(", ")}.`);
   if (ids.length > 5) issues.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
-  const amounts = unverifiedAmounts(answer.message, allowed);
+  const amounts = [answer.message, ...answer.chips].flatMap((text) => unverifiedAmounts(text, allowed));
   if (amounts.length) issues.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
   issues.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
   if (answer.chips.length > 3 || answer.chips.some((chip) => chip.length > 40 || /^\s*\d+\s*$/.test(chip))) {

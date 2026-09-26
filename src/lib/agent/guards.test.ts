@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CheckedProduct } from "./facts";
-import { allowedCents, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts } from "./guards";
+import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts } from "./guards";
 import { product } from "./testing";
 
 const seen = new Map<string, CheckedProduct>([
@@ -22,6 +22,18 @@ test("only live-checked prices and enquiry totals may appear as amounts", () => 
   assert.deepEqual(unverifiedAmounts("Noted: 2 torches, $46.72 ($23.36 each).", allowed), []);
   assert.deepEqual(unverifiedAmounts("That one is $99 and delivery is $15.", allowed), ["$99", "$15"]);
   assert.equal(removeAmounts("It's $99 now.", ["$99"]), "It's the listed price now.");
+});
+
+test("removing an amount leaves longer amounts that start with it intact", () => {
+  assert.equal(removeAmounts("Was $23, now $23.36.", ["$23"]), "Was the listed price, now $23.36.");
+  assert.equal(removeAmounts("It's $9 or $99.", ["$9"]), "It's the listed price or $99.");
+});
+
+test("chips get the same money check as the message", () => {
+  const review = reviewAnswer({ message: "Which one would you like?", card_ids: [], chips: ["Yes, $99 one", "$23.36 one"], show_contact: false }, seen, allowed);
+  assert.equal(review.issues.filter((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)).length, 1);
+  assert.match(review.issues.join(" "), /\$99/);
+  assert.doesNotMatch(review.issues.join(" "), /\$23\.36/);
 });
 
 test("chips are short and never bare numbers", () => {
