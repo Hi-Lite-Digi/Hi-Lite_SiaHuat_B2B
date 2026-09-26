@@ -24,6 +24,12 @@ test("only live-checked prices and enquiry totals may appear as amounts", () => 
   assert.equal(removeAmounts("It's $99 now.", ["$99"]), "It's the listed price now.");
 });
 
+test("amounts in SGD, dollars and 元 are checked like $ amounts", () => {
+  for (const text of ["S$46.72", "SGD 23.36", "46.72 dollars", "23.36元"]) assert.deepEqual(unverifiedAmounts(text, allowed), [], text);
+  for (const text of ["SGD 50.00", "50 dollars", "50元", "新币 50"]) assert.deepEqual(unverifiedAmounts(text, allowed), [text], text);
+  assert.equal(removeAmounts("That's SGD 50.00 now.", ["SGD 50.00"]), "That's the listed price now.");
+});
+
 test("removing an amount leaves longer amounts that start with it intact", () => {
   assert.equal(removeAmounts("Was $23, now $23.36.", ["$23"]), "Was the listed price, now $23.36.");
   assert.equal(removeAmounts("It's $9 or $99.", ["$9"]), "It's the listed price or $99.");

@@ -16,8 +16,14 @@ const chipNumberPattern = /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|
 export function chipAllowed(chip: string) {
   return chip.length <= 40 && !chipNumberPattern.test(chip);
 }
-const moneyPattern = /\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?/g;
-const toCents = (whole: string, fraction?: string) => Number(whole.replace(/,/g, "")) * 100 + Number((fraction ?? "0").padEnd(2, "0"));
+const amount = String.raw`(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?`;
+// $X, S$X, SG$X, SGD X, 新币X (groups 1-2), or X SGD, X dollars/bucks, X元, X块, X新币 (groups 3-4).
+const moneyPattern = new RegExp(String.raw`(?:SG?\$|\$|SGD|新币)\s?${amount}|(?<![\d.,])${amount}\s?(?:(?:SGD|dollars?|bucks)\b|元|块|新币)`, "gi");
+const toCents = (match: RegExpMatchArray) => {
+  const whole = match[1] ?? match[3];
+  const fraction = match[2] ?? match[4];
+  return Number(whole.replace(/,/g, "")) * 100 + Number((fraction ?? "0").padEnd(2, "0"));
+};
 
 /** Amounts Claire may mention: live-checked prices, enquiry line prices and totals. */
 export function allowedCents(seen: Map<string, CheckedProduct>, lines: EnquiryReceiptLine[], grandTotal: number) {
@@ -33,7 +39,7 @@ export function allowedCents(seen: Map<string, CheckedProduct>, lines: EnquiryRe
 
 export function unverifiedAmounts(message: string, allowed: ReadonlySet<number>) {
   return [...message.matchAll(moneyPattern)]
-    .filter((match) => !allowed.has(toCents(match[1], match[2])))
+    .filter((match) => !allowed.has(toCents(match)))
     .map((match) => match[0]);
 }
 
