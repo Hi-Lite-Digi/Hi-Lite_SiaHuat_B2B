@@ -73,7 +73,10 @@ export function AgentChat() {
   const latestAssistantId = [...items].reverse().find((item) => item.role === "assistant")?.id;
 
   async function send(event: AgentEvent, bubble: Omit<ChatItem, "id" | "role" | "time">) {
-    if (loadingRef.current) return;
+    if (loadingRef.current) {
+      setNotice("Please wait for my reply, then send that again.");
+      return;
+    }
     const session = sessionId.current;
     const history = historyFor(itemsRef.current);
     setItems((current) => [...current, { id: nextId.current++, role: "user", time: timeLabel(), ...bubble }]);
@@ -172,15 +175,17 @@ export function AgentChat() {
         const audio = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
         if (audio.size === 0 || audio.size > 4 * 1024 * 1024) return setNotice("That voice note couldn't be used. Please type your message.");
         const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
+        const session = sessionId.current;
         const form = new FormData();
         form.append("audio", audio, `voice-note.${extension}`);
-        form.append("sessionId", sessionId.current);
+        form.append("sessionId", session);
         setTranscribing(true);
         try {
           const response = await fetch("/api/transcribe", { method: "POST", body: form, signal: AbortSignal.timeout(40_000) });
           const body = await response.json().catch(() => null) as { transcript?: string } | null;
           const transcript = body?.transcript?.trim().slice(0, 500) ?? "";
           if (!response.ok || !transcript) throw new Error("VOICE_FAILED");
+          if (sessionId.current !== session) return;
           await send({ type: "text", text: transcript, voice: true }, { text: `🎤 ${transcript}` });
         } catch {
           setNotice("That voice note couldn't be transcribed. Please type your message.");
