@@ -56,6 +56,26 @@ test("search outage is reported as a tool error", async () => {
   assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
 });
 
+test("a category's products are merged in after the query results, without duplicates", async () => {
+  const kitchenTongs = product({ stock_id: "TG1", name: "SALAD TONGS 30CM", subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
+  const clamp = product({ stock_id: "TG2", name: "BBQ GRILL CLAMP", subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
+  const servingTongs = product({ stock_id: "TG3", name: "BUFFET SERVING TONGS", subcategory: "Serving utensils", third_category: "Serving tongs" });
+  const ctx = context(fakeDeps([kitchenTongs, clamp, servingTongs]));
+  const outcome = await runTool("search_catalogue", { queries: ["tongs"], category: "kitchen tongs" }, ctx);
+  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string; price_and_stock_verified_live: boolean }>; total_found: number; more_available: boolean };
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["TG1", "TG3", "TG2"]);
+  assert.ok(body.products.every((item) => item.price_and_stock_verified_live));
+  assert.deepEqual([body.total_found, body.more_available], [3, false]);
+  assert.ok(ctx.seen.has("TG2"));
+});
+
+test("a search that hits a query's row limit says more are available", async () => {
+  const torches = Array.from({ length: 10 }, (_, index) => product({ stock_id: `T${index + 1}`, name: `TORCH ${index + 1}` }));
+  const outcome = await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches)));
+  const body = JSON.parse(outcome.content) as { products: unknown[]; total_found: number; more_available: boolean };
+  assert.deepEqual([body.products.length, body.total_found, body.more_available], [10, 10, true]);
+});
+
 test("a query that keeps failing does not sink the other queries", async () => {
   const deps = fakeDeps([blowtorch, mastrad, safico]);
   const search = deps.searchDirect;

@@ -25,11 +25,12 @@ export type TurnContext = {
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; price and stock of the first 6 are checked live on the store (price_and_stock_verified_live).",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; price and stock of the first 6 are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows.",
     input_schema: {
       type: "object",
       properties: {
         queries: { type: "array", items: { type: "string" }, description: "1-3 short search phrases" },
+        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'hand mixers'. Its products are added after the query results." },
         max_price: { type: "number", description: "Optional budget ceiling per unit, SGD ex GST" },
         exclude_ids: { type: "array", items: { type: "string" }, description: "Item codes the customer rejected" },
       },
@@ -82,6 +83,7 @@ export const agentTools: Anthropic.Tool[] = [
 
 const searchInput = z.object({
   queries: z.array(z.string().trim().min(1).max(80)).min(1).max(3),
+  category: z.string().trim().min(1).max(80).nullish(),
   max_price: z.number().positive().nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),
 });
@@ -94,6 +96,10 @@ const enquiryInput = z.object({
   unit: z.enum(["uom", "carton", "packet"]).nullish(),
 });
 
+/** Rows asked of each search query and of the category search. */
+const QUERY_ROWS = 10;
+const CATEGORY_ROWS = 20;
+
 export type ToolOutcome = { content: string; isError: boolean };
 const ok = (value: unknown): ToolOutcome => ({ content: JSON.stringify(value), isError: false });
 const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome => ({ content: JSON.stringify({ error, ...detail }), isError: true });
@@ -104,29 +110,40 @@ function remember(ctx: TurnContext, checked: CheckedProduct) {
 }
 
 async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: TurnContext) {
-  // One slow or failed query must not sink the others: each is retried once and the ones that succeed are used.
-  const settled = await Promise.allSettled(input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, 10))));
-  const results = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-  if (!results.length) return fail("SEARCH_UNAVAILABLE");
+  const category = input.category;
+  // One slow or failed search must not sink the others: each is retried once and the ones that succeed are used.
+  const settled = await Promise.allSettled([
+    ...input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, QUERY_ROWS))),
+    ...(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS))] : []),
+  ]);
+  if (settled.every((result) => result.status === "rejected")) return fail("SEARCH_UNAVAILABLE");
+  const lists = settled.map((result) => (result.status === "fulfilled" ? result.value : []));
+  const queryLists = lists.slice(0, input.queries.length);
+  const categoryList = lists[input.queries.length] ?? [];
   const excluded = new Set((input.exclude_ids ?? []).map((id) => id.toLowerCase()));
   const merged: Product[] = [];
   const ids = new Set<string>();
-  for (let rank = 0; rank < 10; rank += 1) {
-    for (const list of results) {
-      const item = list[rank];
-      if (!item || ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase())) continue;
-      if (input.max_price && item.list_price > input.max_price) continue;
-      ids.add(item.stock_id);
-      merged.push(item);
-    }
+  const add = (item: Product | undefined) => {
+    if (!item || ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase())) return;
+    if (input.max_price && item.list_price > input.max_price) return;
+    ids.add(item.stock_id);
+    merged.push(item);
+  };
+  for (let rank = 0; rank < QUERY_ROWS; rank += 1) {
+    for (const list of queryLists) add(list[rank]);
   }
+  for (const item of categoryList) add(item);
   const top = merged.slice(0, 10);
+  // A search that returned its full row limit may have more matches than it could return.
+  const moreAvailable = queryLists.some((list) => list.length >= QUERY_ROWS) || categoryList.length >= CATEGORY_ROWS || merged.length > top.length;
   const checked = await Promise.all(top.map((item, index) => (index < 6
     ? liveCheck(item, ctx.deps)
     : Promise.resolve<CheckedProduct>({ product: { ...item, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false }))));
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
   return ok({
     products: affordable.map((item) => remember(ctx, item)),
+    total_found: merged.length,
+    more_available: moreAvailable,
     ...(affordable.length ? {} : { note: "No catalogue matches for these words. Try other words the customer might mean, or ask one question." }),
   });
 }

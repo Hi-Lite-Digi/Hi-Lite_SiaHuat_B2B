@@ -5,6 +5,7 @@ import {
   findAvailableCatalogueAlternatives,
   findCatalogueProductBySourceUrl,
   findProductForStockCheck,
+  searchCatalogueByCategory,
   searchCatalogueDirect,
 } from "@/lib/catalogue";
 import { lookupCatalogueImage, type CatalogueImageLookup } from "@/lib/catalogue-image-library";
@@ -15,6 +16,7 @@ export type CatalogueProduct = Product & { source_url: string };
 /** Everything the agent may learn about products. Injected so tests run offline. */
 export type FactDeps = {
   searchDirect(query: string, limit: number): Promise<Product[]>;
+  searchCategory(words: string, limit: number): Promise<Product[]>;
   findByCode(stockId: string): Promise<CatalogueProduct | null>;
   findBySourceUrl(url: string): Promise<CatalogueProduct | null>;
   findAlternatives(stockId: string, minQty: number, exclude: ReadonlySet<string>): Promise<Product[]>;
@@ -48,6 +50,7 @@ export async function retryOnce<T>(work: () => Promise<T>): Promise<T> {
 export function defaultFactDeps(): FactDeps {
   return {
     searchDirect: searchCatalogueDirect,
+    searchCategory: searchCatalogueByCategory,
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
     findAlternatives: (stockId, minQty, exclude) => findAvailableCatalogueAlternatives(stockId, 12, minQty, exclude),
