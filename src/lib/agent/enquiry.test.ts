@@ -30,6 +30,14 @@ test("sizes written with a space and prices do not count as quantities", () => {
   assert.equal(quantityStated(2, ["2 gas cans"]), true);
 });
 
+test("the word \"in\" after a number is not a size unit", () => {
+  assert.equal(quantityStated(5, ["I need 5 in blue"]), true);
+  assert.equal(quantityStated(2, ["2 in red please"]), true);
+  assert.equal(quantityStated(2, ["do you have 2 in stock"]), true);
+  assert.equal(quantityStated(6, ["6 inch pan"]), false);
+  assert.equal(quantityStated(6, ["6in pan"]), false);
+});
+
 test("adding needs a stated quantity", async () => {
   const deps = fakeDeps([torch]);
   const refused = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["blow torch"], deps);

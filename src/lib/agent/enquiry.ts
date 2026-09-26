@@ -34,7 +34,7 @@ const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seve
  * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${quantity}(?!\\s*(?:cm|mm|m|l|litres?|ml|qt|inch(?:es)?|in|kg|g|gm|oz)\\b|\\s*%)(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
+  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${quantity}(?!\\s*(?:cm|mm|m|l|litres?|ml|qt|inch(?:es)?|kg|g|gm|oz)\\b|\\s*%)(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
   const word = numberWords[quantity];
   return customerTexts.some((text) => digits.test(text) || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text)));
 }
