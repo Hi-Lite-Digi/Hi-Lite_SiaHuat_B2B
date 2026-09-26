@@ -33,6 +33,18 @@ export function withTimeout<T, L>(work: Promise<T>, ms: number, late: L): Promis
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
+const RETRY_DELAY_MS = 300;
+
+/** Runs the work again once, after a short pause, when it fails the first time. */
+export async function retryOnce<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    return work();
+  }
+}
+
 export function defaultFactDeps(): FactDeps {
   return {
     searchDirect: searchCatalogueDirect,

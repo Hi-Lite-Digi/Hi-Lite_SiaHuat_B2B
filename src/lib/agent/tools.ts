@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
-import { liveCheck, productFact, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
+import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -104,12 +104,10 @@ function remember(ctx: TurnContext, checked: CheckedProduct) {
 }
 
 async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: TurnContext) {
-  let results: Product[][];
-  try {
-    results = await Promise.all(input.queries.map((query) => ctx.deps.searchDirect(query, 10)));
-  } catch {
-    return fail("SEARCH_UNAVAILABLE");
-  }
+  // One slow or failed query must not sink the others: each is retried once and the ones that succeed are used.
+  const settled = await Promise.allSettled(input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, 10))));
+  const results = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+  if (!results.length) return fail("SEARCH_UNAVAILABLE");
   const excluded = new Set((input.exclude_ids ?? []).map((id) => id.toLowerCase()));
   const merged: Product[] = [];
   const ids = new Set<string>();
@@ -145,7 +143,7 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
   const minQty = input.min_qty ?? 1;
   let candidates: Product[];
   try {
-    candidates = await ctx.deps.findAlternatives(input.stock_id, minQty, new Set([...ctx.shownIds, input.stock_id]));
+    candidates = await retryOnce(() => ctx.deps.findAlternatives(input.stock_id, minQty, new Set([...ctx.shownIds, input.stock_id])));
   } catch {
     return fail("SEARCH_UNAVAILABLE");
   }

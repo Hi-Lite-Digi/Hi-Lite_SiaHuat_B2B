@@ -15,6 +15,20 @@ test("the backup reply still shows matching live-checked products and the sales 
   assert.match(reply.message, new RegExp(SALES_CONTACT.email.replace(/[[\]]/g, "\\$&")));
 });
 
+test("the backup reply retries a failed search once", async () => {
+  const deps = fakeDeps([torch]);
+  const search = deps.searchDirect;
+  let attempts = 0;
+  deps.searchDirect = async (query, limit) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("timeout");
+    return search(query, limit);
+  };
+  const reply = await buildFallbackReply({ searchText: "blow torch", lines: [], deps });
+  assert.equal(attempts, 2);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+});
+
 test("a search outage still returns a polite reply", async () => {
   const deps = fakeDeps([torch]);
   deps.searchDirect = async () => { throw new Error("down"); };

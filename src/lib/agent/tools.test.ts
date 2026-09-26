@@ -56,6 +56,64 @@ test("search outage is reported as a tool error", async () => {
   assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
 });
 
+test("a query that keeps failing does not sink the other queries", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico]);
+  const search = deps.searchDirect;
+  deps.searchDirect = async (query, limit) => {
+    if (query === "gas torch") throw new Error("slow");
+    return search(query, limit);
+  };
+  const outcome = await runTool("search_catalogue", { queries: ["blow torch", "gas torch", "cooking torch"] }, context(deps));
+  assert.equal(outcome.isError, false);
+  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> };
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["970S", "F46700"]);
+});
+
+test("a query that fails once is retried and its results are used", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico]);
+  const search = deps.searchDirect;
+  let attempts = 0;
+  deps.searchDirect = async (query, limit) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("timeout");
+    return search(query, limit);
+  };
+  const outcome = await runTool("search_catalogue", { queries: ["safico"] }, context(deps));
+  assert.equal(outcome.isError, false);
+  assert.equal(attempts, 2);
+  assert.deepEqual((JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> }).products.map((item) => item.stock_id), ["BTS-8026D"]);
+});
+
+test("search is unavailable only when every query failed after its retry", async () => {
+  const deps = fakeDeps([blowtorch]);
+  const attempts = new Map<string, number>();
+  deps.searchDirect = async (query) => {
+    attempts.set(query, (attempts.get(query) ?? 0) + 1);
+    throw new Error("down");
+  };
+  const outcome = await runTool("search_catalogue", { queries: ["torch", "blow torch"] }, context(deps));
+  assert.equal(outcome.isError, true);
+  assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
+  assert.deepEqual(Object.fromEntries(attempts), { torch: 2, "blow torch": 2 });
+});
+
+test("find_alternatives retries once before reporting the search as unavailable", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico]);
+  const find = deps.findAlternatives;
+  let attempts = 0;
+  deps.findAlternatives = async (...args) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("timeout");
+    return find(...args);
+  };
+  assert.deepEqual(await alternativeIds(deps, 1), ["F46700", "BTS-8026D"]);
+  deps.findAlternatives = async () => { attempts += 1; throw new Error("down"); };
+  attempts = 0;
+  const outcome = await runTool("find_alternatives", { stock_id: "970S" }, context(deps));
+  assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
+  assert.equal(attempts, 2);
+});
+
 test("get_product resolves a pasted store link", async () => {
   const ctx = context();
   const outcome = await runTool("get_product", { url: `look ${safico.source_url}` }, ctx);
