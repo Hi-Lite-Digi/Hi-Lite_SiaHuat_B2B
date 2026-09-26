@@ -38,6 +38,19 @@ test("the word \"in\" after a number is not a size unit", () => {
   assert.equal(quantityStated(6, ["6in pan"]), false);
 });
 
+test("option numbers, sizes, tiers, burners and outlet counts are not quantities", () => {
+  const notQuantities: Array<[number, string]> = [
+    [2, "I'll take option 2"], [3, "3-tier stand"], [2, "2 burner stove"], [2, "size 2"], [4, "4 outlets"],
+    [4, "we have 4 outlets"], [5, "model 5"], [2, "the 2nd one"], [2, "#2"], [6, "6 slot toaster"], [48, "48pcs/ctn"],
+    [1, "give me 2 of option 1"],
+  ];
+  for (const [quantity, text] of notQuantities) assert.equal(quantityStated(quantity, [text]), false, text);
+  const quantities: Array<[number, string]> = [
+    [2, "2 pcs"], [2, "I need 2"], [2, "2 please"], [3, "x3"], [3, "3 units"], [2, "give me 2 of option 1"],
+  ];
+  for (const [quantity, text] of quantities) assert.equal(quantityStated(quantity, [text]), true, text);
+});
+
 test("adding needs a stated quantity", async () => {
   const deps = fakeDeps([torch]);
   const refused = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["blow torch"], deps);

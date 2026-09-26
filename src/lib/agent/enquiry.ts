@@ -26,15 +26,19 @@ export function enquiryTotals(lines: EnquiryReceiptLine[]) {
 }
 
 const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+// A number right after one of these is a label, not a quantity ("option 2", "size 2", "#2").
+const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|size|model|type|tier|level|layer|deck|burner|door|outlet|branch|table|page|step)|#)\s*)`;
+// A number right before one of these is a size, a count of parts, a pack size or an ordinal ("3-tier", "4 outlets", "48pcs/ctn", "2nd").
+const notQuantityAfter = String.raw`(?![-\s]*(?:tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th)\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b))`;
 
 /**
  * True when one of the customer's recent typed messages contains this number
- * as a quantity-like token. Numbers inside codes, sizes ("H5cm", "12 QT", "24 cm")
- * and prices ("$23", "S$ 23") do not count.
+ * as a quantity-like token. Numbers inside codes, sizes ("H5cm", "12 QT", "24 cm"),
+ * prices ("$23", "S$ 23"), option/model numbers, tiers, burners and outlet counts do not count.
  * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${quantity}(?!\\s*(?:cm|mm|m|l|litres?|ml|qt|inch(?:es)?|kg|g|gm|oz)\\b|\\s*%)(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
+  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
   const word = numberWords[quantity];
   return customerTexts.some((text) => digits.test(text) || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text)));
 }
