@@ -25,6 +25,10 @@ test("Claire never claims an item isn't carried or a list is complete without tw
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say an item isn't carried, or that a list is complete ('that's all', 'full range', 'complete list'), unless you ran at least two different searches (different words, including the broader product type or a category) and none fit. When more_available is true, the list is not complete: say there are more and offer to narrow down, or show the next few. When the customer says 'show me all/more', show new options you haven't shown."));
 });
 
+test("Claire only states product facts the tools gave", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Only state a product's material, features, capacity, size, compatibility or origin if it appears in the tool facts (name, size, dimensions, description). If it isn't there, say you can't confirm it and share the product link."));
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });

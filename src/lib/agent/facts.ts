@@ -97,6 +97,8 @@ export function productFact({ product, verified }: CheckedProduct, shownBefore =
     name: product.name,
     brand: product.brand ?? null,
     size: product.size ?? product.dimensions ?? null,
+    dimensions: product.dimensions ?? null,
+    description: product.description?.replace(/\s+/g, " ").trim().slice(0, 300) || null,
     price_ex_gst: verified ? product.list_price : null,
     uom: product.uom_id,
     stock: product.stock_status ?? "unknown",

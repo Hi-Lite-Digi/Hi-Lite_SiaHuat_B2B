@@ -34,6 +34,15 @@ test("product facts flag verification and earlier display", () => {
   assert.equal(fact.shown_before, true);
 });
 
+test("product facts carry the dimensions and a trimmed description to cite", () => {
+  const description = `Heavy duty   stainless steel.\n\nDishwasher safe. ${"x".repeat(400)}`;
+  const fact = productFact({ product: product({ stock_id: "A", dimensions: "W38xD55xH170cm", description }), verified: true });
+  assert.equal(fact.dimensions, "W38xD55xH170cm");
+  assert.equal(fact.description?.length, 300);
+  assert.ok(fact.description?.startsWith("Heavy duty stainless steel. Dishwasher safe. xxx"));
+  assert.equal(productFact({ product: product({ stock_id: "B" }), verified: true }).description, null);
+});
+
 test("an unverified product carries no price, so Claude cannot quote it", () => {
   const item = product({ stock_id: "A", list_price: 12 });
   assert.equal(productFact({ product: item, verified: false }).price_ex_gst, null);
