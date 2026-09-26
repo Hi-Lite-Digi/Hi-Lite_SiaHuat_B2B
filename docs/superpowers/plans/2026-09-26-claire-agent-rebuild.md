@@ -299,7 +299,7 @@ HOW YOU WORK
 - Broad request ("plates", "a knife"): ask the one question that matters most before listing. Specific request: show up to 3 suitable products as cards, with a one-line reason each drawn from the tool facts.
 - Cards: put item codes in card_ids. The cards already show name, code, price and stock, so don't repeat those in your message. Prefer products whose price_and_stock_verified_live is true; if you show one that isn't, say its stock still needs checking.
 - Don't show cards the customer has already seen (shown_before true) unless they ask for them again. Never repeat the same question or the same set of cards after the customer pushes back; change approach instead.
-- Choosing: when the customer taps a card or names a product, that is their choice. If they have said how many for that item, add it with update_enquiry straight away and confirm in one short line (for example "Noted: 2 Safico torches. Anything else?"). If not, ask once: "How many do you need?". Never take a quantity from an option number, a size, a model number, a capacity or an outlet count. update_enquiry only accepts a number the customer typed.
+- Choosing: when the customer taps a card or names a product, that is their choice. If they have said how many for that item, add it with update_enquiry straight away and confirm in one short line (for example "Got it: 2 Safico torches. Anything else?"). If not, ask once: "How many do you need?". Never take a quantity from an option number, a size, a model number, a capacity or an outlet count. update_enquiry only accepts a number the customer typed.
 - Changes ("make it 5", "remove the torch", "clear everything") go through update_enquiry. Report its result truthfully. If it returns an error (OUT_OF_STOCK, OVER_STOCK with available, STOCK_UNVERIFIED, PACK_SIZE_UNKNOWN, QTY_NOT_STATED), explain simply and offer the next step.
 - Out of stock or not enough stock: use find_alternatives and offer the best in-stock match. If there is none, set show_contact true so they can ask sales about restock.
 - Several items in one message: handle them one at a time in the customer's order, say which item you're on, and keep the rest in mind.
@@ -1525,7 +1525,7 @@ test("Claude searches with the customer's words and recommends a grounded card",
 test("a tapped card plus an earlier typed quantity is added straight away", async () => {
   const { client } = fakeClient([
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
-    answer({ message: "Noted: 2 blow torches. Anything else?" }),
+    answer({ message: "Got it: 2 blow torches. Anything else?" }),
   ]);
   const reply = await runAgentTurn({
     request: request({ event: { type: "select_product", stockId: "970S" }, history: [{ role: "user", content: "I need 2 blow torches" }] }),
@@ -2454,7 +2454,7 @@ Expected: all clean. If ESLint flags `@next/next/no-img-element`, disable it on 
 Open `http://localhost:3810/new` in the browser pane and walk through the blow-torch case:
 1. Type `blow torch`. Expected: 1–3 torch cards, no "Choose option" buttons.
 2. Tap the second card. Expected: Claire asks how many; the enquiry bar does not appear.
-3. Type `2`. Expected: "Noted…"-style line; enquiry bar shows "1 item · $…".
+3. Type `2`. Expected: a "Got it…"-style line; enquiry bar shows "1 item · $…".
 4. Tap the PDF button. Expected: a PDF downloads with the receipt line.
 5. Type `can I talk to someone`. Expected: the contact block with `[SALES PHONE] · [SALES EMAIL]`.
 
