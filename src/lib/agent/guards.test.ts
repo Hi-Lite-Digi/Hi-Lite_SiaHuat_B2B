@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CheckedProduct } from "./facts";
-import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts } from "./guards";
+import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts } from "./guards";
 import { product } from "./testing";
 
 const seen = new Map<string, CheckedProduct>([
@@ -15,7 +15,7 @@ const allowed = allowedCents(seen, lines, 46.72);
 test("cards must come from this turn's tool results", () => {
   const review = reviewAnswer({ message: "Here you go.", card_ids: ["BTS-8026D", "FAKE"], chips: [], show_contact: false }, seen, allowed);
   assert.deepEqual(review.cards.map((card) => card.stock_id), ["BTS-8026D"]);
-  assert.match(review.issues.join(" "), /not found: FAKE/);
+  assert.match(review.safety.join(" "), /not found: FAKE/);
 });
 
 test("only live-checked prices and enquiry totals may appear as amounts", () => {
@@ -35,25 +35,39 @@ test("removing an amount leaves longer amounts that start with it intact", () =>
   assert.equal(removeAmounts("It's $9 or $99.", ["$9"]), "It's the listed price or $99.");
 });
 
-test("chips get the same money check as the message", () => {
-  const review = reviewAnswer({ message: "Which one would you like?", card_ids: [], chips: ["Yes, $99 one", "$23.36 one"], show_contact: false }, seen, allowed);
-  assert.equal(review.issues.filter((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)).length, 1);
-  assert.match(review.issues.join(" "), /\$99/);
-  assert.doesNotMatch(review.issues.join(" "), /\$23\.36/);
+test("an unverified amount in the message is a safety issue", () => {
+  const review = reviewAnswer({ message: "That one is $99, the other $23.36.", card_ids: [], chips: [], show_contact: false }, seen, allowed);
+  assert.equal(review.safety.filter((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)).length, 1);
+  assert.match(review.safety.join(" "), /\$99/);
+  assert.doesNotMatch(review.safety.join(" "), /\$23\.36/);
 });
 
-test("chips are short and never numbers or quantities", () => {
-  const chipIssues = (chips: string[]) => reviewAnswer({ message: "How many do you need?", card_ids: [], chips, show_contact: false }, seen, allowed)
-    .issues.filter((issue) => issue.startsWith("Chips:"));
-  for (const chips of [["2"], ["5 pcs"], ["two"], ["两个"]]) {
-    assert.deepEqual(chipIssues(chips), ["Chips: at most 3 short answers under 40 characters, never numbers or quantities."], chips[0]);
+test("chips with numbers or amounts, long chips and chips past the third are dropped, not raised", () => {
+  const review = (chips: string[]) => reviewAnswer({ message: "Which one would you like?", card_ids: [], chips, show_contact: false }, seen, allowed);
+  for (const chip of ["2", "5 pcs", "two", "两个", "Yes, $99 one"]) {
+    const result = review([chip, "Cooking"]);
+    assert.deepEqual(result.chips, ["Cooking"], chip);
+    assert.deepEqual([...result.safety, ...result.style], [], chip);
   }
-  assert.deepEqual(chipIssues(["Cooking", "Desserts"]), []);
+  assert.deepEqual(review(["A chip that is far too long to fit on one button"]).chips, []);
+  assert.deepEqual(review(["Cooking", "Desserts", "Grilling", "Bar"]).chips, ["Cooking", "Desserts", "Grilling"]);
+});
+
+test("reply-style problems are style issues, not safety issues", () => {
+  const review = reviewAnswer({ message: "Noted: 2 torches.", card_ids: [], chips: [], show_contact: false }, seen, allowed);
+  assert.deepEqual(review.safety, []);
+  assert.match(review.style.join(" "), /plain, friendly customer language/);
+});
+
+test("the light clean-up swaps a leading Noted and drops JSON field names", () => {
+  assert.equal(tidyMessage("Noted: 2 torches."), "Got it: 2 torches.");
+  assert.equal(tidyMessage("Noted, adding them now."), "Got it, adding them now.");
+  assert.equal(tidyMessage("I set show_contact so you can reach sales. card_ids below."), "I set so you can reach sales. below.");
 });
 
 test("a clean answer has no issues", () => {
   const review = reviewAnswer({ message: "The Safico one is lighter. Want that one?", card_ids: ["BTS-8026D"], chips: ["Yes", "Show others"], show_contact: false }, seen, allowed);
-  assert.deepEqual(review.issues, []);
+  assert.deepEqual([review.safety, review.style, review.chips], [[], [], ["Yes", "Show others"]]);
 });
 
 test("staff-contact claims are removed from the customer message", () => {

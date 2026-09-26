@@ -111,6 +111,62 @@ test("a made-up card that survives the repair gets the backup reply", async () =
   assert.ok(!reply.cards.some((card) => card.stock_id === "FAKE-1"));
 });
 
+test("a style problem that survives the repair is tidied and sent, not replaced by the backup reply", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "Noted: 2 torches." }),
+    answer({ message: "Noted: 2 torches." }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Got it: 2 torches.");
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /plain, friendly customer language/);
+});
+
+test("a made-up card next to a style problem still gets the backup reply after the repair", async () => {
+  const { client } = fakeClient([
+    answer({ message: "Noted. Try this.", card_ids: ["FAKE-1"] }),
+    answer({ message: "Noted. Try this.", card_ids: ["FAKE-1"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "fallback");
+});
+
+test("chips with numbers are dropped without a repair call", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "What will you use it for?", chips: ["2", "Cooking"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.chips, ["Cooking"]);
+  assert.equal(bodies.length, 1);
+});
+
+test("an empty message with a valid card is sent with a default line", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: " ", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Here are some options.");
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+  assert.equal(bodies.length, 2);
+});
+
+const rawAnswer = (text: string) => ({ ...answer({ message: "unused" }), content: [{ type: "text", text }] }) as unknown as Anthropic.Message;
+
+test("an answer that is not valid JSON gets one repair round, then the backup reply", async () => {
+  const repaired = fakeClient([rawAnswer("Sure, here you go"), answer({ message: "What will you use it for?" })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client: repaired.client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "What will you use it for?");
+  assert.match(JSON.stringify(repaired.bodies[1].messages.at(-1)), /valid JSON/);
+  assert.equal((repaired.bodies[1].tool_choice as { type: string }).type, "none");
+
+  const broken = fakeClient([rawAnswer("{\"message\": \"\"}"), rawAnswer("{\"message\": \"\", \"card_ids\": [], \"chips\": [], \"show_contact\": false}")]);
+  const fallback = await runAgentTurn({ request: request({}), deps: deps(), client: broken.client, model: "claude-sonnet-5" });
+  assert.equal(fallback.provider, "fallback");
+  assert.equal(broken.bodies.length, 2);
+});
+
 test("after the tool-round cap Claude must answer without tools", async () => {
   const calls = Array.from({ length: MAX_TOOL_ROUNDS }, (_, index) => toolCall(`t${index}`, "search_catalogue", { queries: ["torch"] }));
   const { client, bodies } = fakeClient([...calls, answer({ message: "Here are the torches." })]);

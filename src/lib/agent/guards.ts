@@ -6,10 +6,14 @@ import { replyStyleIssues } from "@/lib/reply-style";
 import type { CheckedProduct } from "./facts";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
-export type Review = { issues: string[]; cards: Product[] };
+/**
+ * safety: problems that must never reach the customer (made-up cards, unchecked amounts).
+ * style: wording problems worth one repair, but not worth replacing the reply with the backup one.
+ * chips: the chips that may be sent (at most 3, short, no numbers).
+ */
+export type Review = { safety: string[]; style: string[]; cards: Product[]; chips: string[] };
 
 export const MONEY_ISSUE_PREFIX = "These amounts";
-export const CHIP_ISSUE = "Chips: at most 3 short answers under 40 characters, never numbers or quantities.";
 const chipNumberPattern = /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen)\b|[一二两三四五六七八九十百]/i;
 
 /** A chip is sent as the customer's answer, so it must be short and never carry a number or quantity. */
@@ -48,17 +52,29 @@ export function removeAmounts(message: string, amounts: string[]) {
 }
 
 export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProduct>, allowed: ReadonlySet<number>): Review {
-  const issues: string[] = [];
+  const safety: string[] = [];
+  const style: string[] = [];
   const ids = [...new Set(answer.card_ids)];
   const unknown = ids.filter((id) => !seen.has(id));
-  if (unknown.length) issues.push(`card_ids must come from a tool result in this turn; not found: ${unknown.join(", ")}.`);
-  if (ids.length > 5) issues.push("Show at most 5 cards.");
+  if (unknown.length) safety.push(`card_ids must come from a tool result in this turn; not found: ${unknown.join(", ")}.`);
+  if (ids.length > 5) style.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
-  const amounts = [answer.message, ...answer.chips].flatMap((text) => unverifiedAmounts(text, allowed));
-  if (amounts.length) issues.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
-  issues.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
-  if (answer.chips.length > 3 || !answer.chips.every(chipAllowed)) issues.push(CHIP_ISSUE);
-  return { issues, cards };
+  // Chips that break the rules are dropped rather than sent back. A dropped chip takes any amount in it along.
+  const chips = answer.chips.filter(chipAllowed).slice(0, 3);
+  const amounts = unverifiedAmounts(answer.message, allowed);
+  if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
+  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
+  return { safety, style, cards, chips };
+}
+
+/** Light clean-up for a reply sent with style problems left after the repair. */
+export function tidyMessage(message: string) {
+  return message
+    .replace(/^\s*Noted\b/i, "Got it")
+    .replace(/\b(?:show_contact|card_ids)\b/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([.,!?])/g, "$1")
+    .trim();
 }
 
 /** Final safety pass on the words the customer sees. */

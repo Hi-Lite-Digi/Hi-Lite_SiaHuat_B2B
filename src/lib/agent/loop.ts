@@ -8,7 +8,7 @@ import type { AgentReply, AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
-import { CHIP_ISSUE, MONEY_ISSUE_PREFIX, allowedCents, chipAllowed, customerMessage, removeAmounts, reviewAnswer, unverifiedAmounts, type FinalAnswer } from "./guards";
+import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type FinalAnswer } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -40,11 +40,13 @@ const finalSchema: Record<string, unknown> = {
   },
 };
 const finalAnswerSchema = z.object({
-  message: z.string().trim().min(1),
+  message: z.string().trim(),
   card_ids: z.array(z.string()),
   chips: z.array(z.string()),
   show_contact: z.boolean(),
 });
+const CARDS_ONLY_MESSAGE = "Here are some options.";
+const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty message, card_ids, chips and show_contact. Answer with that JSON only.";
 
 /** The customer's last two typed messages (card and chip taps excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
@@ -117,13 +119,22 @@ async function callClaude(client: AgentClient, model: string, messages: Anthropi
   return response;
 }
 
-function parseFinal(response: Anthropic.Message): FinalAnswer {
+/** Claude's final JSON answer, or null when it does not fit the schema. An empty message is fine when cards carry the reply. */
+function readFinal(response: Anthropic.Message): FinalAnswer | null {
   if (response.stop_reason !== "end_turn") throw new Error(`AGENT_STOP_${String(response.stop_reason).toUpperCase()}`);
   const text = response.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")
     .map((block) => block.text)
     .join("");
-  return finalAnswerSchema.parse(JSON.parse(text));
+  let parsed: ReturnType<typeof finalAnswerSchema.safeParse>;
+  try {
+    parsed = finalAnswerSchema.safeParse(JSON.parse(text));
+  } catch {
+    return null;
+  }
+  if (!parsed.success) return null;
+  if (parsed.data.message) return parsed.data;
+  return parsed.data.card_ids.length ? { ...parsed.data, message: CARDS_ONLY_MESSAGE } : null;
 }
 
 /** Rejects when the signal fires, so a stuck step cannot hold the turn past its deadline (the step itself keeps running). */
@@ -191,7 +202,7 @@ export async function runAgentTurn(input: {
       ...historyMessages(request),
       { role: "user", content: await beforeDeadline(eventContent(request, ctx, verified.notes), deadline) },
     ];
-    let result: { final: FinalAnswer; content: Anthropic.ContentBlock[] } | null = null;
+    let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       const response = await callClaude(client, model, messages, round < MAX_TOOL_ROUNDS ? "auto" : "none", deadline);
       if (response.stop_reason === "tool_use") {
@@ -199,38 +210,37 @@ export async function runAgentTurn(input: {
         messages.push({ role: "user", content: await beforeDeadline(runToolBlocks(response.content, ctx), deadline) });
         continue;
       }
-      result = { final: parseFinal(response), content: response.content };
+      result = { final: readFinal(response), content: response.content };
     }
     if (!result) throw new Error("AGENT_NO_ANSWER");
 
     let final = result.final;
     let allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
-    let review = reviewAnswer(final, ctx.seen, allowed);
-    if (review.issues.length) {
+    let review = final && reviewAnswer(final, ctx.seen, allowed);
+    if (!final || !review || review.safety.length || review.style.length) {
+      const problems = review ? [...review.safety, ...review.style] : [INVALID_ANSWER_ISSUE];
       messages.push({ role: "assistant", content: result.content });
       messages.push({
         role: "user",
-        content: `[Context from the system, not the customer] Your reply was not sent. Fix these problems and answer again in the same JSON format without calling tools:\n- ${review.issues.join("\n- ")}`,
+        content: `[Context from the system, not the customer] Your reply was not sent. Fix these problems and answer again in the same JSON format without calling tools:\n- ${problems.join("\n- ")}`,
       });
-      final = parseFinal(await callClaude(client, model, messages, "none", deadline));
+      final = readFinal(await callClaude(client, model, messages, "none", deadline));
+      if (!final) throw new Error("AGENT_INVALID_ANSWER");
       allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
       review = reviewAnswer(final, ctx.seen, allowed);
-      if (review.issues.length && review.issues.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX) || issue === CHIP_ISSUE)) {
-        // Chips never carry digits, so dropping the disallowed ones also drops any amount in a chip.
-        final = {
-          ...final,
-          message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)),
-          chips: final.chips.filter(chipAllowed),
-        };
-        review = { ...review, issues: [] };
+      if (review.safety.length && review.safety.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX))) {
+        final = { ...final, message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)) };
+        review = { ...review, safety: [] };
       }
-      if (review.issues.length) throw new Error("AGENT_REPLY_REJECTED");
+      if (review.safety.length) throw new Error("AGENT_REPLY_REJECTED");
+      // Style problems left after the repair are not worth the backup reply: send the answer, lightly tidied.
+      if (review.style.length) final = { ...final, message: tidyMessage(final.message) };
     }
 
     return {
       message: customerMessage(final.message),
       cards: review.cards,
-      chips: final.chips.slice(0, 3),
+      chips: review.chips,
       enquiry: replyEnquiry(ctx),
       showContact: final.show_contact,
       provider: "anthropic",
