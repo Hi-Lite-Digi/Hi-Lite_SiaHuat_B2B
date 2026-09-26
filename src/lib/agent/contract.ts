@@ -21,7 +21,7 @@ export const agentRequestSchema = z.object({
     role: z.enum(["user", "assistant"]),
     content: z.string().trim().min(1).max(2_000),
   })).max(30).default([]),
-  enquiry: z.array(enquiryEchoLineSchema).max(200).default([]),
+  enquiry: z.array(enquiryEchoLineSchema).max(60).default([]),
   shownProductIds: z.array(z.string().trim().min(1).max(100)).max(100).default([]),
 });
 

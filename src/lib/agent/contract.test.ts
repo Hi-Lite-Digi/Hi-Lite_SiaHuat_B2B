@@ -20,11 +20,11 @@ test("request limits are enforced", () => {
   assert.equal(ok({ sessionId: "session-1234", event: { type: "text", text: "hi" }, enquiry: [{ stockId: "A", quantity: 2 }] }), true);
 });
 
-test("an enquiry echo may carry up to 200 lines", () => {
+test("an enquiry echo may carry up to 60 lines", () => {
   const echo = (count: number) => Array.from({ length: count }, (_, index) => ({ stockId: `A${index}`, quantity: 1 }));
   const ok = (count: number) => agentRequestSchema.safeParse({ sessionId: "session-1234", event: { type: "text", text: "hi" }, enquiry: echo(count) }).success;
-  assert.equal(ok(200), true);
-  assert.equal(ok(201), false);
+  assert.equal(ok(60), true);
+  assert.equal(ok(61), false);
 });
 
 test("reply schema accepts the server's reply shape", () => {

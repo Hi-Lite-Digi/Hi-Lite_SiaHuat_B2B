@@ -213,6 +213,7 @@ export async function runAgentTurn(input: {
     lines: verified.lines,
     uncheckedCodes: verified.unchecked,
     customerTexts,
+    currentText: request.event.type === "text" && !request.event.chip ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null,
     // A chip tap can ask to clear the enquiry, but never states a quantity.
     clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...customerTexts] : customerTexts,
     image: request.event.type === "image" ? request.event.image : null,

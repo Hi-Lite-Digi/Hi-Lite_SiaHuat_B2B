@@ -83,7 +83,7 @@ test("stock limits count what is already on the enquiry", async () => {
   const deps = fakeDeps([torch]);
   const first = await applyEnquiryAction([], { action: "set", stock_id: "BTS-8026D", quantity: 30 }, ["30 pcs"], deps);
   assert.ok(first.ok);
-  const over = await applyEnquiryAction(first.ok ? first.lines : [], { action: "add", stock_id: "BTS-8026D", quantity: 20 }, ["20 more"], deps);
+  const over = await applyEnquiryAction(first.ok ? first.lines : [], { action: "add", stock_id: "BTS-8026D", quantity: 20 }, ["20 more"], deps, { currentText: "20 more" });
   assert.deepEqual(over.ok ? null : [over.error, over.available], ["OVER_STOCK", 40]);
 });
 
@@ -195,4 +195,43 @@ test("totals are rounded to cents", () => {
     { item: "b", code: "B", pricePerItem: 0.2, quantity: 1, total: 0.2, uom: "PC" },
   ]);
   assert.equal(totals.grandTotal, 0.3);
+});
+
+test("numbers inside item codes and GN fractions are not quantities", () => {
+  assert.equal(quantityStated(20, ["Do you have 218455-20?"]), false);
+  assert.equal(quantityStated(218455, ["Do you have 218455-20?"]), false);
+  assert.equal(quantityStated(8026, ["BTS-8026 please"]), false);
+  assert.equal(quantityStated(1, ["need 1/2 GN pan"]), false);
+  assert.equal(quantityStated(2, ["need 1/2 GN pan"]), false);
+  assert.equal(quantityStated(2, ["2/3 pan"]), false);
+  assert.equal(quantityStated(2, ["2 pcs of the 1/2 GN pan"]), true);
+});
+
+test("adding to a line already on the enquiry needs a number typed in this message", async () => {
+  const deps = fakeDeps([torch]);
+  const lines = [{ item: torch.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];
+  const stale = await applyEnquiryAction(lines, { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["ok thanks", "2 Safico torch"], deps, { currentText: "ok thanks" });
+  assert.equal(stale.ok ? null : stale.error, "ALREADY_ON_ENQUIRY");
+  const fresh = await applyEnquiryAction(lines, { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["add 2 more", "2 Safico torch"], deps, { currentText: "add 2 more" });
+  assert.equal(fresh.ok && fresh.lines[0].quantity, 4);
+  const set = await applyEnquiryAction(lines, { action: "set", stock_id: "BTS-8026D", quantity: 2 }, ["ok thanks", "2 Safico torch"], deps, { currentText: "ok thanks" });
+  assert.equal(set.ok && set.lines[0].quantity, 2);
+});
+
+test("re-verification checks at most 6 lines at a time", async () => {
+  const items = Array.from({ length: 12 }, (_, index) => product({ stock_id: `L${index}`, name: `Line ${index}` }));
+  const deps = fakeDeps(items);
+  let active = 0;
+  let peak = 0;
+  const findByCode = deps.findByCode.bind(deps);
+  deps.findByCode = async (stockId) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    active -= 1;
+    return findByCode(stockId);
+  };
+  const result = await verifyEnquiry(items.map((item) => ({ stockId: item.stock_id, quantity: 1 })), deps);
+  assert.equal(result.lines.length, 12);
+  assert.ok(peak <= 6, `peak concurrency ${peak}`);
 });

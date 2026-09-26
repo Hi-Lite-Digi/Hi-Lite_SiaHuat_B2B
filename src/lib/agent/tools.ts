@@ -19,6 +19,8 @@ export type TurnContext = {
   uncheckedCodes: string[];
   /** The customer's recent typed texts: the only place a quantity can come from. */
   customerTexts: string[];
+  /** What the customer typed in this message (not a chip or tap), used to stop a stale number being added twice. */
+  currentText?: string | null;
   /** Texts that may ask to clear the enquiry: the typed texts plus a chip tapped this turn. */
   clearTexts: string[];
   image: ImageAttachment | null;
@@ -238,7 +240,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
     stock_id: input.stock_id ?? undefined,
     quantity: input.quantity ?? undefined,
     unit: input.unit ?? undefined,
-  }, input.action === "clear" ? ctx.clearTexts : ctx.customerTexts, ctx.deps);
+  }, input.action === "clear" ? ctx.clearTexts : ctx.customerTexts, ctx.deps, { currentText: ctx.currentText });
   if (result.product) remember(ctx, result.product);
   if (!result.ok) return fail(result.error, { available: result.available ?? undefined, notice: result.notice || undefined });
   ctx.lines = result.lines;

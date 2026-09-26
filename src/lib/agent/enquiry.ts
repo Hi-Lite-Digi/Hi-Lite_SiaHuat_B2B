@@ -14,7 +14,7 @@ export type EnquiryAction = {
 };
 export type EnquiryError =
   | "QTY_NOT_STATED" | "UNIT_MISMATCH" | "OUT_OF_STOCK" | "OVER_STOCK" | "STOCK_UNVERIFIED"
-  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS" | "CLEAR_NOT_REQUESTED";
+  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS" | "CLEAR_NOT_REQUESTED" | "ALREADY_ON_ENQUIRY";
 export type EnquiryResult =
   | { ok: true; lines: EnquiryReceiptLine[]; notice: string; product?: CheckedProduct }
   | { ok: false; error: EnquiryError; available?: number | null; notice?: string; product?: CheckedProduct };
@@ -47,10 +47,11 @@ function chineseNumerals(quantity: number) {
  * prices ("$23", "S$ 23"), option/model numbers, tiers, burners and outlet counts do not count.
  * Chinese numerals count only before a measure word (两个, 五箱) or at the end of the text,
  * and never as an ordinal or an option/model number (第二个, 选项二, 型号二).
+ * Numbers joined to a code or a fraction ("218455-20", "BTS-8026", "1/2 GN") do not count either.
  * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
+  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
   const word = numberWords[quantity];
   const chinese = chineseNumerals(quantity);
   const chineseQuantity = chinese.length
@@ -65,7 +66,7 @@ const packWords = { carton: String.raw`(?:ctns?|cartons?)\b|箱`, packet: String
 
 /** This number written as digits ("2", "x2"), as a word ("two") or in Chinese ("二", "两"), followed by a carton or packet word. */
 function packedNumber(quantity: number, unit: keyof typeof packWords, flags: string) {
-  const forms = [String.raw`(?<![\w.])(?:x\s*)?${quantity}`];
+  const forms = [String.raw`(?<![\w.\-/])(?:x\s*)?${quantity}(?![-/]\d)`];
   if (numberWords[quantity]) forms.push(String.raw`\b${numberWords[quantity]}`);
   const chinese = chineseNumerals(quantity);
   if (chinese.length) forms.push(`(?<![一二两三四五六七八九十百千万零第]|选项|型号)(?:${chinese.join("|")})`);
@@ -89,6 +90,7 @@ export async function applyEnquiryAction(
   action: EnquiryAction,
   customerTexts: string[],
   deps: FactDeps,
+  options: { currentText?: string | null } = {},
 ): Promise<EnquiryResult> {
   if (action.action === "clear") {
     // The whole enquiry is only wiped when the customer asked for it (typed, or a chip they tapped).
@@ -105,6 +107,11 @@ export async function applyEnquiryAction(
   if (!action.quantity) return { ok: false, error: "MISSING_FIELDS" };
   if (!quantityStated(action.quantity, customerTexts)) return { ok: false, error: "QTY_NOT_STATED" };
   if (!unitStated(action.quantity, action.unit ?? "uom", customerTexts)) return { ok: false, error: "UNIT_MISMATCH" };
+  // A number from an earlier message may already have been added; adding it again would double the line.
+  const alreadyOnEnquiry = lines.some((line) => line.code.toLowerCase() === code.toLowerCase());
+  if (action.action === "add" && alreadyOnEnquiry && !(options.currentText && quantityStated(action.quantity, [options.currentText]))) {
+    return { ok: false, error: "ALREADY_ON_ENQUIRY", notice: "This item is already on the enquiry. Use set with the new total, or add only a number the customer typed in this message." };
+  }
   const catalogueProduct = await deps.findByCode(code).catch(() => null);
   if (!catalogueProduct) return { ok: false, error: "NOT_FOUND" };
   const checked = await liveCheck(catalogueProduct, deps);
@@ -123,6 +130,24 @@ export async function applyEnquiryAction(
   const existing = lines.find((item) => item.code.toLowerCase() === product.stock_id.toLowerCase());
   const next = existing ? lines.map((item) => (item === existing ? line : item)) : [...lines, line];
   return { ok: true, lines: next, notice: resolved.notice, product: checked };
+}
+
+/** Checks against the live store are limited so one big enquiry cannot flood store.siahuat.com. */
+const VERIFY_CONCURRENCY = 6;
+
+/** Like Promise.all over items.map(run), but with at most `limit` runs in flight. Keeps the input order. */
+async function mapWithLimit<T, R>(items: T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await run(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 /** The echo comes from the browser: duplicate codes (any case) are added together into one line. */
@@ -146,7 +171,7 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
   const notes: string[] = [];
   const unchecked: string[] = [];
   const products = new Map<string, CheckedProduct>();
-  const checkedLines = await Promise.all(combinedEcho(echo).map(async ({ stockId, quantity }) => {
+  const checkedLines = await mapWithLimit(combinedEcho(echo), VERIFY_CONCURRENCY, async ({ stockId, quantity }) => {
     const catalogueProduct = await withTimeout(deps.findByCode(stockId).catch(() => "unchecked" as const), timeoutMs, "unchecked" as const);
     if (catalogueProduct === "unchecked") {
       notes.push(`${stockId} could not be checked just now; it stays on the enquiry as the customer had it, but is left out of the current lines and totals.`);
@@ -178,6 +203,6 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
     }
     notes.push(`${label} could not be kept on the enquiry.`);
     return null;
-  }));
+  });
   return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products, unchecked };
 }
