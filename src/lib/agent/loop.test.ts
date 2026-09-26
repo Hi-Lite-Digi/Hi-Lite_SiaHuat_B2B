@@ -167,6 +167,24 @@ test("an answer that is not valid JSON gets one repair round, then the backup re
   assert.equal(broken.bodies.length, 2);
 });
 
+test("the history's card notes and previous message feed the repetition checks", async () => {
+  const shown = { role: "assistant" as const, content: "This one fits.\n[cards shown: 970S KITCHEN BLOW TORCH 970S]" };
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one fits.", card_ids: ["970S"] }),
+    answer({ message: "That's the only blow torch in stock. Want a gas torch instead?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "any other?" }, history: [{ role: "user", content: "blow torch" }, shown, { role: "user", content: "hmm" }, shown] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  const repair = JSON.stringify(bodies[2].messages.at(-1));
+  assert.match(repair, /already shown these same cards twice/);
+  assert.match(repair, /Don't repeat your previous message word for word/);
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards, []);
+});
+
 test("after the tool-round cap Claude must answer without tools", async () => {
   const calls = Array.from({ length: MAX_TOOL_ROUNDS }, (_, index) => toolCall(`t${index}`, "search_catalogue", { queries: ["torch"] }));
   const { client, bodies } = fakeClient([...calls, answer({ message: "Here are the torches." })]);

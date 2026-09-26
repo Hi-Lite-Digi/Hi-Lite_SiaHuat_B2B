@@ -65,6 +65,21 @@ test("the light clean-up swaps a leading Noted and drops JSON field names", () =
   assert.equal(tidyMessage("I set show_contact so you can reach sales. card_ids below."), "I set so you can reach sales. below.");
 });
 
+test("a card set already shown twice is flagged unless the customer asks for it again", () => {
+  const answer = { message: "The Safico one is lighter.", card_ids: ["BTS-8026D"], chips: [], show_contact: false };
+  const earlier = { cardSets: [["BTS-8026D"], ["OLD", "BTS-8026D"], ["bts-8026d"]], previousMessage: "Here you go.", currentText: "any others?" };
+  assert.match(reviewAnswer(answer, seen, allowed, earlier).style.join(" "), /You've already shown these same cards twice\. Show different options, or none\./);
+  assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, currentText: "show me those again" }).style, []);
+  assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, cardSets: [["BTS-8026D"], ["OLD", "BTS-8026D"]] }).style, []);
+});
+
+test("repeating the previous message word for word is flagged", () => {
+  const answer = { message: "Which size do you need?", card_ids: [], chips: [], show_contact: false };
+  const earlier = { cardSets: [], previousMessage: "which size do you need", currentText: "not sure" };
+  assert.deepEqual(reviewAnswer(answer, seen, allowed, earlier).style, ["Don't repeat your previous message word for word; move the conversation forward."]);
+  assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, previousMessage: "What will you use it for?" }).style, []);
+});
+
 test("a clean answer has no issues", () => {
   const review = reviewAnswer({ message: "The Safico one is lighter. Want that one?", card_ids: ["BTS-8026D"], chips: ["Yes", "Show others"], show_contact: false }, seen, allowed);
   assert.deepEqual([review.safety, review.style, review.chips], [[], [], ["Yes", "Show others"]]);

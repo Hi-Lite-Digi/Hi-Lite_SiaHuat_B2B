@@ -8,7 +8,7 @@ import type { AgentReply, AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
-import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type FinalAnswer } from "./guards";
+import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type EarlierTurns, type FinalAnswer } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, runTool, uncheckedNote, type ShownCard, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -72,6 +72,12 @@ function shownCards(content: string): ShownCard[] {
       const space = entry.indexOf(" ");
       return space < 0 ? { code: entry, name: "" } : { code: entry.slice(0, space), name: entry.slice(space + 1) };
     });
+}
+
+/** An assistant history entry's message without its cards note. */
+function withoutCardsNote(content: string) {
+  const start = content.lastIndexOf(CARDS_NOTE);
+  return (start < 0 ? content : content.slice(0, start)).trim();
 }
 
 function historyMessages(request: AgentRequest): Anthropic.MessageParam[] {
@@ -199,7 +205,8 @@ export async function runAgentTurn(input: {
   const deadline = AbortSignal.timeout(workMs);
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const customerTexts = recentCustomerTexts(request);
-  const previousReply = request.history.filter((item) => item.role === "assistant").at(-1);
+  const claireReplies = request.history.filter((item) => item.role === "assistant");
+  const previousReply = claireReplies.at(-1);
   const ctx: TurnContext = {
     deps,
     seen: new Map(verified.products),
@@ -214,6 +221,11 @@ export async function runAgentTurn(input: {
     previousCards: previousReply ? shownCards(previousReply.content) : [],
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
+  const earlier: EarlierTurns = {
+    cardSets: claireReplies.map((item) => shownCards(item.content).map((card) => card.code)),
+    previousMessage: previousReply ? withoutCardsNote(previousReply.content) : null,
+    currentText: searchText ?? "",
+  };
 
   try {
     const messages: Anthropic.MessageParam[] = [
@@ -234,7 +246,7 @@ export async function runAgentTurn(input: {
 
     let final = result.final;
     let allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
-    let review = final && reviewAnswer(final, ctx.seen, allowed);
+    let review = final && reviewAnswer(final, ctx.seen, allowed, earlier);
     if (!final || !review || review.safety.length || review.style.length) {
       const problems = review ? [...review.safety, ...review.style] : [INVALID_ANSWER_ISSUE];
       messages.push({ role: "assistant", content: result.content });
@@ -245,7 +257,7 @@ export async function runAgentTurn(input: {
       final = readFinal(await callClaude(client, model, messages, "none", deadline));
       if (!final) throw new Error("AGENT_INVALID_ANSWER");
       allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
-      review = reviewAnswer(final, ctx.seen, allowed);
+      review = reviewAnswer(final, ctx.seen, allowed, earlier);
       if (review.safety.length && review.safety.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX))) {
         final = { ...final, message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)) };
         review = { ...review, safety: [] };

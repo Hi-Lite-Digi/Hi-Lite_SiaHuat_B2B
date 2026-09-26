@@ -51,7 +51,29 @@ export function removeAmounts(message: string, amounts: string[]) {
   return message.replace(moneyPattern, (match) => (amounts.includes(match) ? "the listed price" : match));
 }
 
-export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProduct>, allowed: ReadonlySet<number>): Review {
+/** Earlier turns from the chat history: the card codes of each Claire reply, her previous message, and what the customer just sent. */
+export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string };
+const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
+const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b/i;
+const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toLowerCase()))].sort().join(" ");
+const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
+
+function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns) {
+  const issues: string[] = [];
+  if (cards.length && !asksAgain.test(earlier.currentText)) {
+    const key = cardSetKey(cards.map((card) => card.stock_id));
+    if (earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2) {
+      issues.push("You've already shown these same cards twice. Show different options, or none.");
+    }
+  }
+  const plain = plainText(message);
+  if (plain && earlier.previousMessage !== null && plain === plainText(earlier.previousMessage)) {
+    issues.push("Don't repeat your previous message word for word; move the conversation forward.");
+  }
+  return issues;
+}
+
+export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProduct>, allowed: ReadonlySet<number>, earlier = NO_EARLIER_TURNS): Review {
   const safety: string[] = [];
   const style: string[] = [];
   const ids = [...new Set(answer.card_ids)];
@@ -64,6 +86,7 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
+  style.push(...repetitionIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }
 
