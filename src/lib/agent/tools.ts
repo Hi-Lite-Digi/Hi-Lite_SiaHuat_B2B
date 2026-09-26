@@ -7,6 +7,9 @@ import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
 import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
 
+/** A product card as noted in the chat history: "[cards shown: CODE name; …]". */
+export type ShownCard = { code: string; name: string };
+
 /** Mutable state for one customer turn. */
 export type TurnContext = {
   deps: FactDeps;
@@ -20,6 +23,10 @@ export type TurnContext = {
   clearTexts: string[];
   image: ImageAttachment | null;
   shownIds: ReadonlySet<string>;
+  /** The product card the customer tapped this turn, if any. */
+  tappedId: string | null;
+  /** The product cards in Claire's previous reply. */
+  previousCards: ShownCard[];
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -193,6 +200,30 @@ function enquiryState(ctx: TurnContext) {
   return { lines: ctx.lines, totals: enquiryTotals(ctx.lines), unchecked: uncheckedNote(ctx.uncheckedCodes) };
 }
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * True when the customer picked this product: they tapped its card this turn, it is already on the enquiry,
+ * they typed its item code, it was the only card in Claire's previous reply, or they typed a word of its
+ * name (4+ letters) that none of the other cards in that reply share.
+ */
+async function customerChose(stockId: string, ctx: TurnContext) {
+  const same = (code: string) => code.toLowerCase() === stockId.toLowerCase();
+  if (ctx.tappedId && same(ctx.tappedId)) return true;
+  if (ctx.lines.some((line) => same(line.code))) return true;
+  const typedCode = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(stockId)}(?![\\p{L}\\p{N}])`, "iu");
+  if (ctx.customerTexts.some((text) => typedCode.test(text))) return true;
+  if (ctx.previousCards.length === 1 && same(ctx.previousCards[0].code)) return true;
+  const name = ctx.previousCards.find((card) => same(card.code))?.name
+    || [...ctx.seen.values()].find((item) => same(item.product.stock_id))?.product.name
+    || (await ctx.deps.findByCode(stockId).catch(() => null))?.name;
+  if (!name) return false;
+  const otherNames = ctx.previousCards.filter((card) => !same(card.code)).map((card) => card.name.toLowerCase());
+  const words = name.toLowerCase().match(/\p{L}{4,}/gu) ?? [];
+  return words.some((word) => !otherNames.some((other) => other.includes(word))
+    && ctx.customerTexts.some((text) => new RegExp(`(?<!\\p{L})${word}`, "iu").test(text)));
+}
+
 async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext) {
   // A line that could not be re-checked stays as the browser has it: it can be removed or cleared, not changed.
   const code = input.stock_id?.toLowerCase();
@@ -200,6 +231,9 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
     if (input.action !== "remove") return fail("STOCK_UNVERIFIED");
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
     return ok(enquiryState(ctx));
+  }
+  if ((input.action === "add" || input.action === "set") && input.stock_id && !(await customerChose(input.stock_id, ctx))) {
+    return fail("PRODUCT_NOT_CHOSEN");
   }
   const result = await applyEnquiryAction(ctx.lines, {
     action: input.action,

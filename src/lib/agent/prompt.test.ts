@@ -16,7 +16,7 @@ test("Claire summarises the enquiry in one line instead of listing it", () => {
 });
 
 test("the update_enquiry errors Claude must explain are named in the prompt, clearing included", () => {
-  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "CLEAR_NOT_REQUESTED"]) {
+  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "CLEAR_NOT_REQUESTED", "PRODUCT_NOT_CHOSEN"]) {
     assert.ok(CLAIRE_AGENT_PROMPT.includes(code), code);
   }
 });
@@ -31,6 +31,10 @@ test("Claire only states product facts the tools gave", () => {
 
 test("Claire knows product cards have no photos", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
+});
+
+test("Claire asks which product before adding when several are in play", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("When more than one product is in play and the customer hasn't said which, ask which one before adding."));
 });
 
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {

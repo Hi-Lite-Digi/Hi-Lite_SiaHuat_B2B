@@ -333,9 +333,42 @@ test("a chip tap is never a quantity: the enquiry tool refuses", async () => {
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 5 }),
     answer({ message: "Good choice. How many do you need?" }),
   ]);
-  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "5 pcs", chip: true } }), deps: deps(), client, model: "claude-sonnet-5" });
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "5 pcs", chip: true }, history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "This one fits.\n[cards shown: 970S KITCHEN BLOW TORCH 970S]" }] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
   assert.deepEqual(reply.enquiry.lines, []);
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /QTY_NOT_STATED/);
+});
+
+const twoCardsShown = { role: "assistant" as const, content: "Two options.\n[cards shown: 970S KITCHEN BLOW TORCH 970S; BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO]" };
+
+test("with two cards shown, \"ok 2\" does not choose one: the enquiry tool refuses", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+    answer({ message: "Which one would you like?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /PRODUCT_NOT_CHOSEN/);
+});
+
+test("only the previous reply's cards count: a single card there is the customer's choice", async () => {
+  const { client } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+    answer({ message: "Got it: 2 Safico torches. Anything else?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "ok 2" },
+      history: [{ role: "user", content: "torch" }, twoCardsShown, { role: "user", content: "the gas one" }, { role: "assistant", content: "This one runs on gas.\n[cards shown: BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO]" }],
+    }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
 });
 
 test("customer texts exclude taps and include the current message", () => {

@@ -10,7 +10,7 @@ import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type FinalAnswer } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, runTool, uncheckedNote, type ShownCard, type ToolOutcome, type TurnContext } from "./tools";
 
 export type AgentClient = {
   messages: {
@@ -57,6 +57,21 @@ export function recentCustomerTexts(request: AgentRequest) {
     .map((item) => item.content.replace(/^\[photo\]\s*/, ""))
     .reverse();
   return [...current, ...earlier].slice(0, 2);
+}
+
+const CARDS_NOTE = "[cards shown: ";
+
+/** The cards the chat screen noted on an assistant history entry: "[cards shown: CODE name; CODE name]". */
+function shownCards(content: string): ShownCard[] {
+  const start = content.lastIndexOf(CARDS_NOTE);
+  if (start < 0) return [];
+  return content.slice(start + CARDS_NOTE.length).replace(/\]\s*$/, "").split("; ")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const space = entry.indexOf(" ");
+      return space < 0 ? { code: entry, name: "" } : { code: entry.slice(0, space), name: entry.slice(space + 1) };
+    });
 }
 
 function historyMessages(request: AgentRequest): Anthropic.MessageParam[] {
@@ -184,6 +199,7 @@ export async function runAgentTurn(input: {
   const deadline = AbortSignal.timeout(workMs);
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const customerTexts = recentCustomerTexts(request);
+  const previousReply = request.history.filter((item) => item.role === "assistant").at(-1);
   const ctx: TurnContext = {
     deps,
     seen: new Map(verified.products),
@@ -194,6 +210,8 @@ export async function runAgentTurn(input: {
     clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...customerTexts] : customerTexts,
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
+    tappedId: request.event.type === "select_product" ? request.event.stockId : null,
+    previousCards: previousReply ? shownCards(previousReply.content) : [],
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
 

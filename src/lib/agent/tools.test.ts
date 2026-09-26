@@ -10,7 +10,10 @@ const mastrad = product({ stock_id: "F46700", name: "Mastrad Cooking Torch", lis
 const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER SAFICO PRO", list_price: 23.36 });
 
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
-  return { deps, seen: new Map<string, CheckedProduct>(), lines: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(), ...overrides };
+  return {
+    deps, seen: new Map<string, CheckedProduct>(), lines: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
+    tappedId: null, previousCards: [], ...overrides,
+  };
 }
 
 test("five tools are declared", () => {
@@ -169,7 +172,7 @@ test("match_photo needs a photo in this turn", async () => {
 });
 
 test("update_enquiry changes the turn's enquiry", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"] });
+  const ctx = context(undefined, { customerTexts: ["2 please"], tappedId: "BTS-8026D" });
   const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
   assert.equal(outcome.isError, false);
   assert.equal(ctx.lines[0].quantity, 2);
@@ -189,12 +192,49 @@ test("a line that could not be re-checked can be removed or cleared, but not cha
 });
 
 test("while a line is unchecked, update_enquiry results tell Claude not to quote a total or item count", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"] });
+  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], tappedId: "BTS-8026D" });
   const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { unchecked?: string };
   assert.match(added.unchecked ?? "", /Unchecked lines \(kept by the customer, not in these lines or totals\): F46700\./);
   assert.match(added.unchecked ?? "", /Don't quote an enquiry total or item count/);
   const removed = JSON.parse((await runTool("update_enquiry", { action: "remove", stock_id: "F46700" }, ctx)).content) as { unchecked?: string };
   assert.equal(removed.unchecked, undefined);
+});
+
+const addSafico = (overrides: Partial<TurnContext>, action: "add" | "set" = "add") => runTool("update_enquiry", { action, stock_id: "BTS-8026D", quantity: 2 }, context(undefined, overrides));
+const twoCards = [{ code: "970S", name: blowtorch.name }, { code: "BTS-8026D", name: safico.name }];
+
+test("a product whose card the customer tapped this turn can be added", async () => {
+  assert.equal((await addSafico({ customerTexts: ["2 please"], tappedId: "bts-8026d", previousCards: twoCards })).isError, false);
+});
+
+test("a product already on the enquiry can have its quantity changed", async () => {
+  const lines = [{ item: safico.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 1, total: 23.36, uom: "PC" }];
+  const outcome = await addSafico({ customerTexts: ["make it 2"], lines, previousCards: twoCards }, "set");
+  assert.equal(outcome.isError, false);
+});
+
+test("a product whose item code the customer typed can be added", async () => {
+  assert.equal((await addSafico({ customerTexts: ["2 pcs of bts-8026d"], previousCards: twoCards })).isError, false);
+});
+
+test("the only product card in Claire's previous reply can be added", async () => {
+  assert.equal((await addSafico({ customerTexts: ["ok 2"], previousCards: [{ code: "BTS-8026D", name: safico.name }] })).isError, false);
+});
+
+test("a product named by a word no other card in the previous reply shares can be added", async () => {
+  assert.equal((await addSafico({ customerTexts: ["the safico one, 2 pcs"], previousCards: twoCards })).isError, false);
+  // With no cards in the previous reply, the name comes from the catalogue.
+  assert.equal((await addSafico({ customerTexts: ["I need 2 safico torches"] })).isError, false);
+});
+
+test("a product the customer didn't pick out of several is refused", async () => {
+  for (const text of ["ok 2", "2 torches"]) {
+    const ctx = context(undefined, { customerTexts: [text], previousCards: twoCards });
+    const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
+    assert.equal(outcome.isError, true, text);
+    assert.match(outcome.content, /PRODUCT_NOT_CHOSEN/, text);
+    assert.deepEqual(ctx.lines, [], text);
+  }
 });
 
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {
