@@ -101,6 +101,24 @@ test("cartons convert only with the product's own pack size", async () => {
   assert.equal(unknown.ok ? null : unknown.error, "PACK_SIZE_UNKNOWN");
 });
 
+test("the unit must be the one the customer typed with the number", async () => {
+  const add = (text: string, unit?: "uom" | "carton" | "packet") => applyEnquiryAction([], { action: "add", stock_id: "GAS", quantity: 2, unit }, [text], fakeDeps([gas]));
+  const refused: Array<[string, "uom" | "carton" | "packet" | undefined]> = [
+    ["2", "carton"], ["2 pcs", "packet"], ["2 ctn", "packet"], ["2 ctn", "uom"], ["2 ctn", undefined], ["two cartons", "uom"], ["来2箱", "uom"],
+  ];
+  for (const [text, unit] of refused) {
+    const result = await add(text, unit);
+    assert.equal(result.ok ? null : result.error, "UNIT_MISMATCH", `${text} + ${unit}`);
+  }
+  const accepted: Array<[string, "uom" | "carton" | "packet" | undefined, number]> = [
+    ["2 ctn", "carton", 96], ["来2箱", "carton", 96], ["two cartons", "carton", 96], ["2 pkts", "packet", 6], ["2 pcs", "uom", 2], ["2 pcs", undefined, 2],
+  ];
+  for (const [text, unit, quantity] of accepted) {
+    const result = await add(text, unit);
+    assert.equal(result.ok && result.lines[0].quantity, quantity, `${text} + ${unit}`);
+  }
+});
+
 test("remove and clear", async () => {
   const deps = fakeDeps([torch, gas]);
   const lines = [

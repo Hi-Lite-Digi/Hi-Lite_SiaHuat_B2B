@@ -16,7 +16,7 @@ test("Claire summarises the enquiry in one line instead of listing it", () => {
 });
 
 test("the update_enquiry errors Claude must explain are named in the prompt, clearing included", () => {
-  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "CLEAR_NOT_REQUESTED", "PRODUCT_NOT_CHOSEN"]) {
+  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "UNIT_MISMATCH", "CLEAR_NOT_REQUESTED", "PRODUCT_NOT_CHOSEN"]) {
     assert.ok(CLAIRE_AGENT_PROMPT.includes(code), code);
   }
 });

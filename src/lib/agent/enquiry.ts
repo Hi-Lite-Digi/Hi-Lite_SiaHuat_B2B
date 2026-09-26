@@ -13,7 +13,7 @@ export type EnquiryAction = {
   unit?: "uom" | "carton" | "packet";
 };
 export type EnquiryError =
-  | "QTY_NOT_STATED" | "OUT_OF_STOCK" | "OVER_STOCK" | "STOCK_UNVERIFIED"
+  | "QTY_NOT_STATED" | "UNIT_MISMATCH" | "OUT_OF_STOCK" | "OVER_STOCK" | "STOCK_UNVERIFIED"
   | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS" | "CLEAR_NOT_REQUESTED";
 export type EnquiryResult =
   | { ok: true; lines: EnquiryReceiptLine[]; notice: string; product?: CheckedProduct }
@@ -61,6 +61,27 @@ export function quantityStated(quantity: number, customerTexts: string[]) {
     || (chineseQuantity !== null && chineseQuantity.test(text)));
 }
 
+const packWords = { carton: String.raw`(?:ctns?|cartons?)\b|箱`, packet: String.raw`(?:pkts?|packets?|packs?)\b|包` };
+
+/** This number written as digits ("2", "x2"), as a word ("two") or in Chinese ("二", "两"), followed by a carton or packet word. */
+function packedNumber(quantity: number, unit: keyof typeof packWords, flags: string) {
+  const forms = [String.raw`(?<![\w.])(?:x\s*)?${quantity}`];
+  if (numberWords[quantity]) forms.push(String.raw`\b${numberWords[quantity]}`);
+  const chinese = chineseNumerals(quantity);
+  if (chinese.length) forms.push(`(?<![一二两三四五六七八九十百千万零第]|选项|型号)(?:${chinese.join("|")})`);
+  return new RegExp(`(?:${forms.join("|")})\\s*(?:${packWords[unit]})`, flags);
+}
+
+/**
+ * True when the customer typed this quantity in this unit: cartons and packets need the number followed by a
+ * carton or packet word; the product's own unit needs at least one mention of the number that isn't followed by one.
+ */
+export function unitStated(quantity: number, unit: "uom" | "carton" | "packet", customerTexts: string[]) {
+  if (unit !== "uom") return customerTexts.some((text) => packedNumber(quantity, unit, "i").test(text));
+  const loose = customerTexts.map((text) => text.replace(packedNumber(quantity, "carton", "gi"), " ").replace(packedNumber(quantity, "packet", "gi"), " "));
+  return quantityStated(quantity, loose);
+}
+
 const clearRequest = /\b(?:clear|start over|reset|remove all|delete all|cancel all|cancel everything)\b|清空|全部取消|重新开始/i;
 
 export async function applyEnquiryAction(
@@ -83,6 +104,7 @@ export async function applyEnquiryAction(
   }
   if (!action.quantity) return { ok: false, error: "MISSING_FIELDS" };
   if (!quantityStated(action.quantity, customerTexts)) return { ok: false, error: "QTY_NOT_STATED" };
+  if (!unitStated(action.quantity, action.unit ?? "uom", customerTexts)) return { ok: false, error: "UNIT_MISMATCH" };
   const catalogueProduct = await deps.findByCode(code).catch(() => null);
   if (!catalogueProduct) return { ok: false, error: "NOT_FOUND" };
   const checked = await liveCheck(catalogueProduct, deps);
