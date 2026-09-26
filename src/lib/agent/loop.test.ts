@@ -207,6 +207,44 @@ test("a slow catalogue lookup cannot hold up enquiry re-verification", async () 
   const result = await verifyEnquiry([{ stockId: "970S", quantity: 2 }], slow, 300);
   assert.ok(performance.now() - started < 700, "re-verification waited for the slow lookup");
   assert.equal(result.notes.length, 1);
+  assert.deepEqual(result.unchecked, ["970S"]);
+});
+
+test("a turn that starts with little time left still keeps the customer's enquiry", async () => {
+  const slow = deps();
+  slow.findByCode = (stockId) => new Promise((resolve) => setTimeout(() => resolve(stockId === "970S" ? blowtorch : null), 50));
+  const reply = await within(runAgentTurn({
+    request: request({ enquiry: [{ stockId: "970S", quantity: 2 }] }), deps: slow, client: hangingClient, model: "claude-sonnet-5", deadlineMs: 10,
+  }), 2_500);
+  assert.equal(reply.provider, "fallback");
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]]);
+});
+
+test("a line whose lookup times out is left for the browser to keep, and Claude is told", async () => {
+  const stuck = deps();
+  stuck.findByCode = (stockId) => stockId === "970S" ? new Promise(() => undefined) : Promise.resolve(safico);
+  const { client, bodies } = fakeClient([answer({ message: "What else do you need?" })]);
+  const reply = await within(runAgentTurn({
+    request: request({ enquiry: [{ stockId: "970S", quantity: 2 }, { stockId: "BTS-8026D", quantity: 1 }] }),
+    deps: stuck, client, model: "claude-sonnet-5", deadlineMs: 13_000,
+  }), 2_500);
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.enquiry.lines.map((line) => line.code), ["BTS-8026D"]);
+  assert.deepEqual(reply.enquiry.unchecked, ["970S"]);
+  assert.match(JSON.stringify(bodies[0].messages.at(-1)), /970S could not be checked just now; it stays on the enquiry/);
+});
+
+test("a chip can ask to clear the enquiry", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "clear" }),
+    answer({ message: "Done, your enquiry is empty now. What are you looking for?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "Clear enquiry", chip: true }, enquiry: [{ stockId: "970S", quantity: 2 }] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.doesNotMatch(JSON.stringify(bodies[1].messages.at(-1)), /CLEAR_NOT_REQUESTED/);
+  assert.deepEqual(reply.enquiry.lines, []);
 });
 
 test("customer texts exclude chip taps, earlier and current", () => {

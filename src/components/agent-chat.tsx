@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { agentReplySchema, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { agentReplySchema, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -102,7 +102,7 @@ export function AgentChat() {
       if (!response.ok) throw new Error("REQUEST_FAILED");
       const reply = agentReplySchema.parse(json);
       reply.cards.forEach((card) => shownIds.current.add(card.stock_id));
-      setEnquiry(reply.enquiry);
+      setEnquiry(nextEnquiry(enquiryRef.current, reply.enquiry));
       setItems((current) => [...current, {
         id: nextId.current++, role: "assistant", time: timeLabel(),
         text: reply.message, cards: reply.cards, chips: reply.chips, showContact: reply.showContact,

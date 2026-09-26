@@ -10,7 +10,7 @@ const mastrad = product({ stock_id: "F46700", name: "Mastrad Cooking Torch", lis
 const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER SAFICO PRO", list_price: 23.36 });
 
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
-  return { deps, seen: new Map<string, CheckedProduct>(), lines: [], customerTexts: [], image: null, shownIds: new Set(), ...overrides };
+  return { deps, seen: new Map<string, CheckedProduct>(), lines: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(), ...overrides };
 }
 
 test("five tools are declared", () => {
@@ -96,6 +96,25 @@ test("update_enquiry changes the turn's enquiry", async () => {
   assert.equal(outcome.isError, false);
   assert.equal(ctx.lines[0].quantity, 2);
   assert.ok(ctx.seen.has("BTS-8026D"));
+});
+
+test("a line that could not be re-checked can be removed or cleared, but not changed", async () => {
+  const ctx = context(undefined, { customerTexts: ["2 please"], clearTexts: ["clear it all"], uncheckedCodes: ["BTS-8026D", "F46700"] });
+  const changed = await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 2 }, ctx);
+  assert.match(changed.content, /STOCK_UNVERIFIED/);
+  const removed = await runTool("update_enquiry", { action: "remove", stock_id: "BTS-8026D" }, ctx);
+  assert.equal(removed.isError, false);
+  assert.deepEqual(ctx.uncheckedCodes, ["F46700"]);
+  const cleared = await runTool("update_enquiry", { action: "clear" }, ctx);
+  assert.equal(cleared.isError, false);
+  assert.deepEqual(ctx.uncheckedCodes, []);
+});
+
+test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {
+  const refused = await runTool("update_enquiry", { action: "clear" }, context(undefined, { customerTexts: ["blow torch"], clearTexts: ["blow torch"] }));
+  assert.match(refused.content, /CLEAR_NOT_REQUESTED/);
+  const cleared = await runTool("update_enquiry", { action: "clear" }, context(undefined, { customerTexts: ["blow torch"], clearTexts: ["Start over", "blow torch"] }));
+  assert.equal(cleared.isError, false);
 });
 
 test("a one-character search such as 刀 is accepted", async () => {

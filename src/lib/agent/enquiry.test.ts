@@ -60,6 +60,15 @@ test("Chinese numbers count as quantities only before a measure word or at the e
   assert.equal(quantityStated(2, ["两头炉"]), false);
 });
 
+test("Chinese ordinals, option numbers and model numbers are not quantities", () => {
+  const notQuantities: Array<[number, string]> = [
+    [2, "我要第二个"], [2, "第二"], [2, "第2个"], [2, "选项二"], [2, "选项2"], [2, "型号2"], [2, "2号"], [2, "2款"], [1, "第一个要2个"],
+  ];
+  for (const [quantity, text] of notQuantities) assert.equal(quantityStated(quantity, [text]), false, text);
+  assert.equal(quantityStated(2, ["第一个要2个"]), true);
+  assert.equal(quantityStated(2, ["我要两个"]), true);
+});
+
 test("adding needs a stated quantity", async () => {
   const deps = fakeDeps([torch]);
   const refused = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["blow torch"], deps);
@@ -140,6 +149,15 @@ test("re-verification combines duplicate echo lines by code before checking stoc
   assert.match(result.notes[0], /reduced from 8/);
   const withinStock = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }, { stockId: "BTS-8026D", quantity: 2 }], deps);
   assert.deepEqual(withinStock.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 4]]);
+});
+
+test("a line whose catalogue lookup fails stays with the browser instead of being removed", async () => {
+  const failing = fakeDeps([torch]);
+  failing.findByCode = async () => { throw new Error("SUPABASE_PRODUCT_500"); };
+  const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }], failing);
+  assert.deepEqual(result.lines, []);
+  assert.deepEqual(result.unchecked, ["BTS-8026D"]);
+  assert.match(result.notes[0], /stays on the enquiry/);
 });
 
 test("a line that cannot be re-checked keeps its catalogue price with a note", async () => {

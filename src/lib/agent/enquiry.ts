@@ -26,10 +26,10 @@ export function enquiryTotals(lines: EnquiryReceiptLine[]) {
 }
 
 const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-// A number right after one of these is a label, not a quantity ("option 2", "size 2", "#2").
-const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|size|model|type|tier|level|layer|deck|burner|door|outlet|branch|table|page|step)|#)\s*)`;
-// A number right before one of these is a size, a count of parts, a pack size or an ordinal ("3-tier", "4 outlets", "48pcs/ctn", "2nd").
-const notQuantityAfter = String.raw`(?![-\s]*(?:tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th)\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b))`;
+// A number right after one of these is a label, not a quantity ("option 2", "size 2", "#2", "第2个", "选项2", "型号2").
+const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|size|model|type|tier|level|layer|deck|burner|door|outlet|branch|table|page|step)|#|第|选项|型号)\s*)`;
+// A number right before one of these is a size, a count of parts, a pack size or an ordinal ("3-tier", "4 outlets", "48pcs/ctn", "2nd", "2号", "2款").
+const notQuantityAfter = String.raw`(?![-\s]*(?:tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th)\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款])`;
 
 const chineseDigits = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
 
@@ -46,7 +46,8 @@ function chineseNumerals(quantity: number) {
  * True when one of the customer's recent typed messages contains this number
  * as a quantity-like token. Numbers inside codes, sizes ("H5cm", "12 QT", "24 cm"),
  * prices ("$23", "S$ 23"), option/model numbers, tiers, burners and outlet counts do not count.
- * Chinese numerals count only before a measure word (两个, 五箱) or at the end of the text.
+ * Chinese numerals count only before a measure word (两个, 五箱) or at the end of the text,
+ * and never as an ordinal or an option/model number (第二个, 选项二, 型号二).
  * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
@@ -54,7 +55,7 @@ export function quantityStated(quantity: number, customerTexts: string[]) {
   const word = numberWords[quantity];
   const chinese = chineseNumerals(quantity);
   const chineseQuantity = chinese.length
-    ? new RegExp(`(?<![一二两三四五六七八九十百千万零])(?:${chinese.join("|")})(?=[个件只把套箱包盒台支张条打瓶罐双]|\\s*$)`)
+    ? new RegExp(`(?<![一二两三四五六七八九十百千万零第]|选项|型号)(?:${chinese.join("|")})(?=[个件只把套箱包盒台支张条打瓶罐双]|\\s*$)`)
     : null;
   return customerTexts.some((text) => digits.test(text)
     || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text))
@@ -70,7 +71,7 @@ export async function applyEnquiryAction(
   deps: FactDeps,
 ): Promise<EnquiryResult> {
   if (action.action === "clear") {
-    // The whole enquiry is only wiped when the customer asked for it in their own words.
+    // The whole enquiry is only wiped when the customer asked for it (typed, or a chip they tapped).
     if (!customerTexts.some((text) => clearRequest.test(text))) return { ok: false, error: "CLEAR_NOT_REQUESTED" };
     return { ok: true, lines: [], notice: "" };
   }
@@ -123,15 +124,19 @@ function combinedEcho(echo: EnquiryEcho[]) {
 
 /**
  * Re-checks the customer's echoed enquiry against the catalogue and the live store.
- * Each line's catalogue lookup and live check are bounded by timeoutMs.
+ * Each line's catalogue lookup and live check are bounded by timeoutMs. A line whose
+ * lookup fails or times out is never removed: its code is returned in `unchecked`
+ * and the browser keeps its own copy of that line.
  */
 export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS) {
   const notes: string[] = [];
+  const unchecked: string[] = [];
   const products = new Map<string, CheckedProduct>();
   const checkedLines = await Promise.all(combinedEcho(echo).map(async ({ stockId, quantity }) => {
-    const catalogueProduct = await withTimeout(deps.findByCode(stockId).catch(() => null), timeoutMs, "timeout" as const);
-    if (catalogueProduct === "timeout") {
-      notes.push(`${stockId} could not be checked just now and was taken off the enquiry; it can be added again.`);
+    const catalogueProduct = await withTimeout(deps.findByCode(stockId).catch(() => "unchecked" as const), timeoutMs, "unchecked" as const);
+    if (catalogueProduct === "unchecked") {
+      notes.push(`${stockId} could not be checked just now; it stays on the enquiry as the customer had it, but is left out of the current lines and totals.`);
+      unchecked.push(stockId);
       return null;
     }
     if (!catalogueProduct) {
@@ -159,5 +164,5 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
     notes.push(`${label} could not be kept on the enquiry.`);
     return null;
   }));
-  return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products };
+  return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products, unchecked };
 }

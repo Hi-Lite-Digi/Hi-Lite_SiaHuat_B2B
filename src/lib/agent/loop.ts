@@ -22,6 +22,9 @@ export const MAX_TOOL_ROUNDS = 3;
 export const AGENT_EFFORT = "low" as const;
 const TURN_DEADLINE_MS = 45_000;
 const FALLBACK_RESERVE_MS = 10_000;
+// Enquiry re-checks get at least this long even when the work budget is smaller. The time comes out of the
+// backup reply's reserve; with a nearly spent budget the turn runs slightly over rather than time out every line.
+const VERIFY_FLOOR_MS = 1_000;
 const TAP_PREFIX = "[tap]";
 const CHIP_PREFIX = "[chip]";
 
@@ -167,12 +170,16 @@ export async function runAgentTurn(input: {
   const fallbackReserveMs = input.fallbackReserveMs ?? FALLBACK_RESERVE_MS;
   const workMs = Math.max(1, Math.floor(deadlineMs - fallbackReserveMs));
   const deadline = AbortSignal.timeout(workMs);
-  const verified = await verifyEnquiry(request.enquiry, deps, Math.max(1, Math.min(5_000, Math.floor(workMs / 3))));
+  const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
+  const customerTexts = recentCustomerTexts(request);
   const ctx: TurnContext = {
     deps,
     seen: new Map(verified.products),
     lines: verified.lines,
-    customerTexts: recentCustomerTexts(request),
+    uncheckedCodes: verified.unchecked,
+    customerTexts,
+    // A chip tap can ask to clear the enquiry, but never states a quantity.
+    clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...customerTexts] : customerTexts,
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
   };
@@ -223,7 +230,7 @@ export async function runAgentTurn(input: {
       message: customerMessage(final.message),
       cards: review.cards,
       chips: final.chips.slice(0, 3),
-      enquiry: { lines: ctx.lines, totals: enquiryTotals(ctx.lines) },
+      enquiry: replyEnquiry(ctx),
       showContact: final.show_contact,
       provider: "anthropic",
     };
@@ -233,6 +240,12 @@ export async function runAgentTurn(input: {
     console.warn("[api/agent] fallback reply", { reason });
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
-    return buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });
+    const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });
+    return { ...reply, enquiry: replyEnquiry(ctx) };
   }
+}
+
+/** The turn's enquiry, plus the codes the browser keeps as it has them because they could not be re-checked. */
+function replyEnquiry(ctx: TurnContext): AgentReply["enquiry"] {
+  return { lines: ctx.lines, totals: enquiryTotals(ctx.lines), ...(ctx.uncheckedCodes.length ? { unchecked: ctx.uncheckedCodes } : {}) };
 }

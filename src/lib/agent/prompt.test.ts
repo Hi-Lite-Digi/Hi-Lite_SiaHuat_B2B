@@ -15,6 +15,12 @@ test("Claire summarises the enquiry in one line instead of listing it", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked what's in the enquiry, give a one-line summary (item count and total from the context); the enquiry bar shows the lines, so don't list them."));
 });
 
+test("the update_enquiry errors Claude must explain are named in the prompt, clearing included", () => {
+  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "CLEAR_NOT_REQUESTED"]) {
+    assert.ok(CLAIRE_AGENT_PROMPT.includes(code), code);
+  }
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });

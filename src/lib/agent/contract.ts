@@ -1,6 +1,7 @@
 // src/lib/agent/contract.ts
 import { z } from "zod";
 import { imageAttachmentSchema, productSchema } from "@/lib/chat-contract";
+import { enquiryReceiptTotals } from "@/lib/conversation-export";
 
 export const agentEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(500), voice: z.boolean().optional(), chip: z.boolean().optional() }),
@@ -45,6 +46,8 @@ export const agentReplySchema = z.object({
       quantitiesByUom: z.array(z.object({ uom: z.string(), quantity: z.number() })),
       grandTotal: z.number(),
     }),
+    /** Codes the server could not re-check this turn: the browser keeps its own copy of those lines. */
+    unchecked: z.array(z.string()).optional(),
   }),
   showContact: z.boolean(),
   provider: z.enum(["anthropic", "fallback"]),
@@ -53,3 +56,13 @@ export const agentReplySchema = z.object({
 export type AgentEvent = z.infer<typeof agentEventSchema>;
 export type AgentRequest = z.infer<typeof agentRequestSchema>;
 export type AgentReply = z.infer<typeof agentReplySchema>;
+
+/** The browser's enquiry after a reply: the reply's lines plus its own copy of any line the server could not re-check. */
+export function nextEnquiry(current: AgentReply["enquiry"], reply: AgentReply["enquiry"]): AgentReply["enquiry"] {
+  const unchecked = new Set(reply.unchecked?.map((code) => code.toLowerCase()));
+  const kept = current.lines.filter((line) => unchecked.has(line.code.toLowerCase()));
+  if (!kept.length) return reply;
+  const lines = [...reply.lines, ...kept];
+  const totals = enquiryReceiptTotals(lines);
+  return { lines, totals: { ...totals, grandTotal: Math.round(totals.grandTotal * 100) / 100 } };
+}

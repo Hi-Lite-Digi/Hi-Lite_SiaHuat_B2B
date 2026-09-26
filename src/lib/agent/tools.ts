@@ -12,7 +12,12 @@ export type TurnContext = {
   deps: FactDeps;
   seen: Map<string, CheckedProduct>;
   lines: EnquiryReceiptLine[];
+  /** Enquiry codes that could not be re-checked this turn: the browser keeps its own copy of those lines. */
+  uncheckedCodes: string[];
+  /** The customer's recent typed texts: the only place a quantity can come from. */
   customerTexts: string[];
+  /** Texts that may ask to clear the enquiry: the typed texts plus a chip tapped this turn. */
+  clearTexts: string[];
   image: ImageAttachment | null;
   shownIds: ReadonlySet<string>;
 };
@@ -160,15 +165,23 @@ async function matchPhotoTool(ctx: TurnContext) {
 }
 
 async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext) {
+  // A line that could not be re-checked stays as the browser has it: it can be removed or cleared, not changed.
+  const code = input.stock_id?.toLowerCase();
+  if (input.action !== "clear" && ctx.uncheckedCodes.some((item) => item.toLowerCase() === code)) {
+    if (input.action !== "remove") return fail("STOCK_UNVERIFIED");
+    ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
+    return ok({ lines: ctx.lines, totals: enquiryTotals(ctx.lines) });
+  }
   const result = await applyEnquiryAction(ctx.lines, {
     action: input.action,
     stock_id: input.stock_id ?? undefined,
     quantity: input.quantity ?? undefined,
     unit: input.unit ?? undefined,
-  }, ctx.customerTexts, ctx.deps);
+  }, input.action === "clear" ? ctx.clearTexts : ctx.customerTexts, ctx.deps);
   if (result.product) remember(ctx, result.product);
   if (!result.ok) return fail(result.error, { available: result.available ?? undefined, notice: result.notice || undefined });
   ctx.lines = result.lines;
+  if (input.action === "clear") ctx.uncheckedCodes = [];
   return ok({ lines: result.lines, totals: enquiryTotals(result.lines), notice: result.notice || undefined });
 }
 
