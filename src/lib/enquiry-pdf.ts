@@ -115,7 +115,8 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
     const cardText = (item.cards ?? []).map((card) => [
       card.name,
       `code: ${card.stock_id}`,
-      `Price: $${Number(card.list_price).toFixed(2)} / ${card.uom_id}`,
+      // Same rule as the chat screen: a card whose live check failed shows no price.
+      card.stock_status === "unknown" ? "Price to be confirmed" : `Price: $${Number(card.list_price).toFixed(2)} / ${card.uom_id}`,
       stockLabel(card),
       card.source_url ?? "",
     ].filter(Boolean).join("\n")).join("\n\n");

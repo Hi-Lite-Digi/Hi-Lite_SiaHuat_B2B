@@ -59,3 +59,7 @@ test("a clean answer has no issues", () => {
 test("staff-contact claims are removed from the customer message", () => {
   assert.doesNotMatch(customerMessage("I've notified our sales team. They will call you soon."), /will call you/);
 });
+
+test("块 as a counting word is not money", () => {
+  assert.deepEqual(unverifiedAmounts("好的，已加入3块砧板。还需要别的吗？", allowed), []);
+});
