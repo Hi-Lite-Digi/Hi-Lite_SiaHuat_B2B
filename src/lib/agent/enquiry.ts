@@ -1,6 +1,5 @@
 // src/lib/agent/enquiry.ts
 import "server-only";
-import type { Product } from "@/lib/chat-contract";
 import { enquiryReceiptTotals, type EnquiryReceiptLine } from "@/lib/conversation-export";
 import { checkedEnquiryLine, mergedEnquiryQuantity } from "@/lib/enquiry-order";
 import { resolveProductQuantity } from "@/lib/enquiry-quantity";
@@ -104,13 +103,6 @@ export async function applyEnquiryAction(
   return { ok: true, lines: next, notice: resolved.notice, product: checked };
 }
 
-function lineFromSnapshot(quantity: number, product: Product): EnquiryReceiptLine {
-  return {
-    item: product.name, code: product.stock_id, pricePerItem: product.list_price, quantity,
-    total: Math.round(product.list_price * 100) * quantity / 100, uom: product.uom_id, sourceUrl: product.source_url,
-  };
-}
-
 /** The echo comes from the browser: duplicate codes (any case) are added together into one line. */
 function combinedEcho(echo: EnquiryEcho[]) {
   const combined = new Map<string, EnquiryEcho>();
@@ -125,8 +117,8 @@ function combinedEcho(echo: EnquiryEcho[]) {
 /**
  * Re-checks the customer's echoed enquiry against the catalogue and the live store.
  * Each line's catalogue lookup and live check are bounded by timeoutMs. A line whose
- * lookup fails or times out is never removed: its code is returned in `unchecked`
- * and the browser keeps its own copy of that line.
+ * lookup or live check fails or times out is never removed: its code is returned in
+ * `unchecked` and the browser keeps its own copy of that line.
  */
 export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS) {
   const notes: string[] = [];
@@ -147,8 +139,9 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
     products.set(result.product.stock_id, result);
     const label = `${result.product.name} (${result.product.stock_id})`;
     if (!result.verified) {
-      notes.push(`${label} could not be re-checked live just now; its last known price is kept.`);
-      return lineFromSnapshot(quantity, catalogueProduct);
+      notes.push(`${label} could not be re-checked live just now; it stays on the enquiry as the customer had it, but is left out of the current lines and totals.`);
+      unchecked.push(stockId);
+      return null;
     }
     const line = checkedEnquiryLine(quantity, result.product);
     if (line) return line;

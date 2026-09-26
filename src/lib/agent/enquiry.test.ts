@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyEnquiryAction, enquiryTotals, quantityStated, verifyEnquiry } from "./enquiry";
+import { allowedCents } from "./guards";
 import { fakeDeps, product } from "./testing";
 
 const torch = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER L15.6xW5.8xH5cm, BLUE, SAFICO PRO", list_price: 23.36, available_quantity: 40 });
@@ -160,10 +161,14 @@ test("a line whose catalogue lookup fails stays with the browser instead of bein
   assert.match(result.notes[0], /stays on the enquiry/);
 });
 
-test("a line that cannot be re-checked keeps its catalogue price with a note", async () => {
-  const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }], fakeDeps([torch], { "BTS-8026D": "fail" }));
-  assert.equal(result.lines[0].pricePerItem, 23.36);
-  assert.match(result.notes[0], /could not be re-checked/);
+test("a line whose live re-check fails stays with the browser and its catalogue price is never used", async () => {
+  const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }, { stockId: "GAS", quantity: 48 }], fakeDeps([torch, gas], { "BTS-8026D": "fail" }));
+  assert.deepEqual(result.lines.map((line) => line.code), ["GAS"]);
+  assert.deepEqual(result.unchecked, ["BTS-8026D"]);
+  assert.match(result.notes.join(" "), /\(BTS-8026D\) could not be re-checked/);
+  const allowed = allowedCents(result.products, result.lines, enquiryTotals(result.lines).grandTotal);
+  assert.equal(allowed.has(2336), false);
+  assert.equal(allowed.has(4672), false);
 });
 
 test("totals are rounded to cents", () => {
