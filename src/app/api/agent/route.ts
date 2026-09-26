@@ -10,8 +10,11 @@ import { withModelUsage } from "@/lib/model-usage";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+// Claude's share of maxDuration, counted from arrival so time queued behind the same session is included.
+const TURN_BUDGET_MS = 40_000;
 
 export async function POST(request: Request) {
+  const arrived = performance.now();
   let body: unknown;
   try {
     body = await request.json();
@@ -25,10 +28,19 @@ export async function POST(request: Request) {
 
   const model = claudeModel();
   const anthropic = new Anthropic({ apiKey, timeout: 18_000, maxRetries: 1 });
-  const client: AgentClient = { messages: { create: (params, options) => anthropic.messages.create(params, options) } };
+  // A customer who leaves also stops the Claude calls, so the session queue is not held for nobody.
+  const client: AgentClient = {
+    messages: {
+      create: (params, options) => anthropic.messages.create(params, {
+        ...options,
+        signal: options?.signal ? AbortSignal.any([options.signal, request.signal]) : request.signal,
+      }),
+    },
+  };
 
   return inSessionOrder(input.data.sessionId, () => withModelUsage(async () => {
-    const reply = await runAgentTurn({ request: input.data, deps: defaultFactDeps(), client, model });
+    const deadlineMs = Math.max(1, Math.ceil(TURN_BUDGET_MS - (performance.now() - arrived)));
+    const reply = await runAgentTurn({ request: input.data, deps: defaultFactDeps(), client, model, deadlineMs });
     return NextResponse.json(reply, { headers: { "x-chat-provider": reply.provider, "x-chat-model": model } });
   }));
 }
