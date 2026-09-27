@@ -88,28 +88,41 @@ const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, cu
 const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b/i;
 const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toLowerCase()))].sort().join(" ");
 const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
+const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
+const REPEATED_MESSAGE_ISSUE = "Don't repeat your previous message word for word; move the conversation forward.";
 
 function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns) {
   const issues: string[] = [];
   if (cards.length && !asksAgain.test(earlier.currentText)) {
     const key = cardSetKey(cards.map((card) => card.stock_id));
     if (earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2) {
-      issues.push("You've already shown these same cards twice. Show different options, or none.");
+      issues.push(REPEATED_CARDS_ISSUE);
     }
   }
   const plain = plainText(message);
   if (plain && earlier.previousMessage !== null && plain === plainText(earlier.previousMessage)) {
-    issues.push("Don't repeat your previous message word for word; move the conversation forward.");
+    issues.push(REPEATED_MESSAGE_ISSUE);
   }
   return issues;
 }
 
-export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProduct>, allowed: ReadonlySet<number>, earlier = NO_EARLIER_TURNS): Review {
+/** What this turn's tools did, for checks on the reply. */
+export type TurnFacts = { lines: EnquiryReceiptLine[] };
+const UNKNOWN_CARD_ISSUE_PREFIX = "card_ids must come from a tool result";
+
+export function reviewAnswer(
+  answer: FinalAnswer,
+  seen: Map<string, CheckedProduct>,
+  allowed: ReadonlySet<number>,
+  earlier = NO_EARLIER_TURNS,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the hook for checks against what the tools did this turn; none reads it yet
+  turn: Partial<TurnFacts> = {},
+): Review {
   const safety: string[] = [];
   const style: string[] = [];
   const ids = [...new Set(answer.card_ids)];
   const unknown = ids.filter((id) => !seen.has(id));
-  if (unknown.length) safety.push(`card_ids must come from a tool result in this turn; not found: ${unknown.join(", ")}.`);
+  if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn; not found: ${unknown.join(", ")}.`);
   if (ids.length > 5) style.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A dropped chip takes any amount in it along.
@@ -123,6 +136,29 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   style.push(...repetitionIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }
+
+/** Fixes in code the safety issues that start with `prefix`. */
+export type Fixer = { prefix: string; fix: (message: string) => string };
+
+/** Runs each fixer whose issue is present, in list order; issues no fixer covers are returned in `left`. */
+export function applyFixers(message: string, safety: string[], fixers: Fixer[]) {
+  const covers = (fixer: Fixer, issue: string) => issue.startsWith(fixer.prefix);
+  const fixed = fixers.reduce((text, fixer) => (safety.some((issue) => covers(fixer, issue)) ? fixer.fix(text) : text), message);
+  return { message: fixed, left: safety.filter((issue) => !fixers.some((fixer) => covers(fixer, issue))) };
+}
+
+// Log codes by issue prefix; any other issue is a wording (STYLE) issue. Later guards add their rows.
+const ISSUE_CODES: Array<[prefix: string, code: string]> = [
+  [UNKNOWN_CARD_ISSUE_PREFIX, "UNKNOWN_CARD"],
+  [MONEY_ISSUE_PREFIX, "MONEY"],
+  [MID_SENTENCE_ISSUE, "MID_SENTENCE"],
+  [DANGLING_CURRENCY_ISSUE, "DANGLING_CURRENCY"],
+  [REPEATED_CARDS_ISSUE, "REPEAT"],
+  [REPEATED_MESSAGE_ISSUE, "REPEAT"],
+];
+
+/** A review issue as a log code: the issue text can quote the reply, so only the code is logged. */
+export const issueCode = (issue: string) => ISSUE_CODES.find(([prefix]) => issue.startsWith(prefix))?.[1] ?? "STYLE";
 
 /** Light clean-up for a reply sent with style problems left after the repair. */
 export function tidyMessage(message: string) {

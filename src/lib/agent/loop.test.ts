@@ -141,6 +141,27 @@ test("a cut-off that survives the repair loses only its unfinished sentence", as
   assert.equal(reply.message, "Sure.");
 });
 
+test("a style-only problem with little time left is tidied and sent without a repair call", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "Noted. Which size do you need?" })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  assert.equal(bodies.length, 1);
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Got it. Which size do you need?");
+});
+
+test("a style-only repair that fails sends the tidied first answer", async () => {
+  const { client } = fakeClient([answer({ message: "Noted: 2 torches." }), new Error("overloaded")]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Got it: 2 torches.");
+});
+
+test("a made-up card whose repair fails still gets the backup reply", async () => {
+  const { client } = fakeClient([answer({ message: "Try this.", card_ids: ["FAKE-1"] }), new Error("overloaded")]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "fallback");
+});
+
 test("a made-up card next to a style problem still gets the backup reply after the repair", async () => {
   const { client } = fakeClient([
     answer({ message: "Noted. Try this.", card_ids: ["FAKE-1"] }),
@@ -220,6 +241,45 @@ test("after the tool-round cap Claude must answer without tools", async () => {
   assert.equal((bodies[MAX_TOOL_ROUNDS].tool_choice as { type: string }).type, "none");
 });
 
+test("when time runs low, the next call answers with what was found", async () => {
+  const slow = deps();
+  const search = slow.searchDirect;
+  slow.searchDirect = (query, limit) => new Promise((resolve) => setTimeout(resolve, 400)).then(() => search(query, limit));
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: slow, client, model: "claude-sonnet-5", deadlineMs: 2_000, fallbackReserveMs: 500, lastCallMs: 1_300 });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal((bodies[1].tool_choice as { type: string }).type, "none");
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /tool_result.*Time is nearly up/);
+});
+
+test("the first call may always use tools", async () => {
+  // 4.5 s of work time is already below the last-call margin, but nothing has been looked up yet.
+  const { client, bodies } = fakeClient([answer({ message: "What will you use it for?" })]);
+  await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 5_000, fallbackReserveMs: 500 });
+  assert.equal((bodies[0].tool_choice as { type: string }).type, "auto");
+});
+
+test("every turn logs one line of codes and counts, never text", async (t) => {
+  const info = t.mock.method(console, "info", () => undefined);
+  const turnLogs = () => info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").map((call) => call.arguments[1] as Record<string, unknown>);
+  const searched = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["970S"] }),
+  ]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: searched.client, model: "claude-sonnet-5" });
+  const repairedTurn = fakeClient([answer({ message: "Try this.", card_ids: ["FAKE-1"] }), answer({ message: "What will you use it for?" })]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: repairedTurn.client, model: "claude-sonnet-5" });
+  const [first, second] = turnLogs();
+  assert.equal(turnLogs().length, 2);
+  assert.equal(typeof first.ms, "number");
+  assert.deepEqual({ ...first, ms: 0 }, { ms: 0, rounds: 2, forcedEarly: false, repaired: false, repairCauses: [], tools: ["search_catalogue"] });
+  assert.deepEqual([second.rounds, second.repaired, second.repairCauses, second.tools], [1, true, ["UNKNOWN_CARD"], []]);
+  assert.doesNotMatch(JSON.stringify(turnLogs()), /blow torch|FAKE-1|use it for/);
+});
+
 test("a Claude outage returns the backup reply", async () => {
   const { client } = fakeClient([new Error("overloaded")]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
@@ -228,7 +288,7 @@ test("a Claude outage returns the backup reply", async () => {
   assert.ok(reply.cards.some((card) => card.stock_id === "970S"));
 });
 
-test("the backup-reply log carries only a reason code, never error text", async (t) => {
+test("the backup-reply log carries only a reason code and the time taken, never error text", async (t) => {
   const warn = t.mock.method(console, "warn", () => undefined);
   const outage = fakeClient([new Error("customer wrote: blow torch for my shop")]);
   await runAgentTurn({ request: request({}), deps: deps(), client: outage.client, model: "claude-sonnet-5" });
@@ -236,9 +296,12 @@ test("the backup-reply log carries only a reason code, never error text", async 
   await runAgentTurn({ request: request({}), deps: deps(), client: cutOff.client, model: "claude-sonnet-5" });
   const rejected = fakeClient([answer({ message: "Try this.", card_ids: ["FAKE-1"] }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
   await runAgentTurn({ request: request({}), deps: deps(), client: rejected.client, model: "claude-sonnet-5" });
-  assert.deepEqual(warn.mock.calls.map((call) => call.arguments[1]), [
-    { reason: "Error" }, { reason: "AGENT_STOP_MAX_TOKENS" }, { reason: "AGENT_REPLY_REJECTED" },
-  ]);
+  const overloaded = fakeClient([Object.assign(new Error("Overloaded while reading: blow torch for my shop"), { status: 529 })]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: overloaded.client, model: "claude-sonnet-5" });
+  const logged = warn.mock.calls.map((call) => call.arguments[1] as { reason: string; ms: number });
+  assert.deepEqual(logged.map((entry) => entry.reason), ["Error", "AGENT_STOP_MAX_TOKENS", "AGENT_REPLY_REJECTED", "API_529"]);
+  assert.ok(logged.every((entry) => typeof entry.ms === "number" && Object.keys(entry).length === 2));
+  assert.doesNotMatch(JSON.stringify(warn.mock.calls), /blow torch|customer wrote|Overloaded/);
 });
 
 const CLAUDE_IMAGE_LIMIT = 5 * 1024 * 1024; // the API measures the base64 text
@@ -290,6 +353,12 @@ test("a Claude call that never answers still leaves time for the backup reply", 
   const turn = runAgentTurn({ request: request({}), deps: deps(), client: hangingClient, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500 });
   const reply = await within(turn, 2_500);
   assert.equal(reply.provider, "fallback");
+});
+
+test("a turn that runs out of time logs AGENT_DEADLINE", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  await within(runAgentTurn({ request: request({}), deps: deps(), client: hangingClient, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500 }), 2_500);
+  assert.deepEqual(warn.mock.calls.map((call) => (call.arguments[1] as { reason: string }).reason), ["AGENT_DEADLINE"]);
 });
 
 test("a tool that never answers still leaves time for the backup reply", async () => {

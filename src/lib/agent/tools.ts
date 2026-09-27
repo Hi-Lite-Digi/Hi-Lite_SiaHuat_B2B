@@ -113,6 +113,8 @@ const CATEGORY_ROWS = 20;
 export type ToolOutcome = { content: string; isError: boolean };
 const ok = (value: unknown): ToolOutcome => ({ content: JSON.stringify(value), isError: false });
 const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome => ({ content: JSON.stringify({ error, ...detail }), isError: true });
+/** An error as a log code: its message when that is already a code (SUPABASE_SEARCH_500), else its name. Error text can echo customer words. */
+const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name) : "unknown");
 
 function remember(ctx: TurnContext, checked: CheckedProduct) {
   ctx.seen.set(checked.product.stock_id, checked);
@@ -126,7 +128,10 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     ...input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, QUERY_ROWS))),
     ...(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS))] : []),
   ]);
-  if (settled.every((result) => result.status === "rejected")) return fail("SEARCH_UNAVAILABLE");
+  if (settled.every((result) => result.status === "rejected")) {
+    console.warn("[api/agent] search unavailable", { errors: settled.flatMap((result) => (result.status === "rejected" ? [errorCode(result.reason)] : [])) });
+    return fail("SEARCH_UNAVAILABLE");
+  }
   const lists = settled.map((result) => (result.status === "fulfilled" ? result.value : []));
   const queryLists = lists.slice(0, input.queries.length);
   const categoryList = lists[input.queries.length] ?? [];
@@ -171,7 +176,8 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
   let candidates: Product[];
   try {
     candidates = await retryOnce(() => ctx.deps.findAlternatives(input.stock_id, minQty, new Set([...ctx.shownIds, input.stock_id])));
-  } catch {
+  } catch (error) {
+    console.warn("[api/agent] search unavailable", { errors: [errorCode(error)] });
     return fail("SEARCH_UNAVAILABLE");
   }
   const checked = await Promise.all(candidates.slice(0, 8).map((item) => liveCheck(item, ctx.deps)));
@@ -261,6 +267,7 @@ export async function runTool(name: string, rawInput: unknown, ctx: TurnContext)
     }
   } catch (error) {
     if (error instanceof z.ZodError) return fail("INVALID_INPUT", { issues: error.issues.map((issue) => issue.message) });
+    console.warn("[api/agent] tool failed", { tool: name, error: errorCode(error) });
     return fail("TOOL_FAILED");
   }
 }

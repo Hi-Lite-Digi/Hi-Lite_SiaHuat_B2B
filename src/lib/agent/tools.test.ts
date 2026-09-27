@@ -51,12 +51,35 @@ test("search results past the first 6 carry no stock figures", async () => {
   }
 });
 
-test("search outage is reported as a tool error", async () => {
+test("search outage is reported as a tool error", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
   const deps = fakeDeps([blowtorch]);
   deps.searchDirect = async () => { throw new Error("down"); };
   const outcome = await runTool("search_catalogue", { queries: ["torch"] }, context(deps));
   assert.equal(outcome.isError, true);
   assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
+});
+
+test("a search outage logs error codes only", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const deps = fakeDeps([blowtorch]);
+  deps.searchDirect = async () => { throw new Error("SUPABASE_SEARCH_500"); };
+  await runTool("search_catalogue", { queries: ["torch"] }, context(deps));
+  deps.searchDirect = async (query) => { throw new Error(`no rows for ${query}`); };
+  await runTool("search_catalogue", { queries: ["blow torch"] }, context(deps));
+  assert.deepEqual(warn.mock.calls.map((call) => call.arguments), [
+    ["[api/agent] search unavailable", { errors: ["SUPABASE_SEARCH_500"] }],
+    ["[api/agent] search unavailable", { errors: ["Error"] }],
+  ]);
+});
+
+test("an unexpected tool error logs the tool and an error code only", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const deps = fakeDeps([blowtorch]);
+  deps.findByCode = async (stockId) => { throw new Error(`lookup broke on ${stockId}`); };
+  const outcome = await runTool("get_product", { stock_id: "970S" }, context(deps));
+  assert.match(outcome.content, /TOOL_FAILED/);
+  assert.deepEqual(warn.mock.calls.map((call) => call.arguments), [["[api/agent] tool failed", { tool: "get_product", error: "Error" }]]);
 });
 
 test("a category's products are merged in after the query results, without duplicates", async () => {
@@ -107,7 +130,8 @@ test("a query that fails once is retried and its results are used", async () => 
   assert.deepEqual((JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> }).products.map((item) => item.stock_id), ["BTS-8026D"]);
 });
 
-test("search is unavailable only when every query failed after its retry", async () => {
+test("search is unavailable only when every query failed after its retry", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
   const deps = fakeDeps([blowtorch]);
   const attempts = new Map<string, number>();
   deps.searchDirect = async (query) => {
@@ -120,7 +144,8 @@ test("search is unavailable only when every query failed after its retry", async
   assert.deepEqual(Object.fromEntries(attempts), { torch: 2, "blow torch": 2 });
 });
 
-test("find_alternatives retries once before reporting the search as unavailable", async () => {
+test("find_alternatives retries once before reporting the search as unavailable", async (t) => {
+  t.mock.method(console, "warn", () => undefined);
   const deps = fakeDeps([blowtorch, mastrad, safico]);
   const find = deps.findAlternatives;
   let attempts = 0;

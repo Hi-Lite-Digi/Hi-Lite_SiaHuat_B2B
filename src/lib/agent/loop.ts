@@ -8,7 +8,10 @@ import type { AgentReply, AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
-import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type EarlierTurns, type FinalAnswer } from "./guards";
+import {
+  MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, issueCode, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
+  type EarlierTurns, type FinalAnswer, type Fixer,
+} from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, runTool, uncheckedNote, type ShownCard, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -25,6 +28,8 @@ const FALLBACK_RESERVE_MS = 10_000;
 // Enquiry re-checks get at least this long even when the work budget is smaller. The time comes out of the
 // backup reply's reserve; with a nearly spent budget the turn runs slightly over rather than time out every line.
 const VERIFY_FLOOR_MS = 1_000;
+const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long; with less left, the tidied answer is sent
+const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
 const TAP_PREFIX = "[tap]";
 const CHIP_PREFIX = "[chip]";
 
@@ -47,6 +52,8 @@ const finalAnswerSchema = z.object({
 });
 const CARDS_ONLY_MESSAGE = "Here are some options.";
 const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty message, card_ids, chips and show_contact. Answer with that JSON only.";
+const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
+const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
 
 /** The customer's last two typed messages (card and chip taps excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
@@ -169,8 +176,10 @@ function beforeDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return Promise.race([work, expired]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
-async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext): Promise<Anthropic.ToolResultBlockParam[]> {
+/** Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log. */
+async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext, names: string[]): Promise<Anthropic.ToolResultBlockParam[]> {
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
+  names.push(...calls.map((call) => call.name));
   const outcomes = new Map<string, ToolOutcome>();
   // Enquiry updates change shared state, so they run one after another; lookups run in parallel.
   for (const call of calls.filter((item) => item.name === "update_enquiry")) {
@@ -196,13 +205,17 @@ export async function runAgentTurn(input: {
   deadlineMs?: number;
   /** The last part of deadlineMs, kept back for the backup reply. */
   fallbackReserveMs?: number;
+  /** With this little work time left after a tool round, the next Claude call must answer without tools. */
+  lastCallMs?: number;
 }): Promise<AgentReply> {
   const started = performance.now();
   const { request, deps, client, model } = input;
   const deadlineMs = input.deadlineMs ?? TURN_DEADLINE_MS;
   const fallbackReserveMs = input.fallbackReserveMs ?? FALLBACK_RESERVE_MS;
+  const lastCallMs = input.lastCallMs ?? LAST_CALL_MS;
   const workMs = Math.max(1, Math.floor(deadlineMs - fallbackReserveMs));
   const deadline = AbortSignal.timeout(workMs);
+  const timeLeft = () => workMs - (performance.now() - started);
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const customerTexts = recentCustomerTexts(request);
   const claireReplies = request.history.filter((item) => item.role === "assistant");
@@ -233,12 +246,22 @@ export async function runAgentTurn(input: {
       ...historyMessages(request),
       { role: "user", content: await beforeDeadline(eventContent(request, ctx, verified.notes), deadline) },
     ];
+    const toolNames: string[] = [];
+    let rounds = 0;
+    let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
-      const response = await callClaude(client, model, messages, round < MAX_TOOL_ROUNDS ? "auto" : "none", deadline);
+      // The first call may always use tools; after a tool round, a nearly spent budget means answer now.
+      const forceAnswer = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= lastCallMs);
+      if (forceAnswer && round < MAX_TOOL_ROUNDS) {
+        forcedEarly = true;
+        (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: TIME_NOTE }); // after the tool results
+      }
+      rounds += 1;
+      const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", deadline);
       if (response.stop_reason === "tool_use") {
         messages.push({ role: "assistant", content: response.content });
-        messages.push({ role: "user", content: await beforeDeadline(runToolBlocks(response.content, ctx), deadline) });
+        messages.push({ role: "user", content: await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline) });
         continue;
       }
       result = { final: readFinal(response), content: response.content };
@@ -247,28 +270,45 @@ export async function runAgentTurn(input: {
 
     let final = result.final;
     let allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
-    let review = final && reviewAnswer(final, ctx.seen, allowed, earlier);
-    if (!final || !review || review.safety.length || review.style.length) {
+    let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+    // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
+    const fixers: Fixer[] = [{ prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) }];
+    // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no repair.
+    const styleOnly = final && review && !review.safety.length && review.style.length ? final : null;
+    let repairCauses: string[] = [];
+    if (styleOnly && review && timeLeft() < STYLE_REPAIR_MIN_MS) {
+      final = { ...styleOnly, message: tidyMessage(styleOnly.message) }; // review (cards, chips) stays
+    } else if (!final || !review || review.safety.length || review.style.length) {
       const problems = review ? [...review.safety, ...review.style] : [INVALID_ANSWER_ISSUE];
+      repairCauses = review ? problems.map(issueCode) : ["INVALID_ANSWER"];
       messages.push({ role: "assistant", content: result.content });
       messages.push({
         role: "user",
         content: `[Context from the system, not the customer] Your reply was not sent. Fix these problems and answer again in the same JSON format without calling tools:\n- ${problems.join("\n- ")}`,
       });
-      final = readFinal(await callClaude(client, model, messages, "none", deadline));
+      const repaired = await callClaude(client, model, messages, "none", deadline).then(readFinal).catch((error: unknown) => {
+        if (styleOnly) return null;
+        throw error;
+      });
+      final = repaired ?? (styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) });
       if (!final) throw new Error("AGENT_INVALID_ANSWER");
       allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
-      review = reviewAnswer(final, ctx.seen, allowed, earlier);
-      if (review.safety.length && review.safety.every((issue) => issue.startsWith(MONEY_ISSUE_PREFIX))) {
-        final = { ...final, message: removeAmounts(final.message, unverifiedAmounts(final.message, allowed)) };
-        review = { ...review, safety: [] };
-      }
-      if (review.safety.length) throw new Error("AGENT_REPLY_REJECTED");
+      review = reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+      const fixed = applyFixers(final.message, review.safety, fixers);
+      if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
+      final = { ...final, message: fixed.message };
       // Style problems left after the repair are not worth the backup reply: send the answer, lightly tidied.
       if (review.style.length) final = { ...final, message: tidyMessage(final.message) };
+      if (!final.message.trim()) {
+        final = { ...final, message: review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: final.show_contact || !review.cards.length };
+      }
     }
 
     const cleaned = customerMessage(final.message);
+    // Codes and counts only, never customer or reply text.
+    console.info("[api/agent] turn", {
+      ms: Math.round(performance.now() - started), rounds, forcedEarly, repaired: repairCauses.length > 0, repairCauses, tools: toolNames,
+    });
     return {
       message: cleaned.message,
       cards: review.cards,
@@ -279,8 +319,14 @@ export async function runAgentTurn(input: {
     };
   } catch (error) {
     // Only a reason code is logged: error text could echo customer or model content.
-    const reason = !(error instanceof Error) ? "unknown" : /^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name;
-    console.warn("[api/agent] fallback reply", { reason });
+    const status = (error as { status?: unknown } | null)?.status;
+    const reason = !(error instanceof Error) ? "unknown"
+      : /^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message
+      : deadline.aborted ? "AGENT_DEADLINE"
+      : typeof status === "number" ? `API_${status}`
+      : /timed out/i.test(error.message) ? "API_TIMEOUT"
+      : /aborted/i.test(error.message) ? "CLIENT_ABORT" : error.name;
+    console.warn("[api/agent] fallback reply", { reason, ms: Math.round(performance.now() - started) });
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
     const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });

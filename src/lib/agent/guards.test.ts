@@ -4,7 +4,8 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, RESERVATION_ISSUE, allowedCents, customerMessage, endsMidSentence, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
+  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, issueCode, removeAmounts,
+  reviewAnswer, tidyMessage, unverifiedAmounts, type EarlierTurns, type FinalAnswer,
 } from "./guards";
 import { product } from "./testing";
 
@@ -43,6 +44,28 @@ test("an unverified amount in the message is a safety issue", () => {
   assert.equal(review.safety.filter((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)).length, 1);
   assert.match(review.safety.join(" "), /\$99/);
   assert.doesNotMatch(review.safety.join(" "), /\$23\.36/);
+});
+
+test("applyFixers removes what code can fix and leaves the rest", () => {
+  const review = reviewAnswer({ message: "That one is $99.", card_ids: ["FAKE"], chips: [], show_contact: false }, seen, allowed);
+  const fixers = [{ prefix: MONEY_ISSUE_PREFIX, fix: (message: string) => removeAmounts(message, unverifiedAmounts(message, allowed)) }];
+  const fixed = applyFixers("That one is $99.", review.safety, fixers);
+  assert.equal(fixed.message, "That one is the listed price.");
+  assert.equal(fixed.left.length, 1);
+  assert.match(fixed.left[0], /not found: FAKE/);
+  assert.deepEqual(applyFixers("Here you go.", [], fixers), { message: "Here you go.", left: [] });
+});
+
+test("each review issue has a log code", () => {
+  const codes = (answer: Partial<FinalAnswer>, earlier?: EarlierTurns) => {
+    const review = reviewAnswer({ message: "", card_ids: [], chips: [], show_contact: false, ...answer }, seen, allowed, earlier);
+    return [...review.safety, ...review.style].map(issueCode);
+  };
+  assert.deepEqual(codes({ message: "That one is $99.", card_ids: ["FAKE"] }), ["UNKNOWN_CARD", "MONEY"]);
+  assert.deepEqual(codes({ message: "Noted. We don't carry a boxed" }), ["STYLE", "MID_SENTENCE"]);
+  assert.deepEqual(codes({ message: "197-55 is $ - let me confirm." }), ["DANGLING_CURRENCY"]);
+  assert.deepEqual(codes({ message: "Your order is confirmed." }), ["STYLE"]);
+  assert.deepEqual(codes({ message: "Which size?", card_ids: ["BTS-8026D"] }, { cardSets: [["BTS-8026D"], ["BTS-8026D"]], previousMessage: "Which size?", currentText: "hmm" }), ["REPEAT", "REPEAT"]);
 });
 
 test("chips with numbers or amounts, long chips and chips past the third are dropped, not raised", () => {
