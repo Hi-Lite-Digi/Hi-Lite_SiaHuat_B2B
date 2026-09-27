@@ -226,7 +226,7 @@ test("while a line is unchecked, update_enquiry results tell Claude not to quote
 });
 
 const addSafico = (overrides: Partial<TurnContext>, action: "add" | "set" = "add") => runTool("update_enquiry", { action, stock_id: "BTS-8026D", quantity: 2 }, context(undefined, overrides));
-const twoCards = [{ code: "970S", name: blowtorch.name }, { code: "BTS-8026D", name: safico.name }];
+const twoCards = [{ code: "970S", name: blowtorch.name, price: null, link: null }, { code: "BTS-8026D", name: safico.name, price: null, link: null }];
 
 test("a product whose card the customer tapped this turn can be added", async () => {
   assert.equal((await addSafico({ customerTexts: ["2 please"], tappedId: "bts-8026d", previousCards: twoCards })).isError, false);
@@ -243,7 +243,7 @@ test("a product whose item code the customer typed can be added", async () => {
 });
 
 test("the only product card in Claire's previous reply can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["ok 2"], previousCards: [{ code: "BTS-8026D", name: safico.name }] })).isError, false);
+  assert.equal((await addSafico({ customerTexts: ["ok 2"], previousCards: [{ code: "BTS-8026D", name: safico.name, price: null, link: null }] })).isError, false);
 });
 
 test("a product named by a word no other card in the previous reply shares can be added", async () => {

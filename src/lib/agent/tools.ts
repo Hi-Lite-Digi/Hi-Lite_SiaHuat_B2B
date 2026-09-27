@@ -4,11 +4,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
+import type { ShownCard } from "./contract";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
 import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
-
-/** A product card as noted in the chat history: "[cards shown: CODE name; …]". */
-export type ShownCard = { code: string; name: string };
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {

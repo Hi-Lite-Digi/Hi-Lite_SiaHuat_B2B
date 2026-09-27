@@ -483,7 +483,7 @@ test("a chip tap is never a quantity: the enquiry tool refuses", async () => {
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /QTY_NOT_STATED/);
 });
 
-const twoCardsShown = { role: "assistant" as const, content: "Two options.\n[cards shown: 970S KITCHEN BLOW TORCH 970S; BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO]" };
+const twoCardsShown = { role: "assistant" as const, content: `Two options.\n[cards shown: 970S KITCHEN BLOW TORCH 970S ($31.31) <${blowtorch.source_url}>; BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO ($23.36) <${safico.source_url}>]` };
 
 test("with two cards shown, \"ok 2\" does not choose one: the enquiry tool refuses", async () => {
   const { client, bodies } = fakeClient([
@@ -506,7 +506,7 @@ test("only the previous reply's cards count: a single card there is the customer
   const reply = await runAgentTurn({
     request: request({
       event: { type: "text", text: "ok 2" },
-      history: [{ role: "user", content: "torch" }, twoCardsShown, { role: "user", content: "the gas one" }, { role: "assistant", content: "This one runs on gas.\n[cards shown: BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO]" }],
+      history: [{ role: "user", content: "torch" }, twoCardsShown, { role: "user", content: "the gas one" }, { role: "assistant", content: `This one runs on gas.\n[cards shown: BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO ($23.36) <${safico.source_url}>]` }],
     }),
     deps: deps(), client, model: "claude-sonnet-5",
   });

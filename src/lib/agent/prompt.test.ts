@@ -69,3 +69,7 @@ test("Claire gives only Sia Huat's sales contact, never another phone number or 
   assert.ok(CLAIRE_AGENT_PROMPT.includes(SALES_CONTACT.phone));
   assert.ok(CLAIRE_AGENT_PROMPT.includes(SALES_CONTACT.email));
 });
+
+test("Claire uses the prices in the cards notes only to tell which product the customer means", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Use those prices only to recognise which product the customer means"));
+});

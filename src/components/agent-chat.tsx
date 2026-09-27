@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { agentReplySchema, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { agentReplySchema, cardsNote, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -38,13 +38,16 @@ function stockLabel(card: Product) {
 }
 
 function historyFor(items: ChatItem[]) {
-  return items.slice(-30).map((item) => ({
-    role: item.role,
-    content: (item.role === "user"
-      ? item.tap ? `[tap] ${item.text}` : item.chip ? `[chip] ${item.text}` : item.imageUrl ? `[photo] ${item.text || "(no caption)"}` : item.text
-      : `${item.text}${item.cards?.length ? `\n[cards shown: ${item.cards.map((card) => `${card.stock_id} ${card.name}`).join("; ")}]` : ""}`
-    ).slice(0, 2_000),
-  })).filter((item) => item.content.trim().length > 0);
+  return items.slice(-30).map((item) => {
+    // The text is trimmed rather than the cards note, so the note survives the 2,000-character cap.
+    const note = item.role === "assistant" ? cardsNote(item.cards ?? []) : "";
+    return {
+      role: item.role,
+      content: item.role === "user"
+        ? (item.tap ? `[tap] ${item.text}` : item.chip ? `[chip] ${item.text}` : item.imageUrl ? `[photo] ${item.text || "(no caption)"}` : item.text).slice(0, 2_000)
+        : `${item.text.slice(0, 2_000 - note.length)}${note}`,
+    };
+  }).filter((item) => item.content.trim().length > 0);
 }
 
 export function AgentChat() {

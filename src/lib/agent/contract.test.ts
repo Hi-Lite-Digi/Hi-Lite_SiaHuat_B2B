@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
-import { agentReplySchema, agentRequestSchema, nextEnquiry } from "./contract";
+import { agentReplySchema, agentRequestSchema, cardsNote, nextEnquiry, parseCardsNote, withoutCardsNote } from "./contract";
+import { product } from "./testing";
 
 test("a card tap is a product choice, never text", () => {
   const parsed = agentRequestSchema.parse({ sessionId: "session-1234", event: { type: "select_product", stockId: "BTS-8026D" } });
@@ -51,4 +52,39 @@ test("the browser keeps its own copy of lines the server could not re-check", ()
 test("sales contact stays a placeholder until Sia Huat confirms it", () => {
   assert.equal(SALES_CONTACT.phone, "[SALES PHONE]");
   assert.equal(SALES_CONTACT.email, "[SALES EMAIL]");
+});
+
+const torch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 31.31, source_url: "https://store.siahuat.com/product/1234" });
+const uncheckedCard = product({ stock_id: "X", stock_status: "unknown", source_url: "https://store.siahuat.com/product/99" });
+
+test("the cards note carries each checked card's price and link, and leaves an unchecked price out", () => {
+  assert.equal(cardsNote([torch, uncheckedCard]), "\n[cards shown: 970S KITCHEN BLOW TORCH 970S ($31.31) <https://store.siahuat.com/product/1234>; X Product X <https://store.siahuat.com/product/99>]");
+  assert.equal(cardsNote([]), "");
+});
+
+test("the note reads back as the same cards", () => {
+  const noLink = { ...product({ stock_id: "PAN-1", name: "FRY PAN", list_price: 5 }), source_url: null };
+  const content = `Hi.${cardsNote([torch, uncheckedCard, noLink])}`;
+  assert.deepEqual(parseCardsNote(content), [
+    { code: "970S", name: "KITCHEN BLOW TORCH 970S", price: 31.31, link: "https://store.siahuat.com/product/1234" },
+    { code: "X", name: "Product X", price: null, link: "https://store.siahuat.com/product/99" },
+    { code: "PAN-1", name: "FRY PAN", price: 5, link: null },
+  ]);
+  assert.equal(withoutCardsNote(content), "Hi.");
+  assert.deepEqual(parseCardsNote("Hi."), []);
+});
+
+test("older notes without prices or links still read", () => {
+  assert.deepEqual(parseCardsNote("Two options.\n[cards shown: 970S KITCHEN BLOW TORCH 970S; BTS-8026D]"), [
+    { code: "970S", name: "KITCHEN BLOW TORCH 970S", price: null, link: null },
+    { code: "BTS-8026D", name: "", price: null, link: null },
+  ]);
+});
+
+test("a name with a semicolon or a leading bracket survives", () => {
+  const sock = product({ stock_id: "CS-4", name: '(26-01688) COFFEE SOCK; 4"', list_price: 2.5, source_url: "https://store.siahuat.com/product/77" });
+  assert.deepEqual(parseCardsNote(`Here.${cardsNote([sock, torch])}`), [
+    { code: "CS-4", name: '(26-01688) COFFEE SOCK, 4"', price: 2.5, link: "https://store.siahuat.com/product/77" },
+    { code: "970S", name: "KITCHEN BLOW TORCH 970S", price: 31.31, link: "https://store.siahuat.com/product/1234" },
+  ]);
 });

@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
-import type { AgentReply, AgentRequest } from "./contract";
+import { parseCardsNote, withoutCardsNote, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
@@ -13,7 +13,7 @@ import {
   type EarlierTurns, type FinalAnswer, type Fixer,
 } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, errorCode, runTool, uncheckedNote, type ShownCard, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
 
 export type AgentClient = {
   messages: {
@@ -64,27 +64,6 @@ export function recentCustomerTexts(request: AgentRequest) {
     .map((item) => item.content.replace(/^\[photo\]\s*/, ""))
     .reverse();
   return [...current, ...earlier].slice(0, 2);
-}
-
-const CARDS_NOTE = "[cards shown: ";
-
-/** The cards the chat screen noted on an assistant history entry: "[cards shown: CODE name; CODE name]". */
-function shownCards(content: string): ShownCard[] {
-  const start = content.lastIndexOf(CARDS_NOTE);
-  if (start < 0) return [];
-  return content.slice(start + CARDS_NOTE.length).replace(/\]\s*$/, "").split("; ")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const space = entry.indexOf(" ");
-      return space < 0 ? { code: entry, name: "" } : { code: entry.slice(0, space), name: entry.slice(space + 1) };
-    });
-}
-
-/** An assistant history entry's message without its cards note. */
-function withoutCardsNote(content: string) {
-  const start = content.lastIndexOf(CARDS_NOTE);
-  return (start < 0 ? content : content.slice(0, start)).trim();
 }
 
 function historyMessages(request: AgentRequest): Anthropic.MessageParam[] {
@@ -243,11 +222,11 @@ export async function runAgentTurn(input: {
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
     tappedId: request.event.type === "select_product" ? request.event.stockId : null,
-    previousCards: previousReply ? shownCards(previousReply.content) : [],
+    previousCards: previousReply ? parseCardsNote(previousReply.content) : [],
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   const earlier: EarlierTurns = {
-    cardSets: claireReplies.map((item) => shownCards(item.content).map((card) => card.code)),
+    cardSets: claireReplies.map((item) => parseCardsNote(item.content).map((card) => card.code)),
     previousMessage: previousReply ? withoutCardsNote(previousReply.content) : null,
     currentText: searchText ?? "",
   };
