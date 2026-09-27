@@ -13,7 +13,7 @@ import {
   type EarlierTurns, type FinalAnswer, type Fixer,
 } from "./guards";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, runTool, uncheckedNote, type ShownCard, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, runTool, uncheckedNote, type ShownCard, type ToolOutcome, type TurnContext } from "./tools";
 
 export type AgentClient = {
   messages: {
@@ -176,6 +176,17 @@ function beforeDeadline<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return Promise.race([work, expired]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
+/** A failed step as a log code. SDK errors carry text that could echo the chat, so they log as a status or kind. */
+function failureCode(error: unknown, deadline: AbortSignal) {
+  const code = errorCode(error);
+  if (!(error instanceof Error) || code !== error.name) return code;
+  const status = (error as { status?: unknown }).status;
+  return deadline.aborted ? "AGENT_DEADLINE"
+    : typeof status === "number" ? `API_${status}`
+    : /timed out/i.test(error.message) ? "API_TIMEOUT"
+    : /aborted/i.test(error.message) ? "CLIENT_ABORT" : code;
+}
+
 /** Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log. */
 async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext, names: string[]): Promise<Anthropic.ToolResultBlockParam[]> {
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
@@ -273,27 +284,39 @@ export async function runAgentTurn(input: {
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
     const fixers: Fixer[] = [{ prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) }];
-    // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no repair.
+    // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no usable repair.
     const styleOnly = final && review && !review.safety.length && review.style.length ? final : null;
+    const tidiedFirst = styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) };
     let repairCauses: string[] = [];
-    if (styleOnly && review && timeLeft() < STYLE_REPAIR_MIN_MS) {
-      final = { ...styleOnly, message: tidyMessage(styleOnly.message) }; // review (cards, chips) stays
+    let repaired = false;
+    let repairFailed: string | null = null;
+    if (tidiedFirst && review && timeLeft() < STYLE_REPAIR_MIN_MS) {
+      final = tidiedFirst; // review (cards, chips) stays
+      repairCauses = review.style.map(issueCode);
     } else if (!final || !review || review.safety.length || review.style.length) {
       const problems = review ? [...review.safety, ...review.style] : [INVALID_ANSWER_ISSUE];
       repairCauses = review ? problems.map(issueCode) : ["INVALID_ANSWER"];
+      repaired = true;
       messages.push({ role: "assistant", content: result.content });
       messages.push({
         role: "user",
         content: `[Context from the system, not the customer] Your reply was not sent. Fix these problems and answer again in the same JSON format without calling tools:\n- ${problems.join("\n- ")}`,
       });
-      const repaired = await callClaude(client, model, messages, "none", deadline).then(readFinal).catch((error: unknown) => {
-        if (styleOnly) return null;
-        throw error;
-      });
-      final = repaired ?? (styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) });
-      if (!final) throw new Error("AGENT_INVALID_ANSWER");
+      final = await callClaude(client, model, messages, "none", deadline)
+        .then((response) => readFinal(response) ?? Promise.reject(new Error("AGENT_INVALID_ANSWER")))
+        .catch((error: unknown) => {
+          if (!tidiedFirst) throw error;
+          repairFailed = failureCode(error, deadline);
+          return tidiedFirst;
+        });
       allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
       review = reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+      if (tidiedFirst && applyFixers(final.message, review.safety, fixers).left.length) {
+        // The repair brought a made-up card, but the first answer was safe to send: it goes out tidied instead.
+        repairFailed = "AGENT_REPLY_REJECTED";
+        final = tidiedFirst;
+        review = reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+      }
       const fixed = applyFixers(final.message, review.safety, fixers);
       if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
       final = { ...final, message: fixed.message };
@@ -307,7 +330,8 @@ export async function runAgentTurn(input: {
     const cleaned = customerMessage(final.message);
     // Codes and counts only, never customer or reply text.
     console.info("[api/agent] turn", {
-      ms: Math.round(performance.now() - started), rounds, forcedEarly, repaired: repairCauses.length > 0, repairCauses, tools: toolNames,
+      ms: Math.round(performance.now() - started), rounds, forcedEarly, repaired, repairCauses,
+      repairSkipped: repairCauses.length > 0 && !repaired, repairFailed, tools: toolNames,
     });
     return {
       message: cleaned.message,
@@ -319,14 +343,7 @@ export async function runAgentTurn(input: {
     };
   } catch (error) {
     // Only a reason code is logged: error text could echo customer or model content.
-    const status = (error as { status?: unknown } | null)?.status;
-    const reason = !(error instanceof Error) ? "unknown"
-      : /^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message
-      : deadline.aborted ? "AGENT_DEADLINE"
-      : typeof status === "number" ? `API_${status}`
-      : /timed out/i.test(error.message) ? "API_TIMEOUT"
-      : /aborted/i.test(error.message) ? "CLIENT_ABORT" : error.name;
-    console.warn("[api/agent] fallback reply", { reason, ms: Math.round(performance.now() - started) });
+    console.warn("[api/agent] fallback reply", { reason: failureCode(error, deadline), ms: Math.round(performance.now() - started) });
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
     const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });

@@ -110,6 +110,7 @@ test("normal endings are not mid-sentence", () => {
   for (const message of [
     "Here you go.", "Sure 👍", "OK 👌🏻", "Thanks 👨‍🍳", "好的，已加入。", "好的", "Total: $22.76", "Got it. Total: SGD 22.76",
     "Link: https://store.siahuat.com/product/1", "Options:\n- A, $5\n- B, $6", "(ex GST)", "Yes, the 18″", "See you ~", `the 16" one"`,
+    "好的，价格是 $16.97（不含消费税）", "推荐「不锈钢汤锅」",
   ]) {
     assert.equal(endsMidSentence(message), false, message);
     assert.ok(!styleOf(message).includes(MID_SENTENCE_ISSUE), message);
@@ -191,6 +192,41 @@ test("reservation words that claim nothing are kept", () => {
     assert.deepEqual(customerMessage(text), { message: text, showContact: false }, text);
     assert.ok(!styleOf(text).includes(RESERVATION_ISSUE), text);
   }
+});
+
+test("more firm reservation claims are removed: 're, 's, will be, until, and after 不锈钢", () => {
+  assert.equal(customerMessage("Added 2 to your enquiry. They're reserved for you.").message, "Added 2 to your enquiry.");
+  assert.equal(customerMessage("Done. It's reserved for you now.").message, "Done.");
+  assert.equal(customerMessage("Added. They will be reserved for you.").message, "Added.");
+  for (const text of [
+    "Your 2 units are reserved until Friday.", "I've put 2 on hold until sales call you.", "不锈钢汤锅已为您预留2个。",
+    "No worries - your 2 units are already reserved.",
+  ]) {
+    assert.deepEqual(customerMessage(text), { message: "You can reach our sales team directly below.", showContact: true }, text);
+    assert.ok(styleOf(text).includes(RESERVATION_ISSUE), text);
+  }
+});
+
+test("reserved signs, Chinese product words, a leading condition and a plain 'no' claim nothing", () => {
+  for (const text of [
+    "These are reserved signs.",
+    "Yes, both are reserved signs: the acrylic one is the listed price.",
+    "We have an acrylic reserved sign holder, 23 in stock.",
+    "这款保留了传统造型，适合家用。",
+    "带锁定环的夹子，很好用。",
+    "Once sales confirm stock, your order is placed.",
+    "After you send the PDF, sales will check and your order is confirmed by them.",
+    "Once sales confirm, stock is reserved for you.",
+    "No stock is reserved.",
+    "No items are reserved by an enquiry.",
+  ]) {
+    assert.deepEqual(customerMessage(text), { message: text, showContact: false }, text);
+    assert.ok(!styleOf(text).includes(RESERVATION_ISSUE), text);
+  }
+});
+
+test("an empty message stays empty and turns nothing on", () => {
+  for (const text of ["", "   "]) assert.deepEqual(customerMessage(text), { message: "", showContact: false }, JSON.stringify(text));
 });
 
 test("reservation wording is a style issue; only a firm claim is removed in code", () => {

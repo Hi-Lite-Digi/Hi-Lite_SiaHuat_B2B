@@ -114,7 +114,7 @@ export type ToolOutcome = { content: string; isError: boolean };
 const ok = (value: unknown): ToolOutcome => ({ content: JSON.stringify(value), isError: false });
 const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome => ({ content: JSON.stringify({ error, ...detail }), isError: true });
 /** An error as a log code: its message when that is already a code (SUPABASE_SEARCH_500), else its name. Error text can echo customer words. */
-const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name) : "unknown");
+export const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name) : "unknown");
 
 function remember(ctx: TurnContext, checked: CheckedProduct) {
   ctx.seen.set(checked.product.stock_id, checked);

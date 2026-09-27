@@ -156,6 +156,14 @@ test("a style-only repair that fails sends the tidied first answer", async () =>
   assert.equal(reply.message, "Got it: 2 torches.");
 });
 
+test("a style-only answer whose repair brings a made-up card sends the tidied first answer", async () => {
+  const { client } = fakeClient([answer({ message: "Noted: 2 torches." }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Got it: 2 torches.");
+  assert.deepEqual(reply.cards, []);
+});
+
 test("a made-up card whose repair fails still gets the backup reply", async () => {
   const { client } = fakeClient([answer({ message: "Try this.", card_ids: ["FAKE-1"] }), new Error("overloaded")]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
@@ -275,9 +283,28 @@ test("every turn logs one line of codes and counts, never text", async (t) => {
   const [first, second] = turnLogs();
   assert.equal(turnLogs().length, 2);
   assert.equal(typeof first.ms, "number");
-  assert.deepEqual({ ...first, ms: 0 }, { ms: 0, rounds: 2, forcedEarly: false, repaired: false, repairCauses: [], tools: ["search_catalogue"] });
+  assert.deepEqual({ ...first, ms: 0 }, {
+    ms: 0, rounds: 2, forcedEarly: false, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null, tools: ["search_catalogue"],
+  });
   assert.deepEqual([second.rounds, second.repaired, second.repairCauses, second.tools], [1, true, ["UNKNOWN_CARD"], []]);
   assert.doesNotMatch(JSON.stringify(turnLogs()), /blow torch|FAKE-1|use it for/);
+});
+
+test("the turn log shows a repair skipped for time, or a failed repair replaced by the first answer", async (t) => {
+  const info = t.mock.method(console, "info", () => undefined);
+  const skipped = fakeClient([answer({ message: "Noted. Which size do you need?" })]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: skipped.client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  const failed = fakeClient([answer({ message: "Noted: 2 torches." }), new Error("overloaded: blow torch")]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: failed.client, model: "claude-sonnet-5" });
+  const rejected = fakeClient([answer({ message: "Noted: 2 torches." }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
+  await runAgentTurn({ request: request({}), deps: deps(), client: rejected.client, model: "claude-sonnet-5" });
+  const logs = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").map((call) => call.arguments[1] as Record<string, unknown>);
+  assert.deepEqual(logs.map((log) => [log.repaired, log.repairCauses, log.repairSkipped, log.repairFailed]), [
+    [false, ["STYLE"], true, null],
+    [true, ["STYLE"], false, "Error"],
+    [true, ["STYLE"], false, "AGENT_REPLY_REJECTED"],
+  ]);
+  assert.doesNotMatch(JSON.stringify(logs), /blow torch|overloaded/);
 });
 
 test("a Claude outage returns the backup reply", async () => {

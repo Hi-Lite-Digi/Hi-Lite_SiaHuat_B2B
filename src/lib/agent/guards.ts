@@ -52,7 +52,7 @@ export function removeAmounts(message: string, amounts: string[]) {
   return message.replace(moneyPattern, (match) => (amounts.includes(match) ? "the listed price" : match));
 }
 
-/** Sentences of a reply. Splits after . ! ? only before a capital, digit, quote, bracket, bullet or $ (so "approx. 5L" and "$5.69" stay whole), after 。！？, and at line breaks. */
+/** Sentences of a reply. Splits after . ! ? only before a capital, digit, quote, bracket, bullet or $ (so "$5.69" stays whole), after 。！？, and at line breaks. */
 export const sentences = (message: string) => message.split(/(?<=[.!?])\s+(?=[A-Z0-9"'(\-•*$])|(?<=[。！？])|\n+/).map((s) => s.trim()).filter(Boolean);
 
 /** The message without the sentences `drop` picks; other text and line breaks are kept. */
@@ -63,7 +63,7 @@ export function removeSentences(message: string, drop: (sentence: string) => boo
 }
 
 // A reply cut off where Claude typed a raw " : with structured output that quote ends the message string (exam 2: 5 replies).
-const properEnding = /(?:[.!?。！？…:)\]}"'”’»″′～~]|\p{Script=Han}|\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}\p{Extended_Pictographic}]*|https?:\/\/\S+|(?:\$|S\$|SG\$|SGD\s?)\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
+const properEnding = /(?:[.!?。！？…:)\]}"'”’»″′～~）」』]|\p{Script=Han}|\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}\p{Extended_Pictographic}]*|https?:\/\/\S+|(?:\$|S\$|SG\$|SGD\s?)\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
 const listLine = /(?:^|\n)[ \t]*(?:[-•*]|\d{1,2}[.)])[ \t]+[^\n]+$/;
 export const endsMidSentence = (message: string) => message.trim().length > 0 && !properEnding.test(message.trim()) && !listLine.test(message.trim());
 export const MID_SENTENCE_ISSUE = "Your message stops mid-sentence. A double-quote character inside the message ends it early: write the whole message again without the \" character (inches as 16in, quoted words in single quotes).";
@@ -71,10 +71,14 @@ const danglingCurrency = /(?:^|[^\w$])(?:SG?)?\$(?!\s?\d)/;
 export const DANGLING_CURRENCY_ISSUE = "A price is missing after the $ sign. Give the exact price from a tool result in this turn, or rephrase without a price.";
 
 // A reservation claim only counts with no negation or condition before it, and no condition right after it, in the same clause.
-const negatedBefore = /\b(?:not|never|nothing|no longer|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b[^.!?,;]{0,30}$|[不没未]|无法/i;
-const conditionAfter = /^[^.!?]{0,40}\b(?:when|once|until|after|if)\b/i;
-const reservationWords = /\b(?:reserved|on hold|set aside|put aside|held for you|booked for you|locked in for you)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|预留|保留|锁定|订单已(?:确认|提交)/i; // style tier
-const reservationClaim = /\b(?:is|are|been|was|were)\s+(?:already\s+|now\s+|all\s+)?(?:reserved|on hold|set aside|put aside)\b|\b(?:I|we)(?:'ve| have)\s+(?:reserved|set aside|put\b[^.!?]{0,25}\bon hold)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|已(?:为您|经)?(?:预留|保留|锁定)|订单已(?:确认|提交)/i; // remove tier: no bare "held"
+// A sentence that opens with a condition ("Once sales confirm, ...") is conditional throughout. "No worries" negates nothing,
+// and 不锈 (stainless) and 不粘 (non-stick) are product words, not negations.
+const negatedBefore = /\b(?:no(?!\s+(?:problem|worries)\b)|not|never|nothing|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b[^.!?,;]{0,30}$|^\s*(?:once|when|after|before|if|until)\b|不(?![锈粘])|[没未]|无法/i;
+const conditionAfter = /^[^.!?]{0,40}\b(?:when|once|after|if)\b/i;
+// "reserved" also names products (reserved signs, table cards and plaques); 保留 and 锁定 alone are product words too.
+const reserved = String.raw`reserved(?!\s+(?:table\s+)?(?:signs?|cards?|plaques?|stands?))`;
+const reservationWords = new RegExp(String.raw`\b(?:${reserved}|on hold|set aside|put aside|held for you|booked for you|locked in for you)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|预留|(?:已|已经|为您|给您|帮您)(?:保留|锁定)|订单已(?:确认|提交)`, "i"); // style tier
+const reservationClaim = new RegExp(String.raw`(?:\b(?:is|are|been|was|were|will be)|['’](?:re|s|ll be))\s+(?:already\s+|now\s+|all\s+)?(?:${reserved}|on hold|set aside|put aside)\b|\b(?:I|we)(?:'ve| have)\s+(?:reserved|set aside|put\b[^.!?]{0,25}\bon hold)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|已(?:为您|经)?(?:预留|保留|锁定)|订单已(?:确认|提交)`, "i"); // remove tier: no bare "held"
 const claims = (sentence: string, pattern: RegExp) => {
   const m = pattern.exec(sentence);
   return !!m && !negatedBefore.test(sentence.slice(0, m.index)) && !conditionAfter.test(sentence.slice(m.index + m[0].length));
@@ -201,7 +205,7 @@ const isSalesContact = (found: string) => (found.includes("@")
 export function customerMessage(message: string) {
   const trimmed = message.trim();
   const unreserved = sentences(trimmed).some(isReservationClaim) ? removeSentences(trimmed, isReservationClaim) : trimmed;
-  if (!unreserved) return { message: CONTACT_LINE, showContact: true };
+  if (trimmed && !unreserved) return { message: CONTACT_LINE, showContact: true };
   const contactChecked = unreserved.replace(contactPattern, (found) => (isSalesContact(found) ? found : OTHER_CONTACT));
   const checked = honestManualHandoff(contactChecked);
   if (checked === contactChecked) return { message: contactChecked, showContact: contactChecked !== unreserved };
