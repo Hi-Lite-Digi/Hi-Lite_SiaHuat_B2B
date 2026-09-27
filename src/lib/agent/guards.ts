@@ -89,8 +89,11 @@ const claims = (sentence: string, pattern: RegExp) => {
 const isReservationClaim = (sentence: string) => claims(sentence, reservationClaim);
 export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and isn't an order. Say the items are on the enquiry and Sia Huat sales confirm stock and the order.";
 
-/** Earlier turns from the chat history: the card codes of each Claire reply, her previous message, and what the customer just sent. */
-export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string };
+/**
+ * Earlier turns from the chat history: the card codes of each Claire reply, her previous message, what the customer just sent,
+ * the store links already in the chat (card notes included), and the links of Claire's previous reply.
+ */
+export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[] };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
 // Keyed only on the customer's words ("show me then i tap la"), never on Claire's own "tap it".
 const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b|\bshow (?:me )?(?:it|that|the (?:card|product|one))\b|\bwhere(?:'s| is)? (?:the )?(?:card|product)\b|\b(?:i(?:'ll| will)?|let me|to|can|then i) tap\b/i;
@@ -112,6 +115,40 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
     issues.push(REPEATED_MESSAGE_ISSUE);
   }
   return issues;
+}
+
+export const LINK_ISSUE_PREFIX = "These store links";
+// ASCII only, and not ending on punctuation, so a link stops before 。, an em dash, a curly quote or a full stop.
+const storeLinkPattern = /(?:https?:\/\/)?store\.siahuat\.com(?:\/[\w\-.~%\/?#=&+]*[\w\-~%\/#=&+])?/gi;
+const STORE_HOME = "https://store.siahuat.com";
+const linkKey = (link: string) => link.replace(/^(?:https?:\/\/)?/i, "https://").replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
+export const storeLinks = (text: string) => [...text.matchAll(storeLinkPattern)].map((match) => match[0]);
+/** The message with these links cut back to the store's home address. */
+export function removeLinks(message: string, links: string[]) {
+  return message.replace(storeLinkPattern, (link) => (links.includes(link) ? "store.siahuat.com" : link));
+}
+
+/** Store links in the message that no product looked up this turn and nothing in the chat gave (exam 2: links built from item codes). */
+export function unknownStoreLinks(message: string, seen: ReadonlyMap<string, CheckedProduct>, earlier: EarlierTurns) {
+  const known = new Set([...[...seen.values()].flatMap(({ product }) => (product.source_url ? [product.source_url] : [])), ...(earlier.links ?? [])].map(linkKey));
+  return storeLinks(message).filter((link) => linkKey(link) !== STORE_HOME && !known.has(linkKey(link)));
+}
+
+// "zyliss link cannot open leh", "Same link. Still not working", "the link got nothing inside" (exam 2, c03 and c08).
+const linkWord = /\b(?:link|url|page|website|site)s?\b|链接|网页/i;
+const linkFails = /\b(?:not (?:work|open|load)\w*|(?:can ?not|can't|cant|couldn't|won't|wont|doesn't|doesnt|didn't|dun|don't|never) (?:open|load|work)\w*|broken|dead|empty|nothing (?:inside|there|come|show)\w*|no (?:photo|picture|pic|image)s?|error|not found|still no|still not|same link)\b|打不开|无法打开/i;
+const choosing = /\d|\b(?:add|take|tap|buy|order|show)\b/i;
+const blamesCustomer = /\b(?:browser|network|connection|cach(?:e|ing)|incognito|private window|on your (?:side|end))\b/i;
+export const BROKEN_LINK_ISSUE = "The customer says a link you sent doesn't open. Don't send that link again. Give the item code and the facts from the tools, and offer Sia Huat sales for photos (show_contact true) or a similar product.";
+export const LINK_BLAME_ISSUE = "Don't suggest the problem is the customer's browser, network or device.";
+
+/** When the customer says a link doesn't open: the same link typed again or on a card they didn't ask for, or blame on their side. */
+function brokenLinkIssues(message: string, cards: Product[], earlier: EarlierTurns) {
+  if (!linkWord.test(earlier.currentText) || !linkFails.test(earlier.currentText)) return [];
+  const previous = new Set((earlier.previousLinks ?? []).map(linkKey).filter((key) => key !== STORE_HOME));
+  const retyped = storeLinks(message).some((link) => previous.has(linkKey(link)));
+  const onCard = !choosing.test(earlier.currentText) && cards.some((card) => card.source_url && previous.has(linkKey(card.source_url)));
+  return [...(retyped || onCard ? [BROKEN_LINK_ISSUE] : []), ...(blamesCustomer.test(message) ? [LINK_BLAME_ISSUE] : [])];
 }
 
 export const NO_CARD_PREFIX = "No card attached";
@@ -356,6 +393,8 @@ export function reviewAnswer(
   const chips = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip)).slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
+  const links = unknownStoreLinks(answer.message, seen, earlier);
+  if (links.length) safety.push(`${LINK_ISSUE_PREFIX} did not come from a tool result or this chat: ${links.join(", ")}. Only give a product's link field or a link from a [cards shown] note; never build one from an item code.`);
   if (turn.changes) safety.push(...enquiryClaimIssues(answer.message, { lines: turn.lines ?? [], changes: turn.changes, seen }));
   for (const { sentence, kind } of turn.searches ? unbackedClaims(answer.message, turn.searches, seen) : []) {
     // A "we don't have it" can be honest about a product type the searches missed, so it is reworded, never removed.
@@ -376,6 +415,7 @@ export function reviewAnswer(
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
   if (sentences(answer.message).some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
   style.push(...repetitionIssues(answer.message, cards, earlier));
+  style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }
 
@@ -400,6 +440,9 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [MID_SENTENCE_ISSUE, "MID_SENTENCE"],
   [DANGLING_CURRENCY_ISSUE, "DANGLING_CURRENCY"],
   [NO_CARD_PREFIX, "NO_CARD"],
+  [LINK_ISSUE_PREFIX, "LINK"],
+  [BROKEN_LINK_ISSUE, "LINK"],
+  [LINK_BLAME_ISSUE, "LINK"],
   [REPEATED_CARDS_ISSUE, "REPEAT"],
   [REPEATED_MESSAGE_ISSUE, "REPEAT"],
 ];

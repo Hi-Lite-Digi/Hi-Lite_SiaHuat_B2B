@@ -9,8 +9,9 @@ import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts,
-  removeClaims, reviewAnswer, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type Fixer,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer,
+  removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unknownStoreLinks, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns,
+  type FinalAnswer, type Fixer,
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
@@ -278,6 +279,9 @@ export async function runAgentTurn(input: {
     cardSets: picks.replies.map((reply) => reply.cards.map((card) => card.code)),
     previousMessage: picks.replies.at(-1)?.text ?? null,
     currentText: searchText ?? "",
+    // Links already in the chat may be given again: Claire's replies and their card notes, or a link the customer pasted.
+    links: [...request.history.map((item) => item.content), searchText ?? ""].flatMap(storeLinks),
+    previousLinks: storeLinks(request.history.findLast((item) => item.role === "assistant")?.content ?? ""),
   };
 
   try {
@@ -333,6 +337,7 @@ export async function runAgentTurn(input: {
       { prefix: CLAIM_ISSUE_PREFIX, fix: (message) => removeClaims(message, ctx.searches, ctx.seen) },
       { prefix: ENQUIRY_CLAIM_PREFIX, fix: withoutClaims },
       noCardFixer,
+      { prefix: LINK_ISSUE_PREFIX, fix: (message) => removeLinks(message, unknownStoreLinks(message, ctx.seen, earlier)) },
       { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) },
     ];
     // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no usable repair.

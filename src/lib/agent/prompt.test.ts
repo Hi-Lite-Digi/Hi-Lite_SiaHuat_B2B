@@ -105,3 +105,8 @@ test("Claire only reports enquiry changes that happened, never promises them, an
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are, handle up to three this turn"));
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /keep the rest in mind/);
 });
+
+test("Claire only gives store links from the tools or the chat, and handles a link that doesn't open", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("never build one from an item code"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("don't send that link again and don't blame their browser or network"));
+});

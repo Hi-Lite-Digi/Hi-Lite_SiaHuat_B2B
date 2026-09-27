@@ -5,7 +5,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import sharp from "sharp";
 import type { AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
-import { CLAIM_ISSUE_PREFIX } from "./guards";
+import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, product } from "./testing";
 
@@ -880,4 +880,27 @@ test("an honest out-of-stock line about the product find_alternatives was asked 
   });
   assert.equal(bodies.length, 2);
   assert.equal(reply.message, message);
+});
+
+test("a made-up store link is sent back for one repair, and removed if it survives", async () => {
+  const madeUp = answer({ message: "Photos: store.siahuat.com/product/8321T05-R." });
+  const { client, bodies } = fakeClient([madeUp, madeUp]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "got pic?" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 2);
+  assert.ok(JSON.stringify(bodies[1].messages.at(-1)).includes(LINK_ISSUE_PREFIX));
+  assert.equal(reply.message, "Photos: store.siahuat.com.");
+});
+
+test("a link from a tool result or already in the chat is sent as it is", async () => {
+  const fromTool = `Photos: ${blowtorch.source_url}`;
+  const searched = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] }), answer({ message: fromTool, card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client: searched.client, model: "claude-sonnet-5" });
+  assert.equal(searched.bodies.length, 2);
+  assert.equal(reply.message, fromTool);
+  const fromChat = `The photos are on its page: ${blowtorch.source_url}`;
+  const { client, bodies } = fakeClient([answer({ message: fromChat })]);
+  const again = await runAgentTurn({ request: askedAgain("got photo?"), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 1);
+  assert.equal(again.message, fromChat);
 });

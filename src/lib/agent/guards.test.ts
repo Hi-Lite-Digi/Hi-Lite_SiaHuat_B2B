@@ -4,9 +4,9 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE, NO_SHOW_PERMISSION_ISSUE, PROMISE_LATER_ISSUE,
-  RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, removeClaims, reviewAnswer,
-  stockIssues, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
+  NO_SHOW_PERMISSION_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts,
+  removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -668,4 +668,44 @@ test("saying all the cards are in stock when one isn't is a style issue", () => 
   const review = reviewAnswer({ message: "Both are in stock.", card_ids: ["BTS-8026D", "OLD"], chips: [], show_contact: false }, unverified, allowed);
   assert.equal(review.style.filter((issue) => /OLD \(stock not checked\)/.test(issue)).length, 1);
   assert.equal(issueCode(review.style.find((issue) => /stock not checked/.test(issue))!), "CLAIM");
+});
+
+const torchLink = "https://store.siahuat.com/product/8475553620";
+const linked = new Map<string, CheckedProduct>([["BTS-8026D", { product: product({ stock_id: "BTS-8026D", list_price: 23.36, source_url: torchLink }), verified: true }]]);
+const noEarlier: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
+const linkReview = (message: string, earlier: Partial<EarlierTurns> = {}, card_ids: string[] = []) => reviewAnswer(
+  { message, card_ids, chips: [], show_contact: false }, linked, allowed, { ...noEarlier, ...earlier },
+);
+const linkIssues = (message: string, earlier: Partial<EarlierTurns> = {}) => linkReview(message, earlier).safety.filter((issue) => issue.startsWith(LINK_ISSUE_PREFIX));
+
+test("a store link must come from this turn's tool results or the chat", () => {
+  for (const message of ["Photos: store.siahuat.com/product/8321T05-R (21cm)", "See https://store.siahuat.com/product/8321T61-R for the 25cm.", "Try store.siahuat.com/product/999999."]) {
+    assert.equal(linkIssues(message).length, 1, message);
+    assert.equal(issueCode(linkIssues(message)[0]), "LINK");
+  }
+  assert.match(linkIssues("Photos: store.siahuat.com/product/8321T05-R and store.siahuat.com/product/8321T61-R.")[0], /8321T05-R, store\.siahuat\.com\/product\/8321T61-R\./);
+  for (const message of [`Photos: ${torchLink}`, "Photos: store.siahuat.com/product/8475553620.", `See ${torchLink}#rt`, "Browse store.siahuat.com for more.", "Here: https://store.siahuat.com/"]) {
+    assert.deepEqual(linkIssues(message), [], message);
+  }
+  assert.deepEqual(linkIssues("The earlier one: store.siahuat.com/product/123456", { links: ["https://store.siahuat.com/product/123456"] }), []);
+});
+
+test("a known link next to Chinese punctuation, an em dash or a curly quote is not flagged, and removal keeps the rest", () => {
+  for (const message of [`链接：${torchLink}。`, `${torchLink}—the 21cm one`, `“${torchLink}”`]) assert.deepEqual(linkIssues(message), [], message);
+  const madeUp = "store.siahuat.com/product/8321T05-R";
+  assert.deepEqual(linkIssues(`链接 ${madeUp}。`).length, 1);
+  assert.equal(removeLinks(`链接 ${madeUp}。`, [madeUp]), "链接 store.siahuat.com。");
+  assert.equal(removeLinks(`Photos: ${madeUp}. Or ${torchLink}.`, [madeUp]), `Photos: store.siahuat.com. Or ${torchLink}.`);
+});
+
+test("a link the customer says doesn't open is not typed again, and their browser is not blamed", () => {
+  const broken = { previousMessage: `Here's the torch: ${torchLink}`, previousLinks: [torchLink] };
+  const linkStyle = (message: string, currentText: string, card_ids: string[] = []) => linkReview(message, { ...broken, currentText }, card_ids).style;
+  assert.deepEqual(linkStyle(`Sorry! Here it is again: ${torchLink}`, "torch link cannot open leh"), [BROKEN_LINK_ISSUE]);
+  assert.deepEqual(linkStyle("Sorry about that, here it is.", "torch link cannot open leh", ["BTS-8026D"]), [BROKEN_LINK_ISSUE]);
+  assert.deepEqual(linkStyle("Sorry about that, here it is.", "link cannot open, just add 2", ["BTS-8026D"]), []);
+  assert.deepEqual(linkStyle("It loads fine here; try an incognito window.", "Same link. Still not working"), [LINK_BLAME_ISSUE]);
+  assert.deepEqual(linkStyle("Sorry about that. It's item BTS-8026D; you can search that code on the store.", "torch link cannot open leh"), []);
+  assert.deepEqual(linkStyle(`Here it is again: ${torchLink}`, "send the torch link again"), []);
+  assert.equal(issueCode(BROKEN_LINK_ISSUE), "LINK");
 });
