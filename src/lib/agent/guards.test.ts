@@ -252,6 +252,28 @@ test("an added or updated claim needs a change for that item this turn, even whe
   const torchOn = { lines: [line("BTS-8026D", 2)] };
   for (const message of ["Updated: 5 Safico torches now.", "Got it: 5 Safico torches."]) assert.equal(claimIssues(message, torchOn).length, 1, message);
   assert.deepEqual(claimIssues("It's already added (2 Safico torches).", torchOn), []);
+  // The torch is on the enquiry at 2, so the repair must not be told to say it isn't there.
+  assert.doesNotMatch(claimIssues("Updated: 5 Safico torches now.", torchOn)[0], /isn't on the enquiry/);
+});
+
+test("every item in a list after an add must be on the enquiry", () => {
+  const torchAdded = { lines: [line("BTS-8026D", 2)], changes: [added("BTS-8026D")] };
+  for (const message of [
+    "Added: 2 Safico torches, 4 Rooster plates.",
+    "Got it: 2 Safico torches, 4 Rooster plates.",
+    "I've added 2 Safico torches, 4 Rooster plates and 12 spoons to your enquiry.",
+    "Both added: 2 Safico torches; 4 Rooster plates.",
+  ]) {
+    assert.equal(claimIssues(message, torchAdded).length, 1, message);
+  }
+  const bothAdded = { lines: [line("BTS-8026D", 2), line("RS-J1009-7", 4)], changes: [added("BTS-8026D"), added("RS-J1009-7")] };
+  assert.deepEqual(claimIssues("Added: 2 Safico torches, 4 Rooster plates.", bothAdded), []);
+  // runs-new2 c02-persona T14: the cents of an amount don't point at a card coded 66.
+  const blenders = new Map([checked("MK-768L", "Mika Bar Blender 2.0Liter", 273.83), checked("66", "Santos Compact Brushless Blender 1.4L", 1759.63)]);
+  const mikaLine = { item: "Mika Bar Blender 2.0Liter", code: "MK-768L", pricePerItem: 273.83, quantity: 2, total: 547.66, uom: "PC" };
+  for (const message of ["Added: 2 Mika MK-768L blenders, total $547.66 ex GST.", "Added 2 Mika MK-768L blenders at $547.66 in total."]) {
+    assert.deepEqual(enquiryClaimIssues(message, { lines: [mikaLine], changes: [added("MK-768L")], seen: blenders }), [], message);
+  }
 });
 
 test("a line about what is already on the enquiry is not a claim of a change", () => {

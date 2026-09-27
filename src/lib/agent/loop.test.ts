@@ -715,6 +715,29 @@ test("an 'Updated: 5' reply for a line already on the enquiry is nudged until up
   assert.equal(reply.message, "Updated: 5 Safico torches now.");
 });
 
+test("a comma list that claims an add which failed is repaired, then replaced", async () => {
+  const claim = answer({ message: "Added: 2 Kitchen Blow Torch (970S), 2 Safico Torch Burner (BTS-8026D). Anything else?" });
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+    toolCall("t2", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+    claim, claim,
+  ]);
+  const shown = `Both fit.\n[cards shown: 970S KITCHEN BLOW TORCH 970S ($31.31) <${blowtorch.source_url}>; BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO ($23.36) <${safico.source_url}>]`;
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "2 of the 970S and 2 of the BTS-8026D" },
+      history: [{ role: "user", content: "blow torch and safico torch" }, { role: "assistant", content: shown }],
+      shownProductIds: ["970S", "BTS-8026D"],
+    }),
+    deps: fakeDeps([blowtorch, safico], { "BTS-8026D": "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.match(JSON.stringify(bodies[2].messages.at(-1)), /STOCK_UNVERIFIED/);
+  assert.equal(bodies.length, 4);
+  assert.match(JSON.stringify(bodies[3].messages.at(-1)), /The enquiry didn't change/);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]]);
+  assert.equal(reply.message, "That change isn't on your enquiry yet. Anything else?");
+});
+
 test("a true removal reply that names the item left is sent as it is", async () => {
   const message = "Removed - your enquiry now has just the 1 Safico torch burner, total $23.36. Anything else?";
   const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", { action: "remove", stock_id: "970S" }), answer({ message })]);

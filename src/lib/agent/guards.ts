@@ -170,9 +170,11 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
   ];
   const onLines = (card: ShownCard) => facts.lines.some((line) => same(line.code, card.code));
   const changed = (card: ShownCard, actions: EnquiryChange["action"][] = ["add", "set", "remove"]) => facts.changes.some((change) => change.code !== null && same(change.code, card.code) && actions.includes(change.action));
+  // Amounts are left out: the cents of "$547.66" would point at a card coded 66 (runs-new2 c02-persona T14).
   const point = (text: string) => {
-    const typed = cards.filter((card) => codePattern(card.code).test(text));
-    return typed.length ? typed : pointedCards(text, cards);
+    const words = text.replace(moneyPattern, "");
+    const typed = cards.filter((card) => codePattern(card.code).test(words));
+    return typed.length ? typed : pointedCards(words, cards);
   };
   // A clause with a change word, judged on its own: a swap's "HET-4 removed" and "WCT708K added" each hold for their item.
   const falseClause = (clause: string, statusAllowed: boolean) => {
@@ -194,13 +196,19 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
     // A condition ("once you pick one, I'll add it") only excuses a sentence with no past-tense claim in it.
     if (!changeClaim.test(sentence) || (conditionalWording.test(sentence) && !/\b(?:added|removed|updated)\b/i.test(sentence))) return false;
     const clauses = clausesOf(sentence).filter((clause) => changeClaim.test(clause));
-    return (clauses.length ? clauses : [sentence]).some((clause) => falseClause(clause, !reportsChange.test(sentence)));
+    const judged = clauses.length ? clauses : [sentence];
+    if (judged.some((clause) => falseClause(clause, !reportsChange.test(sentence)))) return true;
+    // The rest of an add's list ("Added: 2 torches, 4 plates") has no change word of its own: each item it names must be
+    // on the enquiry or changed this turn.
+    if (!judged.some((clause) => !removalWord.test(clause) && !honestWording.test(clause))) return false;
+    return clausesOf(sentence).filter((part) => !honestWording.test(part)).some((part) => point(part).some((card) => !onLines(card) && !changed(card)));
   });
 }
 
 /** Issues for sentences that say the enquiry changed (or will) when update_enquiry didn't change it this turn. */
 export function enquiryClaimIssues(message: string, facts: ClaimFacts) {
-  return falseEnquiryClaims(message, facts).map((sentence) => `${ENQUIRY_CLAIM_PREFIX} for: "${sentence.slice(0, 120)}". No update_enquiry call succeeded for it in this turn, so don't say it was added, changed or removed, and don't promise to do it later. Say it isn't on the enquiry yet and what you still need (which product, or how many).`);
+  // The item may be on the enquiry already (a false "Updated: 5"), so the repair isn't told to say it isn't there.
+  return falseEnquiryClaims(message, facts).map((sentence) => `${ENQUIRY_CLAIM_PREFIX} for: "${sentence.slice(0, 120)}". No update_enquiry call succeeded for it in this turn, so don't say it was added, changed or removed, and don't promise to do it later. Say that change hasn't been made yet (the enquiry as it stands is in the context and any update_enquiry result) and what you still need (which product, or how many).`);
 }
 
 /** The message with its false enquiry claims replaced by one NOT_ON_ENQUIRY line where the first one was. */
