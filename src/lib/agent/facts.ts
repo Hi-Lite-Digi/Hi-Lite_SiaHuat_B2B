@@ -13,10 +13,13 @@ import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-p
 
 export type CatalogueProduct = Product & { source_url: string };
 
+/** A category's products (within any budget), how many match in all, and whether the category has products at any price. */
+export type CategoryResult = { products: Product[]; total: number; exists: boolean };
+
 /** Everything the agent may learn about products. Injected so tests run offline. */
 export type FactDeps = {
   searchDirect(query: string, limit: number): Promise<Product[]>;
-  searchCategory(words: string, limit: number): Promise<Product[]>;
+  searchCategory(words: string, limit: number, maxPrice?: number | null): Promise<CategoryResult>;
   findByCode(stockId: string): Promise<CatalogueProduct | null>;
   findBySourceUrl(url: string): Promise<CatalogueProduct | null>;
   findAlternatives(stockId: string, minQty: number, exclude: ReadonlySet<string>): Promise<Product[]>;

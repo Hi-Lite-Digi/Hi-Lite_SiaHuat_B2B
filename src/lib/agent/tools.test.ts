@@ -1,6 +1,7 @@
 // src/lib/agent/tools.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Product } from "@/lib/chat-contract";
 import { cardsNote } from "./contract";
 import type { CheckedProduct } from "./facts";
 import { pickEvidence } from "./picks";
@@ -84,17 +85,100 @@ test("an unexpected tool error logs the tool and an error code only", async (t) 
   assert.deepEqual(warn.mock.calls.map((call) => call.arguments), [["[api/agent] tool failed", { tool: "get_product", error: "Error" }]]);
 });
 
-test("a category's products are merged in after the query results, without duplicates", async () => {
+test("a category's products are merged with the query results, without duplicates", async () => {
   const kitchenTongs = product({ stock_id: "TG1", name: "SALAD TONGS 30CM", subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
   const clamp = product({ stock_id: "TG2", name: "BBQ GRILL CLAMP", subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
   const servingTongs = product({ stock_id: "TG3", name: "BUFFET SERVING TONGS", subcategory: "Serving utensils", third_category: "Serving tongs" });
   const ctx = context(fakeDeps([kitchenTongs, clamp, servingTongs]));
   const outcome = await runTool("search_catalogue", { queries: ["tongs"], category: "kitchen tongs" }, ctx);
-  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string; price_and_stock_verified_live: boolean }>; total_found: number; more_available: boolean };
-  assert.deepEqual(body.products.map((item) => item.stock_id), ["TG1", "TG3", "TG2"]);
+  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string; price_and_stock_verified_live: boolean }>; total_found: number; more_available: boolean; complete: boolean };
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["TG1", "TG2", "TG3"]);
   assert.ok(body.products.every((item) => item.price_and_stock_verified_live));
-  assert.deepEqual([body.total_found, body.more_available], [3, false]);
+  assert.deepEqual([body.total_found, body.more_available, body.complete], [3, false, true]);
   assert.ok(ctx.seen.has("TG2"));
+});
+
+type SearchBody = {
+  products: Array<{ stock_id: string }>; total_found: number; more_available: boolean; complete: boolean;
+  category_found?: boolean; categories: string[]; category_note?: string;
+};
+const searchBody = async (input: unknown, deps: ReturnType<typeof fakeDeps>) => JSON.parse((await runTool("search_catalogue", input, context(deps))).content) as SearchBody;
+const tongs = (count: number, overrides: Partial<Product> = {}) => Array.from({ length: count }, (_, index) => product({
+  stock_id: `TONG${index + 1}`, name: `COOKING TONGS ${index + 1}`, subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers", ...overrides,
+}));
+
+test("a category search puts in-category query hits and category products ahead of off-category hits", async () => {
+  const torch = product({ stock_id: "CT1", name: "COOKING TORCH", subcategory: "Kitchen tools", third_category: "Gas lighters" });
+  const thermometer = product({ stock_id: "CT2", name: "COOKING THERMOMETER", subcategory: "Kitchen tools", third_category: "Thermometers" });
+  const body = await searchBody({ queries: ["cooking tongs", "cooking"], category: "kitchen tongs" }, fakeDeps([torch, thermometer, ...tongs(12)]));
+  assert.equal(body.products.length, 10);
+  assert.ok(body.products.every((item) => item.stock_id.startsWith("TONG")));
+});
+
+test("max_price is applied to the whole category before the 10-row cut", async () => {
+  const cheap = product({ stock_id: "ZZ", name: "ZZ TONG", list_price: 5, subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
+  const body = await searchBody({ queries: ["tongs"], category: "kitchen tongs", max_price: 10 }, fakeDeps([...tongs(15, { list_price: 30 }), cheap]));
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["ZZ"]);
+  assert.deepEqual([body.total_found, body.complete], [1, true]);
+});
+
+test("complete is true only when every product in the category is listed", async () => {
+  const small = await searchBody({ queries: ["utility tong"], category: "kitchen tongs" }, fakeDeps(tongs(4)));
+  assert.deepEqual([small.products.length, small.complete, small.more_available], [4, true, false]);
+  const large = await searchBody({ queries: ["utility tong"], category: "kitchen tongs" }, fakeDeps(tongs(12)));
+  assert.deepEqual([large.products.length, large.complete, large.more_available, large.total_found], [10, false, true, 12]);
+});
+
+test("excluded products count as covered", async () => {
+  const body = await searchBody({ queries: ["utility tong"], category: "kitchen tongs", exclude_ids: ["tong11"] }, fakeDeps(tongs(11)));
+  assert.deepEqual([body.products.length, body.complete, body.more_available], [10, true, false]);
+});
+
+test("a query hit named with every word of the query stays ahead of a near-miss category", async () => {
+  const makers = Array.from({ length: 12 }, (_, index) => product({
+    stock_id: `CM${index + 1}`, name: `COFFEE MAKER ${index + 1}`, subcategory: "Beverage equipment", third_category: "Coffee machines and grinders",
+  }));
+  const bag = product({ stock_id: "BAG4", name: "COFFEE BAG 4 INCH", subcategory: "Beverage supplies", third_category: "Hot drinks and specialty items" });
+  const body = await searchBody({ queries: ["coffee bag"], category: "coffee" }, fakeDeps([...makers, bag]));
+  assert.equal(body.products[0].stock_id, "BAG4");
+});
+
+test("a category that matches nothing is reported with the categories of the results", async () => {
+  const torches = [
+    product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", subcategory: "Kitchen tools", third_category: "Gas lighters" }),
+    product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER", subcategory: "Kitchen tools", third_category: "Gas lighters" }),
+    product({ stock_id: "KT1", name: "KITCHEN TORCH LIGHTER", subcategory: "Kitchen tools", third_category: "Kitchen gadgets" }),
+  ];
+  const body = await searchBody({ queries: ["torch"], category: "hand mixers" }, fakeDeps(torches));
+  assert.equal(body.category_found, false);
+  assert.equal(body.categories[0], "Gas lighters");
+  assert.equal(body.category_note, "No catalogue category matches 'hand mixers'. Categories among these results: Gas lighters, Kitchen gadgets.");
+  const plain = await searchBody({ queries: ["torch"] }, fakeDeps(torches));
+  assert.equal(plain.category_found, undefined);
+});
+
+test("a failed category search is reported and the query results are still used", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico]);
+  deps.searchCategory = async () => { throw new Error("down"); };
+  const body = await searchBody({ queries: ["blow torch"], category: "gas lighters" }, deps);
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["970S"]);
+  assert.equal(body.category_note, "Category search failed.");
+});
+
+test("the tool description no longer suggests a category that matches nothing, and queries take 1-3 phrases", () => {
+  const search = agentTools.find((tool) => tool.name === "search_catalogue")!;
+  const properties = search.input_schema.properties as Record<string, { description?: string; minItems?: number; maxItems?: number }>;
+  assert.doesNotMatch(properties.category.description ?? "", /hand mixers/);
+  assert.deepEqual([properties.queries.minItems, properties.queries.maxItems], [1, 3]);
+  assert.match(search.description ?? "", /complete true means every product in the category is listed; only then may you say that is all\./);
+});
+
+test("queries sent as one string are accepted", async () => {
+  const one = await searchBody({ queries: "blow torch" }, fakeDeps([blowtorch, mastrad, safico]));
+  assert.deepEqual(one.products.map((item) => item.stock_id), ["970S"]);
+  // Claude once sent its list as a single string: "blow torch\", \"safico".
+  const joined = await searchBody({ queries: `blow torch", "safico` }, fakeDeps([blowtorch, mastrad, safico]));
+  assert.deepEqual(joined.products.map((item) => item.stock_id), ["970S", "BTS-8026D"]);
 });
 
 test("a search that hits a query's row limit says more are available", async () => {

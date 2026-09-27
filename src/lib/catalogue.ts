@@ -657,30 +657,37 @@ export async function searchCatalogueDirect(query: string, limit = 10) {
 
 /**
  * Products in a catalogue category ("kitchen tongs", "GN pan trolleys"): every word must appear
- * in the same field, either third_category or subcategory. Used by the agent.
+ * in the same field, either third_category or subcategory. Most stocked first, then by name; a budget
+ * is applied before the limit. `total` counts every match; `exists` says whether the category has
+ * products at any price. Used by the agent.
  */
-export async function searchCatalogueByCategory(words: string, limit = 20) {
+export async function searchCatalogueByCategory(words: string, limit = 200, maxPrice?: number | null) {
   // PostgREST filter syntax reserves , . : ( ) and *, so only letters, digits and hyphens are kept.
   const terms = words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
-  if (!terms.length) return [];
+  if (!terms.length) return { products: [], total: 0, exists: false };
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
   const allIn = (field: string) => `and(${terms.map((term) => `${field}.ilike.*${term}*`).join(",")})`;
-  const query = new URLSearchParams({
-    select: productSelect,
-    status: "in.(Active,New)",
-    or: `(${allIn("third_category")},${allIn("subcategory")})`,
-    order: "name.asc",
-    limit: String(limit),
-  });
-  const response = await fetch(`${url}/rest/v1/products?${query}`, {
-    headers: { apikey: key, authorization: `Bearer ${key}` },
-    cache: "no-store",
-    signal: AbortSignal.timeout(4_000),
-  });
-  if (!response.ok) throw new Error(`SUPABASE_CATEGORY_${response.status}`);
-  return productSchema.array().parse(await response.json());
+  const filter = { status: "in.(Active,New)", or: `(${allIn("third_category")},${allIn("subcategory")})` };
+  const counted = async (query: URLSearchParams) => {
+    const response = await fetch(`${url}/rest/v1/products?${query}`, {
+      headers: { apikey: key, authorization: `Bearer ${key}`, Prefer: "count=exact" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!response.ok) throw new Error(`SUPABASE_CATEGORY_${response.status}`);
+    const rows = (await response.json()) as unknown[];
+    // content-range is "0-199/412": the number after the slash counts every match.
+    const count = Number(response.headers.get("content-range")?.split("/")[1]);
+    return { rows, total: Number.isFinite(count) ? count : rows.length };
+  };
+  const query = new URLSearchParams({ select: productSelect, ...filter, order: "available_quantity.desc.nullslast,name.asc", limit: String(limit) });
+  if (maxPrice != null) query.set("list_price", `lte.${maxPrice}`);
+  const found = await counted(query);
+  // Nothing within the budget can still be a real category: count it once without the price.
+  const exists = found.total > 0 || (maxPrice != null && (await counted(new URLSearchParams({ select: "stock_id", ...filter, limit: "1" }))).total > 0);
+  return { products: productSchema.array().parse(found.rows), total: found.total, exists };
 }
 
 /** Resolves a pasted store.siahuat.com/product/<id> link to its catalogue row. */

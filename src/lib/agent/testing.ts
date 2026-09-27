@@ -36,11 +36,13 @@ export function fakeDeps(
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       return catalogue.filter((item) => words.every((word) => item.name.toLowerCase().includes(word)));
     },
-    async searchCategory(query, limit) {
+    async searchCategory(query, limit, maxPrice) {
       calls.push(`category:${query}`);
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       const inField = (field: string | null | undefined) => words.every((word) => (field ?? "").toLowerCase().includes(word));
-      return catalogue.filter((item) => inField(item.third_category) || inField(item.subcategory)).slice(0, limit);
+      const all = catalogue.filter((item) => inField(item.third_category) || inField(item.subcategory));
+      const priced = maxPrice == null ? all : all.filter((item) => item.list_price <= maxPrice);
+      return { products: priced.slice(0, limit), total: priced.length, exists: all.length > 0 };
     },
     async findByCode(stockId) {
       calls.push(`code:${stockId}`);

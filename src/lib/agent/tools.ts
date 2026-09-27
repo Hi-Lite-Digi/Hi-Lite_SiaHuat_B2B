@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
-import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
+import { liveCheck, productFact, retryOnce, storeProductUrl, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
 import { customerChose, pickedCodes, type PickEvidence } from "./picks";
 
 /** One change update_enquiry made to the enquiry. */
@@ -35,12 +35,12 @@ export type TurnContext = {
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; price and stock of the first 6 are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows.",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; price and stock of the first 6 are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all.",
     input_schema: {
       type: "object",
       properties: {
-        queries: { type: "array", items: { type: "string" }, description: "1-3 short search phrases" },
-        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'hand mixers'. Its products are added after the query results." },
+        queries: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3, description: "1-3 short search phrases" },
+        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets'. Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first. If category_found is false, use a name from categories." },
         max_price: { type: "number", description: "Optional budget ceiling per unit, SGD ex GST" },
         exclude_ids: { type: "array", items: { type: "string" }, description: "Item codes the customer rejected" },
       },
@@ -92,8 +92,12 @@ export const agentTools: Anthropic.Tool[] = [
 ];
 
 const searchInput = z.object({
-  // A ″ copied from the product facts still has to match catalogue names such as 18".
-  queries: z.array(z.string().trim().min(1).max(80).transform((q) => q.replace(/[″“”]/g, '"'))).min(1).max(3),
+  queries: z.preprocess(
+    // Claude has sent its list as one string (blow torch", "safico): split it back into phrases.
+    (value) => (typeof value === "string" ? value.split(/"\s*,\s*"/).map((query) => query.replace(/^"|"$/g, "")) : value),
+    // A ″ copied from the product facts still has to match catalogue names such as 18".
+    z.array(z.string().trim().min(1).max(80).transform((q) => q.replace(/[″“”]/g, '"'))).min(1).max(3),
+  ),
   category: z.string().trim().min(1).max(80).nullish(),
   max_price: z.number().positive().nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),
@@ -109,7 +113,13 @@ const enquiryInput = z.object({
 
 /** Rows asked of each search query and of the category search. */
 const QUERY_ROWS = 10;
-const CATEGORY_ROWS = 20;
+const CATEGORY_ROWS = 200;
+const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
+// Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
+const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
+const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
+/** A category's words as the catalogue's category filter reads them. */
+const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
 
 export type ToolOutcome = { content: string; isError: boolean };
 const ok = (value: unknown): ToolOutcome => ({ content: JSON.stringify(value), isError: false });
@@ -125,41 +135,75 @@ function remember(ctx: TurnContext, checked: CheckedProduct) {
 async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: TurnContext) {
   const category = input.category;
   // One slow or failed search must not sink the others: each is retried once and the ones that succeed are used.
-  const settled = await Promise.allSettled([
-    ...input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, QUERY_ROWS))),
-    ...(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS))] : []),
+  const [settled, [categoryOutcome]] = await Promise.all([
+    Promise.allSettled(input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, QUERY_ROWS)))),
+    Promise.allSettled(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS, input.max_price))] : []),
   ]);
-  if (settled.every((result) => result.status === "rejected")) {
-    console.warn("[api/agent] search unavailable", { errors: settled.flatMap((result) => (result.status === "rejected" ? [errorCode(result.reason)] : [])) });
+  const outcomes = [...settled, ...(categoryOutcome ? [categoryOutcome] : [])];
+  if (outcomes.every((result) => result.status === "rejected")) {
+    console.warn("[api/agent] search unavailable", { errors: outcomes.flatMap((result) => (result.status === "rejected" ? [errorCode(result.reason)] : [])) });
     return fail("SEARCH_UNAVAILABLE");
   }
-  const lists = settled.map((result) => (result.status === "fulfilled" ? result.value : []));
-  const queryLists = lists.slice(0, input.queries.length);
-  const categoryList = lists[input.queries.length] ?? [];
+  const queryLists = settled.map((result) => (result.status === "fulfilled" ? result.value : []));
+  const scope = categoryOutcome?.status === "fulfilled" ? categoryOutcome.value : NO_CATEGORY;
   const excluded = new Set((input.exclude_ids ?? []).map((id) => id.toLowerCase()));
   const merged: Product[] = [];
   const ids = new Set<string>();
-  const add = (item: Product | undefined) => {
-    if (!item || ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase())) return;
+  const add = (item: Product) => {
+    if (ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase())) return;
     if (input.max_price && item.list_price > input.max_price) return;
     ids.add(item.stock_id);
     merged.push(item);
   };
-  for (let rank = 0; rank < QUERY_ROWS; rank += 1) {
-    for (const list of queryLists) add(list[rank]);
+  /** Query hits that pass `keep`, taken rank by rank across the queries. */
+  const byRank = (keep: (item: Product) => boolean) => {
+    for (let rank = 0; rank < QUERY_ROWS; rank += 1) {
+      for (const list of queryLists) if (list[rank] && keep(list[rank])) add(list[rank]);
+    }
+  };
+  const terms = categoryTerms(category ?? "");
+  const inScope = (item: Product) => scope.exists
+    && [item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
+  if (!category) {
+    byRank(() => true);
+  } else {
+    const phrases = input.queries.map((query) => query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
+    const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => item.name.toLowerCase().includes(word)));
+    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => item.name.toLowerCase().includes(word))).size;
+    const scopeByHits = [...scope.products].sort((a, b) => nameHits(b) - nameHits(a));
+    byRank(inScope); // 1. query hits inside the category
+    scopeByHits.filter(literal).forEach(add); // 2. category rows naming every word of a 2+ word query
+    byRank(literal); // 3. other query hits naming every word of a 2+ word query
+    scopeByHits.forEach(add); // 4. the rest of the category, most stocked first
+    byRank(() => true); // 5. the rest of the query hits
   }
-  for (const item of categoryList) add(item);
   const top = merged.slice(0, 10);
+  const topIds = new Set(top.map((item) => item.stock_id));
+  // Only a category read in full, with every product in it listed (or rejected), backs "that's all".
+  const complete = scope.exists && scope.total <= CATEGORY_ROWS
+    && scope.products.every((item) => excluded.has(item.stock_id.toLowerCase()) || topIds.has(item.stock_id));
+  const totalFound = scope.exists ? scope.total + merged.filter((item) => !inScope(item)).length : merged.length;
   // A search that returned its full row limit may have more matches than it could return.
-  const moreAvailable = queryLists.some((list) => list.length >= QUERY_ROWS) || categoryList.length >= CATEGORY_ROWS || merged.length > top.length;
+  const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
+  const leafCounts = new Map<string, number>();
+  for (const item of merged) if (item.third_category) leafCounts.set(item.third_category, (leafCounts.get(item.third_category) ?? 0) + 1);
+  const categories = [...leafCounts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name]) => name);
+  const categoryNote = !category ? null
+    : categoryOutcome?.status === "rejected" ? "Category search failed."
+    : !scope.exists ? `No catalogue category matches '${category}'.${categories.length ? ` Categories among these results: ${categories.join(", ")}.` : ""}`
+    : null;
   const checked = await Promise.all(top.map((item, index) => (index < 6
     ? liveCheck(item, ctx.deps)
     : Promise.resolve<CheckedProduct>({ product: { ...item, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false }))));
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
   return ok({
     products: affordable.map((item) => remember(ctx, item)),
-    total_found: merged.length,
+    total_found: totalFound,
     more_available: moreAvailable,
+    complete,
+    ...(category ? { category_found: scope.exists } : {}),
+    categories,
+    ...(categoryNote ? { category_note: categoryNote } : {}),
     ...(affordable.length ? {} : { note: "No catalogue matches for these words. Try other words the customer might mean, or ask one question." }),
   });
 }
