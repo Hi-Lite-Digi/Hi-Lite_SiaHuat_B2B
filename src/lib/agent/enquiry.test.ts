@@ -242,6 +242,15 @@ test("the labels of a numbered list are not quantities", () => {
   for (let quantity = 1; quantity <= 3; quantity++) assert.equal(quantityStated(quantity, ["1. pot 2. lid 3. ladle"]), false, `${quantity} in 1. pot 2. lid`);
   assert.equal(quantityStated(1, ["1) Pot x 5 2) Lid 3) Ladle"]), false);
   assert.equal(quantityStated(1, ["1) pot x 2 2) lid x 3 3) ladle"]), false);
+  // No space after the dot, or an item ending in "x 5." between two labels, still reads as a list.
+  const labelsOnly: Array<[string, number[]]> = [
+    ["1.pot 2.lid 3.ladle", []], ["1. Pot x 5. 2. Lid. 3. Ladle.", [5]], ["1) Pot x 5. 2) Lid. 3) Ladle.", [5]],
+    ["1. Pot 12. 2. Lid 3. Ladle", [12]], ["1. Pot x 2. 2. Lid x 1. 3. Ladle", [1, 2]],
+  ];
+  for (const [text, stated] of labelsOnly) {
+    for (const quantity of [1, 2, 3, 5, 12]) assert.equal(quantityStated(quantity, [text]), stated.includes(quantity), `${quantity} in ${text}`);
+  }
+  assert.equal(quantityStated(2, ["ok 2."]), true);
 });
 
 test("the word one counts only when it is said as a quantity", () => {

@@ -39,9 +39,13 @@ const listLabel = /(?<=^|\s)(\d{1,2})[ \t]*[).][ \t]+(?=\S)/g;
 
 /** Numbers that are never quantities: list labels ("1) pot 2) lid", counting up from 1), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
 function withoutNonQuantities(text: string) {
-  const labels = [...text.matchAll(listLabel)].map((match) => Number(match[1]));
+  // Labels count up from 1; a quantity in between ("1) pot x 5. 2) lid") is skipped, not taken as a label.
+  let next = 1;
+  const labels = [...text.matchAll(listLabel)].filter((match) => Number(match[1]) === next && ++next > 0);
   // A lone "ok 2." or "2. also 1 of the 6 slot" is a quantity, not a list.
-  const unlabelled = labels.length >= 2 && labels.every((label, i) => label === i + 1) ? text.replace(listLabel, "") : text;
+  const unlabelled = labels.length >= 2
+    ? labels.reduceRight((rest, match) => rest.slice(0, match.index) + rest.slice(match.index + match[0].length), text)
+    : text;
   return unlabelled.replace(/\bthe\s+\d+\s+(?:again|of them|cards?|ones?)\b/gi, " ").replace(/\b\d+\s*-?\s*in\s*-?\s*1\b/gi, " ");
 }
 
@@ -67,7 +71,7 @@ function chineseNumerals(quantity: number) {
  * The word "one" counts only when said as a quantity ("just one", "one pc"), not as a pronoun ("the blue one").
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.\\d)`, "i");
+  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.\\w)`, "i");
   const word = numberWords[quantity];
   const wordQuantity = quantity === 1 ? oneAsQuantity : word !== undefined ? new RegExp(`\\b${word}\\b`, "i") : null;
   const chinese = chineseNumerals(quantity);
