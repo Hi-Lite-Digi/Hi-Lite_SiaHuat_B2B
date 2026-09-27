@@ -49,7 +49,8 @@ test("every search result is live-checked", async () => {
   assert.equal(body.products.length, 10);
   assert.ok(body.products.every((item) => item.price_and_stock_verified_live && item.available_quantity === 50));
   assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, 10);
-  assert.match(agentTools[0].description ?? "", /Returns up to 10 products; each one's price and stock are checked live on the store \(price_and_stock_verified_live\)\./);
+  assert.match(agentTools[0].description ?? "", /checked live/);
+  assert.match(agentTools[0].description ?? "", /price_and_stock_verified_live/);
 });
 
 test("a failed live check leaves that one result unverified, with no price or stock", async () => {
@@ -463,6 +464,16 @@ test("a successful update is recorded in ctx.changes; a refused one is not", asy
   assert.deepEqual(ctx.changes, []);
   await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 2 }, ctx);
   assert.deepEqual(ctx.changes, [{ action: "add", code: "BTS-8026D" }]); // the catalogue's spelling
+});
+
+test("a second add of the same item in one turn is refused, so the line is not doubled", async () => {
+  const ctx = context(undefined, { customerTexts: ["4 can"], currentText: "4 can", picks: tappedAfterTwo("BTS-8026D") });
+  assert.equal((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 4 }, ctx)).isError, false);
+  const again = await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 4 }, ctx);
+  assert.equal(again.isError, true);
+  assert.match(again.content, /ALREADY_ON_ENQUIRY/);
+  assert.deepEqual(ctx.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 4]]);
+  assert.deepEqual(ctx.changes, [{ action: "add", code: "BTS-8026D" }]);
 });
 
 test("removing a line that could not be re-checked is recorded as a change", async () => {

@@ -6,7 +6,7 @@ import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
-import { codePattern, pointedCards } from "./picks";
+import { codePattern, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
@@ -59,14 +59,14 @@ export function removeAmounts(message: string, amounts: string[]) {
 export const sentences = (message: string) => message.split(/(?<=[.!?])\s+(?=[A-Z0-9"'(\-•*$])|(?<=[。！？])|\n+/).map((s) => s.trim()).filter(Boolean);
 
 /** The message without the sentences `drop` picks; other text and line breaks are kept. */
-export function removeSentences(message: string, drop: (sentence: string) => boolean) {
+function removeSentences(message: string, drop: (sentence: string) => boolean) {
   let out = message;
   for (const sentence of sentences(message)) if (drop(sentence)) out = out.replace(sentence, "");
   return out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // A reply cut off where Claude typed a raw " : with structured output that quote ends the message string (exam 2: 5 replies).
-const properEnding = /(?:[.!?。！？…:)\]}"'”’»″′～~）」』]|\p{Script=Han}|\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}\p{Extended_Pictographic}]*|https?:\/\/\S+|(?:\$|S\$|SG\$|SGD\s?)\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
+const properEnding = /(?:[.!?。！？…:)\]}"'”’»″′～~）」』]|\p{Script=Han}|\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}\p{Extended_Pictographic}]*|https?:\/\/\S+|store\.siahuat\.com\S*|(?:\$|S\$|SG\$|SGD\s?)\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
 const listLine = /(?:^|\n)[ \t]*(?:[-•*]|\d{1,2}[.)])[ \t]+[^\n]+$/;
 export const endsMidSentence = (message: string) => message.trim().length > 0 && !properEnding.test(message.trim()) && !listLine.test(message.trim());
 export const MID_SENTENCE_ISSUE = "Your message stops mid-sentence. A double-quote character inside the message ends it early: write the whole message again without the \" character (inches as 16in, quoted words in single quotes).";
@@ -96,8 +96,8 @@ export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and i
  */
 export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[]; replies?: string[] };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
-// Keyed only on the customer's words ("show me then i tap la"), never on Claire's own "tap it".
-const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b|\bshow (?:me )?(?:it|that|the (?:card|product|one))\b|\bwhere(?:'s| is)? (?:the )?(?:card|product)\b|\b(?:i(?:'ll| will)?|let me|to|can|then i) tap\b/i;
+// Keyed only on the customer's words ("show me then i tap la", "u nvr show anything"), never on Claire's own "tap it".
+const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b|\bshow (?:me )?(?:it|that|the (?:card|product|one))\b|\bwhere(?:'s| is)? (?:the )?(?:card|product)\b|\b(?:i(?:'ll| will)?|let me|to|can|then i) tap\b|\b(?:nvr|never|didn'?t|dint|did not)\s+(?:show|see|saw)\w*|\bi (?:don'?t|dun|cannot|can'?t) see\b/i;
 const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toLowerCase()))].sort().join(" ");
 const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
 const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
@@ -161,20 +161,20 @@ const limitation = /\b(?:can['’]?t|cannot|unable|not able|out of stock)\b/i;
  * Any earlier reply counts, not only the last: the history carries the text after this drop, so the pitch would come back every other turn.
  */
 export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showContact: boolean) {
-  const pitched = [...(earlier.replies ?? []), earlier.previousMessage ?? ""].some((reply) => handoffPitch.test(reply));
+  const pitched = (earlier.replies ?? (earlier.previousMessage ? [earlier.previousMessage] : [])).some((reply) => handoffPitch.test(reply));
   if (!showContact || !pitched || asksForContact.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
   return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence)) || message;
 }
 
 export const LINK_ISSUE_PREFIX = "These store links";
 // ASCII only, and not ending on punctuation, so a link stops before 。, an em dash, a curly quote or a full stop.
-const storeLinkPattern = /(?:https?:\/\/)?store\.siahuat\.com(?:\/[\w\-.~%\/?#=&+]*[\w\-~%\/#=&+])?/gi;
+const anyStoreLink = /(?:https?:\/\/)?store\.siahuat\.com(?:\/[\w\-.~%\/?#=&+]*[\w\-~%\/#=&+])?/gi;
 const STORE_HOME = "https://store.siahuat.com";
 const linkKey = (link: string) => link.replace(/^(?:https?:\/\/)?/i, "https://").replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
-export const storeLinks = (text: string) => [...text.matchAll(storeLinkPattern)].map((match) => match[0]);
+export const storeLinks = (text: string) => [...text.matchAll(anyStoreLink)].map((match) => match[0]);
 /** The message with these links cut back to the store's home address. */
 export function removeLinks(message: string, links: string[]) {
-  return message.replace(storeLinkPattern, (link) => (links.includes(link) ? "store.siahuat.com" : link));
+  return message.replace(anyStoreLink, (link) => (links.includes(link) ? "store.siahuat.com" : link));
 }
 
 /** Store links in the message that no product looked up this turn and nothing in the chat gave (exam 2: links built from item codes). */
@@ -205,10 +205,10 @@ export const NO_CARD_PREFIX = "No card attached";
 // ("a tap that locks": after an article it is the noun).
 const tapAsk = /(?<!\b(?:a|an|the|its|one|single)\s+)(?:\btap(?:ping)?\s+(?:on\s+)?(?:it|this|that|these|those|each|them|both|to\s+(?:add|confirm|select|choose|pick))\b|\btap\s+(?:the\s+)?(?:[\w'’″-]+\s+){0,5}(?:card|cards|item|product|to\s+(?:add|confirm|select|choose|pick))\b)/i;
 const tapNotACard = /\btap\s+(?:the\s+)?(?:\w+\s+){0,3}(?:link|pdf|button|bar|chip|download|mic|photo|enquiry)\b/i;
-export const asksForTap = (sentence: string) => tapAsk.test(sentence) && !tapNotACard.test(sentence);
+const asksForTap = (sentence: string) => tapAsk.test(sentence) && !tapNotACard.test(sentence);
 const showPromise = /\b(?:let me|I'?ll|I will|one sec|one moment|hold on)\b[^.!?\n]{0,40}\b(?:pull|bring|show|get)\b[^.!?\n]{0,25}(?<!\bset )\bup\b|\b(?:pulling|bringing) (?:up|those|these|it|that)\b/i;
 // "Let me know the type and I'll pull up options" waits for the customer; "having trouble pulling up the catalogue" is honest.
-export const promisesToShow = (sentence: string) => showPromise.test(sentence) && !/\b(?:if|once|when|let me know|tell me|trouble|unable|cannot)\b|n['’]t\b/i.test(sentence);
+const promisesToShow = (sentence: string) => showPromise.test(sentence) && !/\b(?:if|once|when|let me know|tell me|trouble|unable|cannot)\b|n['’]t\b/i.test(sentence);
 const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
 const NO_CARD_SHOW_ISSUE = `${NO_CARD_PREFIX}: you promised to show products but attached none. Attach them now or don't promise.`;
 /** After the repair, a tap request or show promise with no card attached is cut out. */
@@ -220,7 +220,7 @@ export const noCardFixer: Fixer = {
 /** What this turn's tools did, for checks on the reply. */
 export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[] };
 /** The enquiry facts plus the products looked up this turn, which the reply's words can point at. */
-export type ClaimFacts = Pick<TurnFacts, "lines" | "changes"> & { seen: ReadonlyMap<string, CheckedProduct> };
+type ClaimFacts = Pick<TurnFacts, "lines" | "changes"> & { seen: ReadonlyMap<string, CheckedProduct> };
 
 /** The products looked up this turn, as cards the reply's words can point at. */
 const seenCards = (seen: ReadonlyMap<string, CheckedProduct>): ShownCard[] => [...seen.values()]
@@ -234,13 +234,16 @@ function pointedBy(text: string, cards: ShownCard[]) {
 }
 
 export const ENQUIRY_CLAIM_PREFIX = "The enquiry didn't change";
-const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped|noted down)\b|\bput\b[^.!?\n]{0,25}\bin(?:to)?\s+(?:your|the)\s+enquiry\b|\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b|\bqty\s*\d+\s*done\b|^\s*(?:noted|got it|done|ok(?:ay)?)[:,!]?\s*\d|已(?:添加|加入|更新|删除|移除)|加好了|帮你加了/i;
+// A leading "Got it: 2" claims a change; "Got it, 4 pax" or "OK, 2 options" only echoes the customer's numbers.
+const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped|noted down)\b|\bput\b[^.!?\n]{0,25}\bin(?:to)?\s+(?:your|the)\s+enquiry\b|\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b|\bqty\s*\d+\s*done\b|^\s*(?:noted|got it|done|ok(?:ay)?)[:,!]?\s*\d(?![\d.]*(?:(?:in|l|g|m)\b|\s*(?:inch(?:es)?|cm|mm|ltr|litres?|liters?|qt|quarts?|ml|oz|kg|pax|ppl|people|persons?|guests?|options?|choices?|sizes?|dollars?|bucks|sgd|slots?|tiers?|burners?)\b|\s*[%″"]))|已(?:添加|加入|更新|删除|移除)|加好了|帮你加了/i;
 const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|update|note)\b|\badding\b[^.!?\n]*\bnow\b|我来加/i;
 const honestWording = /\b(?:not|never|nothing|no longer|yet to|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
 // "Pick a plate you like, and I'll add it" waits for the customer too (exam 2, c05-B); "tap to select it, then I'll add" doesn't.
 const conditionalWording = /\b(?:if|once|after|when|let me know|tell me)\b|\b(?:pick|choose)\s+(?:a|an|one|any|the|which(?:ever)?)\b[^.!?]*\b(?:and|then)\s+I'?ll\b/i;
 // "contact sales to get that line added" is advice, not a claim (exam 2, c05-stress).
 const notAboutEnquiry = /\bto get\b[^.!?]{0,30}\badded\b|\b(?:gst|tax|fee|charges?)\b[^.!?]{0,30}\badded\b|\badded\b[^.!?]{0,20}\b(?:gst|tax|on top|at checkout)\b|\bupdated (?:prices?|stock|list|link|photos?)\b|\bupdated (?:\w+ )?total\b|\bprices?\s+(?:has|have|was|were|is)\s+(?:been\s+)?(?:updated|dropped|changed)\b|\bremoved (?:[^.!?]{0,30} )?from (?:the|my) (?:list of )?(?:options|results|search)\b/i;
+// Product features, not enquiry changes: "the bowl can be removed", "the lid is easily removed", "an added splash guard", "an updated motor".
+const featureWording = /\b(?:can|could|may|might)\s+be\s+(?:\w+\s+)?(?:added|removed|updated)\b|\b(?:is|are)\s+easily\s+(?:added|removed)\b|\ban\s+(?:added|updated)\s+(?!to\b|on\b|in\b)(?=\w)/gi;
 const removalWord = /\b(?:removed|removing|dropped)\b|已(?:删除|移除)/i;
 // "Already added", "2 so far", "both are in your enquiry" describe the enquiry as it stands: true while the item is on it.
 // A leading "Done" or "just added" reports a change this turn instead.
@@ -249,7 +252,7 @@ const onEnquiryWording = /\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\
 const reportsChange = /^\s*done\b|\bjust\s+(?:added|put|updated|removed)\b/i;
 // Clauses: split at commas outside brackets, semicolons, dashes between words and a bracket holding its own change
 // ("(19.1cm removed)"); never at a colon, so "Got it: 2 torches" stays whole.
-const clausesOf = (sentence: string) => sentence
+const claimClauses = (sentence: string) => sentence
   .split(/,\s+(?![^()]*\))|[;；，]\s*|\s*[–—]\s*|\s-\s|\s*\((?=[^()]*\b(?:added|removed|updated|dropped)\b)/i)
   .map((part) => part.trim()).filter(Boolean);
 // The fixer's line: true for a false add, change or removal, including of an item already on the enquiry.
@@ -260,7 +263,6 @@ const NOT_ON_ENQUIRY = "That change isn't on your enquiry yet.";
  * for the item this turn. The item is the product whose code the clause types, else the one its words point at.
  */
 function falseEnquiryClaims(message: string, facts: ClaimFacts) {
-  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   const cards: ShownCard[] = [
     ...seenCards(facts.seen),
     ...facts.lines.map((line) => ({ code: line.code, name: line.item, price: null, link: null })),
@@ -278,7 +280,9 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
     // An add or update needs its own change this turn; a status line only needs the item on the enquiry.
     return pointed.some((card) => !onLines(card) || !(status || changed(card, ["add", "set"])));
   };
-  return sentences(message).filter((sentence) => {
+  return sentences(message).filter((said) => {
+    // Judged without its feature wording, so "Added 2 torches - the lid can be removed" is still a claim.
+    const sentence = said.replace(featureWording, " ");
     if (notAboutEnquiry.test(sentence)) return false;
     const promise = promiseChange.test(sentence) && !honestWording.test(sentence) && !conditionalWording.test(sentence);
     if (promise) {
@@ -287,13 +291,13 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
     }
     // A condition ("once you pick one, I'll add it") only excuses a sentence with no past-tense claim in it.
     if (!changeClaim.test(sentence) || (conditionalWording.test(sentence) && !/\b(?:added|removed|updated)\b/i.test(sentence))) return false;
-    const clauses = clausesOf(sentence).filter((clause) => changeClaim.test(clause));
+    const clauses = claimClauses(sentence).filter((clause) => changeClaim.test(clause));
     const judged = clauses.length ? clauses : [sentence];
     if (judged.some((clause) => falseClause(clause, !reportsChange.test(sentence)))) return true;
     // The rest of an add's list ("Added: 2 torches, 4 plates") has no change word of its own: each item it names must be
     // on the enquiry or changed this turn.
     if (!judged.some((clause) => !removalWord.test(clause) && !honestWording.test(clause))) return false;
-    return clausesOf(sentence).filter((part) => !honestWording.test(part)).some((part) => point(part).some((card) => !onLines(card) && !changed(card)));
+    return claimClauses(sentence).filter((part) => !honestWording.test(part)).some((part) => point(part).some((card) => !onLines(card) && !changed(card)));
   });
 }
 
@@ -317,8 +321,10 @@ const ABSENCE_ISSUE_PREFIX = "This 'we don't have it'";
 // a completeness nor an absence claim, and "the only one of these" is about the cards shown.
 const ENQUIRY_TALK = /\b(?:enquiry|added|removed|updated|your\s+(?:list|order|cart))\b/i;
 const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
-// "Nothing else to add?", "No other questions", "Everything else looks fine" and "The only option now is to ask sales" aren't about the range.
-const COMPLETE = /\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b(?!\s+(?:looks?|is\s+(?:fine|good|ok|okay|set))\b)|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b(?!\s+(?:\w+\s+)?is\s+to\b)|\bno\s+other\b(?!\s+(?:questions?|changes?)\b)|\bnothing\s+else\b(?!\s+(?:to\s+add|needed)\b)|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b/i;
+// "Nothing else to add?", "No other questions", "Everything else looks fine" and "The only option now is to ask sales" aren't about the range,
+// nor are a product's parts and materials ("everything else is stainless steel", "no other assembly", "needs no other attachments") or charges.
+const MATERIAL = String.raw`(?:stainless|plastic|glass|porcelain|ceramic|alumin(?:i)?um|metal|wood(?:en)?|silicone|pom|pp|nylon|melamine|copper|brass|iron)`;
+const COMPLETE = new RegExp(String.raw`\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b(?!\s+(?:looks?|is\s+(?:fine|good|ok|okay|set)|(?:is|are)\s+(?:made\s+(?:of|from)\s+)?${MATERIAL})\b)|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b(?!\s+(?:\w+\s+)?is\s+to\b)|(?<!\b(?:needs?|requires?)\s+)\bno\s+other\b(?!\s+(?:questions?|changes?|parts?|assembly|setup|tools?|charges?|fees?|costs?|way)\b)|(?<!\bif\b[^.!?]*)\bnothing\s+else\b(?!\s+(?:to\s+add|needed)\b)|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b`, "i");
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that" or "couldn't find the photo" is not about a product.
@@ -412,13 +418,14 @@ export function stockIssues(message: string, cards: Product[]) {
 // Old Claire's reply-style text for a permission question; the new Claire gets NO_PERMISSION_ISSUE (or, when the question
 // isn't about adding, NO_SHOW_PERMISSION_ISSUE) instead.
 const CHOOSE_FIRST = "The customer must choose a product card first";
-export const NO_PERMISSION_ISSUE = "Don't ask permission to add it. If the customer picked the product and typed how many, add it now with update_enquiry; if the quantity is missing, ask how many.";
+// Only sent in the tool-less repair: the loop nudges a permission question back with tools while a tool round is left.
+export const NO_PERMISSION_ISSUE = "Don't ask permission to add it. Tools are off for this fix, so don't say it was added: if the quantity is missing, ask how many.";
 export const NO_SHOW_PERMISSION_ISSUE = "Don't ask permission to show a product or check its stock: the cards already show it with the stock the tools found. Just say what you found.";
 // "Want me to add it?", "Once you confirm I'll add it"; not "Want me to add 5, or check alternatives?" nor "How many, so I can add it?".
 const asksToConfirmAdd = /\b(?:shall|should|can|may|want|would you like)\b(?![^?？\n]*\bor\b)[^?？\n]*(?<!\bso I can )\badd\b[^?？\n]*[?？]|\bonce you confirm\b[^.!?\n]*\badd\b|\bconfirming:?[^.?!\n]*\?/i;
 // Judged per sentence, so "you can download the PDF. Anything else to add?" isn't one question. "How many would you like to
 // add?" and "What else can I add?" ask what the prompt wants asked; "Want me to add it, and how many?" still asks permission.
-const asksPermissionToAdd = (sentence: string) => asksToConfirmAdd.test(sentence) && !/\b(?:how many|else)\b[^?？]*\badd\b|\badd\s+(?:anything|more|another)\b/i.test(sentence);
+export const asksPermissionToAdd = (sentence: string) => asksToConfirmAdd.test(sentence) && !/\b(?:how many|else)\b[^?？]*\badd\b|\badd\s+(?:anything|more|another)\b/i.test(sentence);
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";
 const UNKNOWN_CARD_ISSUE_PREFIX = "card_ids must come from a tool result";
@@ -432,6 +439,7 @@ export function reviewAnswer(
 ): Review {
   const safety: string[] = [];
   const style: string[] = [];
+  const said = sentences(answer.message);
   const ids = [...new Set(answer.card_ids)];
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn or shown earlier in this chat; not found: ${unknown.join(", ")}.`);
@@ -452,17 +460,16 @@ export function reviewAnswer(
   }
   style.push(...stockIssues(answer.message, cards));
   if (!cards.length) {
-    const said = sentences(answer.message);
     if (said.some(asksForTap)) safety.push(NO_CARD_TAP_ISSUE);
     if (said.some(promisesToShow)) safety.push(NO_CARD_SHOW_ISSUE);
   }
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null })
     .map((issue) => (!issue.startsWith(CHOOSE_FIRST) ? issue : /\badd\b/i.test(answer.message) ? NO_PERMISSION_ISSUE : NO_SHOW_PERMISSION_ISSUE)));
-  if (sentences(answer.message).some(asksPermissionToAdd) && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
+  if (said.some(asksPermissionToAdd) && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
   if (promiseLater.test(answer.message)) style.push(PROMISE_LATER_ISSUE);
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
-  if (sentences(answer.message).some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
+  if (said.some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
   style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length)));
   style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
@@ -471,14 +478,17 @@ export function reviewAnswer(
 /** Fixes in code the safety issues that start with `prefix`. */
 export type Fixer = { prefix: string; fix: (message: string) => string };
 
+const covers = (fixer: Fixer, issue: string) => issue.startsWith(fixer.prefix);
+/** The safety issues no fixer covers. */
+export const unfixable = (safety: string[], fixers: Fixer[]) => safety.filter((issue) => !fixers.some((fixer) => covers(fixer, issue)));
+
 /** Runs each fixer whose issue is present, in list order; issues no fixer covers are returned in `left`. */
 export function applyFixers(message: string, safety: string[], fixers: Fixer[]) {
-  const covers = (fixer: Fixer, issue: string) => issue.startsWith(fixer.prefix);
   const fixed = fixers.reduce((text, fixer) => (safety.some((issue) => covers(fixer, issue)) ? fixer.fix(text) : text), message);
-  return { message: fixed, left: safety.filter((issue) => !fixers.some((fixer) => covers(fixer, issue))) };
+  return { message: fixed, left: unfixable(safety, fixers) };
 }
 
-// Log codes by issue prefix; any other issue is a wording (STYLE) issue. Later guards add their rows.
+// Log codes by issue prefix; any other issue is a wording (STYLE) issue.
 const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [UNKNOWN_CARD_ISSUE_PREFIX, "UNKNOWN_CARD"],
   [MONEY_ISSUE_PREFIX, "MONEY"],

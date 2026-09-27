@@ -4,14 +4,14 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
-import { CHIP_PREFIX, TAP_PREFIX, type AgentReply, type AgentRequest } from "./contract";
+import { CHIP_PREFIX, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer,
-  removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unknownStoreLinks, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns,
-  type FinalAnswer, type Fixer,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksPermissionToAdd, customerMessage, dropRepeatedPitch, enquiryClaimIssues,
+  issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, sentences, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutEnquiryClaims,
+  type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
@@ -57,14 +57,15 @@ const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty me
 const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
 const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says the enquiry changed (or will change), but no update_enquiry call succeeded for that item in this turn. Call update_enquiry only for exactly what the customer picked and the number they typed; otherwise answer without saying it changed.";
+const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add. If the customer picked the product and typed how many, call update_enquiry now; if the quantity is missing, ask how many.";
 
-/** The customer's last two typed messages (card and chip taps excluded), newest first. */
+/** The customer's last two typed messages (card and chip taps, and photos without a caption, excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
   const event = request.event;
   const current = event.type === "text" && !event.chip ? [event.text] : event.type === "image" && event.caption ? [event.caption] : [];
   const earlier = request.history
     .filter((item) => item.role === "user" && !item.content.startsWith(TAP_PREFIX) && !item.content.startsWith(CHIP_PREFIX))
-    .map((item) => item.content.replace(/^\[photo\]\s*/, ""))
+    .flatMap((item) => customerWords(item.content) ?? [])
     .reverse();
   return [...current, ...earlier].slice(0, 2);
 }
@@ -313,11 +314,14 @@ export async function runAgentTurn(input: {
         continue;
       }
       const final = readFinal(response);
-      // One chance to make the change the reply talks about, only while the next round may still use tools.
+      // One chance to make the change the reply talks about or asks permission for, only while the next round may still use tools.
       // Safe only because update_enquiry checks the pick and the typed number.
-      if (final && !nudged && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length) {
+      const nudge = !final || nudged || round + 1 >= MAX_TOOL_ROUNDS || timeLeft() <= CLAIM_NUDGE_MIN_MS ? null
+        : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
+        : sentences(final.message).some(asksPermissionToAdd) ? PERMISSION_NUDGE : null;
+      if (nudge) {
         nudged = true;
-        messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: CLAIM_NUDGE }] });
+        messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: nudge }] });
         continue;
       }
       result = { final, content: response.content };
@@ -343,15 +347,25 @@ export async function runAgentTurn(input: {
       { prefix: LINK_ISSUE_PREFIX, fix: (message) => removeLinks(message, unknownStoreLinks(message, ctx.seen, earlier)) },
       { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) },
     ];
-    // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no usable repair.
+    // An answer about to be sent, with what code can fix fixed. Style problems left are not worth the backup reply: the answer is
+    // lightly tidied, then checked again for claims, as tidying rewords it ("Noted: 2" becomes "Got it: 2"). It is never sent empty.
+    const finish = (answer: FinalAnswer, checked: Review): FinalAnswer => {
+      const fixed = applyFixers(answer.message, checked.safety, fixers);
+      if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
+      const message = checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message;
+      if (message.trim()) return { ...answer, message };
+      return { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
+    };
+    // A first answer with only style problems can still be sent, lightly tidied, when there is no usable repair.
     const styleOnly = final && review && !review.safety.length && review.style.length ? final : null;
     const tidiedFirst = styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) };
     let repairCauses: string[] = [];
     let repaired = false;
     let repairFailed: string | null = null;
-    if (tidiedFirst && review && timeLeft() < STYLE_REPAIR_MIN_MS) {
-      final = tidiedFirst; // review (cards, chips) stays
-      repairCauses = review.style.map(issueCode);
+    if (final && review && (review.safety.length || review.style.length) && !unfixable(review.safety, fixers).length && timeLeft() < STYLE_REPAIR_MIN_MS) {
+      // No time for a repair, which the deadline would cut off for the backup reply: code fixes the answer and it is sent.
+      repairCauses = [...review.safety, ...review.style].map(issueCode);
+      final = finish(final, review); // review (cards, chips) stays
     } else if (!final || !review || review.safety.length || review.style.length) {
       const problems = review ? [...review.safety, ...review.style] : [INVALID_ANSWER_ISSUE];
       repairCauses = review ? problems.map(issueCode) : ["INVALID_ANSWER"];
@@ -371,21 +385,13 @@ export async function runAgentTurn(input: {
       final = await withEarlierCards(final);
       allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
-      if (tidiedFirst && applyFixers(final.message, review.safety, fixers).left.length) {
+      if (tidiedFirst && unfixable(review.safety, fixers).length) {
         // The repair brought a made-up card, but the first answer was safe to send: it goes out tidied instead.
         repairFailed = "AGENT_REPLY_REJECTED";
         final = tidiedFirst;
         review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       }
-      const fixed = applyFixers(final.message, review.safety, fixers);
-      if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
-      final = { ...final, message: fixed.message };
-      // Style problems left after the repair are not worth the backup reply: send the answer, lightly tidied.
-      // Checked again after tidying, which rewords the reply ("Noted: 2" becomes "Got it: 2").
-      if (review.style.length) final = { ...final, message: withoutClaims(tidyMessage(final.message)) };
-      if (!final.message.trim()) {
-        final = { ...final, message: review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: final.show_contact || !review.cards.length };
-      }
+      final = finish(final, review);
     }
 
     const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact));

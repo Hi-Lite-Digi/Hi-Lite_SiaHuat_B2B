@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { agentReplySchema, cardsNote, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -44,7 +44,7 @@ function historyFor(items: ChatItem[]) {
     return {
       role: item.role,
       content: item.role === "user"
-        ? (item.tap ? `[tap] ${item.text}` : item.chip ? `[chip] ${item.text}` : item.imageUrl ? `[photo] ${item.text || "(no caption)"}` : item.text).slice(0, 2_000)
+        ? (item.tap ? `${TAP_PREFIX} ${item.text}` : item.chip ? `${CHIP_PREFIX} ${item.text}` : item.imageUrl ? `${PHOTO_PREFIX} ${item.text || NO_CAPTION}` : item.text).slice(0, 2_000)
         : `${item.text.slice(0, Math.max(0, 2_000 - note.length))}${note}`.slice(0, 2_000),
     };
   }).filter((item) => item.content.trim().length > 0);

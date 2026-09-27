@@ -118,7 +118,7 @@ const enquiryInput = z.object({
 /** Rows asked of each search query and of the category search. */
 const QUERY_ROWS = 10;
 const CATEGORY_ROWS = 200;
-const LIVE_CHECKS_PER_SEARCH = 10; // all of them: unchecked rows showed "price to be confirmed" and were called out of stock
+const RESULTS_PER_SEARCH = 10; // all are live-checked: unchecked rows showed "price to be confirmed" and were called out of stock
 const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
 const DETAILS_TIMEOUT_MS = 1_500;
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
@@ -208,7 +208,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     scopeByHits.forEach(add); // 4. the rest of the category, most stocked first
     byRank(() => true); // 5. the rest of the query hits
   }
-  const top = merged.slice(0, 10);
+  const top = merged.slice(0, RESULTS_PER_SEARCH);
   const topIds = new Set(top.map((item) => item.stock_id));
   // Only a category read in full, with every product in it listed (or rejected), backs "that's all".
   const complete = scope.exists && scope.total <= CATEGORY_ROWS
@@ -225,7 +225,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     : !scope.exists ? `No catalogue category matches '${category}'.${categories.length ? ` Categories among these results: ${categories.join(", ")}.` : ""}`
     : null;
   const [checked, details] = await Promise.all([
-    Promise.all(top.slice(0, LIVE_CHECKS_PER_SEARCH).map((item) => liveCheck(item, ctx.deps))),
+    Promise.all(top.map((item) => liveCheck(item, ctx.deps))),
     lookupDetails(ctx, top.map((item) => item.stock_id)),
   ]);
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
@@ -252,10 +252,10 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
 
 // Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share.
 const GENERIC = new Set(["the", "and", "for", "per", "pcs", "set", "new", "top", "stainless", "steel", "with", "without", "black", "white", "grey", "gray", "blue", "red", "green", "silver", "size", "piece", "pieces", "year", "warranty", "domestic", "function", "speed", "come", "free", "pulse", "heat", "resistant", "use", "pro", "rpm", "plug", "phase"]);
-const nameWords = (text: string): string[] => text.toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+const letterWords = (text: string): string[] => text.toLowerCase().match(/\p{L}{3,}/gu) ?? [];
 // Whole brand words only: "Panasonic" must not hide "pan". "pans" matches "pan".
-const kindWords = (item: Product) => new Set(nameWords(item.name)
-  .filter((word) => !GENERIC.has(word) && !nameWords(item.brand ?? "").includes(word)).map(stem));
+const kindWords = (item: Product) => new Set(letterWords(item.name)
+  .filter((word) => !GENERIC.has(word) && !letterWords(item.brand ?? "").includes(word)).map(stem));
 /** True when the two share a word, or a 4+ letter word sits inside the other's ("torch" in "blowtorch"). */
 const sharesWord = (a: Set<string>, b: Set<string>) => [...b].some((word) => [...a].some((own) => own === word
   || (Math.min(own.length, word.length) >= 4 && (own.includes(word) || word.includes(own)))));
@@ -346,6 +346,10 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
       note: "The customer hasn't picked this product: no tap, code, name, size, price or yes to it. Show the likely cards and ask which one.",
       picked: pickedCodes(ctx.picks, lineCodes),
     });
+  }
+  // The typed number lets a second add through (it guards against an earlier message's number); within one turn it would double the line.
+  if (input.action === "add" && ctx.changes.some((change) => (change.action === "add" || change.action === "set") && change.code?.toLowerCase() === code)) {
+    return fail("ALREADY_ON_ENQUIRY", { notice: "Already added in this turn; use set only if the customer typed a new total." });
   }
   const result = await applyEnquiryAction(ctx.lines, {
     action: input.action,

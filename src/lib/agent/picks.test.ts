@@ -218,6 +218,23 @@ test("an ok or a number is not a yes when it hedges, asks, or the reply didn't a
   }
 });
 
+test("an ok next to a question or a pause is not a yes, unless the number is in the yes", () => {
+  const offered = [greeting, reply([waring64], "This one fits.")];
+  const after = (text: string) => ({ texts: [said(text, 2), said("need 2 blenders", 1, 1)], replies: offered });
+  for (const text of ["ok, how much?", "sure, got warranty?", "ok what is the price", "ok let me think first", "ok later then"]) {
+    assert.equal(chose("MX1000XTXEE", 2, after(text)), false, text);
+  }
+  for (const text of ["ok 2, how much total?", "ok"]) assert.equal(chose("MX1000XTXEE", 2, after(text)), true, text);
+});
+
+test("a chip that asks to see more names no card", () => {
+  const shown = [greeting, reply([tong16], "This one locks.")];
+  for (const chip of ["More tong options", "See longer tongs", "Show tong sizes", "Other tongs"]) {
+    assert.equal(chose("UT16HR", 4, { texts: [said(chip, 2, 0, true), said("need 4 tongs", 1, 1)], replies: shown }), false, chip);
+  }
+  assert.equal(chose("UT16HR", 4, { texts: [said("Go with the 16 inch tong", 2, 0, true), said("need 4 tongs", 1, 1)], replies: shown }), true);
+});
+
 test("a yes that names another card is not a yes to the only card", () => {
   const picks = { texts: [said("ok forget it la. i take the kenwood hand mixer the 3 one, 1 enough", 4)], replies: [reply([handMixer]), reply([standMixer]), reply([]), reply([handBlender])] };
   assert.equal(chose("RHB100U", 1, picks), false);

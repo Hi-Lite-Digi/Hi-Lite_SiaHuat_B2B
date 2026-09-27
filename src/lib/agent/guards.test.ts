@@ -113,7 +113,7 @@ test("normal endings are not mid-sentence", () => {
   for (const message of [
     "Here you go.", "Sure 👍", "OK 👌🏻", "Thanks 👨‍🍳", "好的，已加入。", "好的", "Total: $22.76", "Got it. Total: SGD 22.76",
     "Link: https://store.siahuat.com/product/1", "Options:\n- A, $5\n- B, $6", "(ex GST)", "Yes, the 18″", "See you ~", `the 16" one"`,
-    "好的，价格是 $16.97（不含消费税）", "推荐「不锈钢汤锅」",
+    "好的，价格是 $16.97（不含消费税）", "推荐「不锈钢汤锅」", "Photos are on its page: store.siahuat.com",
   ]) {
     assert.equal(endsMidSentence(message), false, message);
     assert.ok(!styleOf(message).includes(MID_SENTENCE_ISSUE), message);
@@ -133,6 +133,9 @@ test("tidyMessage drops an unfinished last sentence and a sentence with a bare $
   assert.equal(tidyMessage("It's $5.69 and the"), "It's $5.69 and the");
   assert.equal(tidyMessage("Checked. 197-55 is $ - let me confirm."), "Checked.");
   assert.equal(tidyMessage("Done! 2 torches added"), "Done!"); // a rare loss: the unfinished-looking line was complete
+  // The link fixer's store address at the end is a proper ending.
+  const madeUp = "Sorry about that. Photos are on its page: https://store.siahuat.com/product/999999";
+  assert.equal(tidyMessage(removeLinks(madeUp, [madeUp.slice(madeUp.indexOf("https"))])), "Sorry about that. Photos are on its page: store.siahuat.com");
 });
 
 test("a card set already shown twice is flagged unless the customer asks for it again", () => {
@@ -259,8 +262,10 @@ test("re-showing cards is allowed when the customer asks to see or tap them", ()
   const styleFor = (currentText: string, message = "Here it is - tap it to add 4.") => reviewAnswer(
     { message, card_ids: ["UT16HR"], chips: [], show_contact: false }, tongs, allowed, { cardSets: [["UT16HR"], ["UT16HR"]], previousMessage: null, currentText },
   ).style;
-  for (const text of ["where the product?? show me then i tap la", "ok show me the card, i tap", "show me that one"]) assert.deepEqual(styleFor(text), [], text);
-  for (const text of ["hello police?", "any others?", "wah still nvr ans how much"]) assert.match(styleFor(text).join(" "), /already shown these same cards twice/, text);
+  for (const text of ["where the product?? show me then i tap la", "ok show me the card, i tap", "show me that one", "tap what?? u nvr show anything", "i cant see the card", "you never showed me"]) {
+    assert.deepEqual(styleFor(text), [], text);
+  }
+  for (const text of ["hello police?", "any others?", "wah still nvr ans how much", "dont show me tongs"]) assert.match(styleFor(text).join(" "), /already shown these same cards twice/, text);
 });
 
 const checked = (stock_id: string, name: string, list_price: number): [string, CheckedProduct] => [stock_id, { product: product({ stock_id, name, list_price }), verified: true }];
@@ -298,6 +303,9 @@ test("saying the enquiry changed needs an update for that item this turn", () =>
     "Added 2 Safico torches, anything else?",
     "Added 2 Safico torches - the 3rd isn't in stock.",
     "Added 2 torches, not 3.",
+    // A product feature in the same sentence doesn't excuse the claim.
+    "Added 2 Safico torches - the lid can be removed for washing.",
+    "Got it, 2 in your enquiry now.",
   ]) {
     assert.equal(claimIssues(message).length, 1, message);
   }
@@ -398,8 +406,20 @@ test("honest or conditional wording is not a claim", () => {
     "Pick a plate style and a bowl style you like, and I'll add the quantities you need.",
     "Pick whichever suits and I'll add it to your enquiry.",
     "The price was updated today.",
+    // Product features, not enquiry changes.
+    "The bowl can be removed for easy cleaning.",
+    "The handle can be removed for storage.",
+    "The lid is easily removed for washing.",
+    "It comes with an added splash guard.",
+    "The Kenwood has an added dough hook.",
+    "The newer model has an updated motor.",
+    // The customer's own numbers echoed back.
+    "Got it, 4 pax. A 12L pot would suit.",
+    "Got it, 16in is the longer one.",
+    "OK, 2 options fit your budget.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
+    assert.equal(withoutEnquiryClaims(message, { lines: [], changes: [], seen: shop }), message);
   }
   assert.deepEqual(claimIssues("Your updated total is $46.72.", { lines: [line("BTS-8026D", 2)] }), []);
 });
@@ -614,7 +634,7 @@ const claimsOf = (message: string, searches: SearchRecord[] = []) => claimReview
 const absenceOf = (message: string, searches: SearchRecord[] = []) => claimReview(message, searches).style.filter((issue) => issueCode(issue) === "ABSENCE");
 
 test("a claim that the range is complete needs a complete search this turn", () => {
-  for (const message of ["That covers our tong range.", "Comes in two sizes, 6″ and 8″.", "Everything else in-stock is Atlantic Chef."]) {
+  for (const message of ["That covers our tong range.", "Comes in two sizes, 6″ and 8″.", "Everything else in-stock is Atlantic Chef.", "Everything else is German steel.", "No other cordless 3-in-1 combo is in stock right now."]) {
     assert.equal(claimsOf(message).length, 1, message);
     assert.equal(claimsOf(message, [search({ complete: false })]).length, 1, message);
     assert.deepEqual(claimsOf(message, [search({ complete: true })]), [], message);
@@ -711,6 +731,13 @@ test("honest wording raises no claim, even with no searches", () => {
     "The only option now is to ask our sales team about a restock.",
     "No other questions from my side.",
     "Everything else looks fine.",
+    // A product's parts and materials, or charges, not the range.
+    "The handle is POM; everything else is stainless steel.",
+    "No other assembly is needed.",
+    "It needs no other attachments to knead dough.",
+    "There's no other charge.",
+    "No other fees apply at this stage.",
+    "Let me know if there's nothing else you need.",
   ]) {
     assert.deepEqual(claimReview(message).safety, [], message);
     assert.deepEqual(absenceOf(message), [], message);

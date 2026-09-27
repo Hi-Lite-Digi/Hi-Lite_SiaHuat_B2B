@@ -102,7 +102,11 @@ export function defaultFactDeps(): FactDeps {
   };
 }
 
-/** One turn's lookups: the same item code or store page is fetched once, whichever step asks. Keys are exact (catalogue lookups are case-sensitive). Failures are not kept. */
+/**
+ * One turn's lookups: the same item code or store page is fetched once, whichever step asks. Keys are exact (catalogue lookups
+ * are case-sensitive). Failures are not kept. The turn's searches wait here for a slot first, so a turn never has more of its
+ * own searches in the shared queue than it has slots: only other chats' searches can make them give up with SEARCH_BUSY.
+ */
 export function turnDeps(deps: FactDeps): FactDeps {
   const codes = new Map<string, Promise<CatalogueProduct | null>>();
   const pages = new Map<string, Promise<ScrapedSiaHuatProduct>>();
@@ -115,8 +119,13 @@ export function turnDeps(deps: FactDeps): FactDeps {
     }
     return hit;
   };
+  // The turn deadline bounds this wait, not the timer.
+  const turnSearch = searchSlots(SEARCH_CONCURRENCY, 30_000);
   return {
     ...deps,
+    searchDirect: (query, limit) => turnSearch(() => deps.searchDirect(query, limit)),
+    searchCategory: (words, limit, maxPrice) => turnSearch(() => deps.searchCategory(words, limit, maxPrice)),
+    findAlternatives: (stockId, minQty, exclude) => turnSearch(() => deps.findAlternatives(stockId, minQty, exclude)),
     findByCode: (code) => once(codes, code, () => deps.findByCode(code)),
     fetchLive: (url, ms) => once(pages, url, () => deps.fetchLive(url, ms)),
   };
@@ -164,7 +173,7 @@ export function storeDetails(attributes?: Record<string, unknown> | null) {
   return kept.length ? Object.fromEntries(kept) : undefined;
 }
 
-export const DESCRIPTION_CHARS = 2_000; // the longest catalogue description is 1,965 characters
+const DESCRIPTION_CHARS = 2_000; // the longest catalogue description is 1,965 characters
 
 // Claude copies names and sizes into its reply; a raw " there would end the JSON message string early.
 const inchMarks = (text: string | null | undefined) => text?.replace(/"/g, "″") ?? null;

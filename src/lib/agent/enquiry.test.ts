@@ -218,6 +218,7 @@ test("product names, prices, head counts, repeats and inch sizes are not quantit
     [3, "how about cordless 3-in-1 blender"], [3, "cordless 3 in 1 blender"], [4, "need dining set 4 ppl"], [1, "1 more time ask me tap"],
     [5, "the 5 dollar one la"], [62, "62 bucks some more"], [20, "wah 20+ so ex for tong"], [4, "4 or 6 slot"], [2, "show the 2 again i tap"],
     [26, "change to the 16cm wide one. 26 too long"], [16, 'the 16" one'], [18, "CCK 18″ wok pls"],
+    [3, "same same reply 3 times already. cant u just get someone call me"], [2, "asked 2 times liao"],
   ];
   for (const [quantity, text] of notQuantities) assert.equal(quantityStated(quantity, [text]), false, text);
   const quantities: Array<[number, string]> = [
@@ -261,7 +262,10 @@ test("the word one counts only when it is said as a quantity", () => {
 test("one counts after a short yes or a buying word, and one of the named product counts", () => {
   const quantities = ["ok one", "yes one", "ok la one", "ok, one.", "give me one", "gimme one", "take one of the 6 slot", "also one of the 6 slot", "i want one of those", "pot x2 and one lid"];
   for (const text of quantities) assert.equal(quantityStated(1, [text]), true, text);
-  for (const text of ["one of those got lid?", "ok the blue one", "i take one of them"]) assert.equal(quantityStated(1, [text]), false, text);
+  for (const text of ["one of those got lid?", "ok the blue one", "i take one of them", "and one more thing, do u deliver?", "also one question", "One more question: do u deliver?", "ok one more thing", "one sec"]) {
+    assert.equal(quantityStated(1, [text]), false, text);
+  }
+  assert.equal(quantityStated(1, ["and one more please"]), true);
 });
 
 test("adding to a line already on the enquiry needs a number typed in this message", async () => {

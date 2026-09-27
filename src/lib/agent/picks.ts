@@ -1,5 +1,5 @@
 // src/lib/agent/picks.ts
-import { CHIP_PREFIX, TAP_PREFIX, parseCardsNote, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
+import { CHIP_PREFIX, TAP_PREFIX, customerWords, parseCardsNote, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
 import { quantityStated } from "./enquiry";
 
 /** A card the customer tapped. age: customer messages since (0 = this turn); seen: Claire's replies before it. */
@@ -29,8 +29,7 @@ export function pickEvidence(history: AgentRequest["history"], event: AgentReque
     } else if (item.content.startsWith(CHIP_PREFIX)) {
       events.push({ seen: replies.length, text: item.content.slice(CHIP_PREFIX.length).trim(), chip: true });
     } else {
-      const text = item.content.replace(/^\[photo\]\s*/, "");
-      events.push({ seen: replies.length, text: text && text !== "(no caption)" ? text : undefined });
+      events.push({ seen: replies.length, text: customerWords(item.content) ?? undefined });
     }
   }
   if (event.type === "select_product") events.push({ seen: replies.length, tap: event.stockId });
@@ -47,7 +46,8 @@ export function pickEvidence(history: AgentRequest["history"], event: AgentReque
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Matches this item code typed whole: "bts-8026d" in "2 pcs of bts-8026d", not in "bts-8026d2". */
 export const codePattern = (code: string) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(code)}(?![\\p{L}\\p{N}])`, "iu");
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+/** The same item code, whatever the case. */
+export const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 // Name words that say nothing about which product it is.
 const STOP = new Set(["with", "come", "from", "that", "this", "have", "only", "also", "each", "type", "free", "size", "series", "pieces"]);
@@ -140,7 +140,10 @@ const asksFirst = (clause: string) => questionStart.test(clause) && !/^can\b/i.t
 const namingHedge = /\b(?:other|others|another|else|cheaper|instead|too|ex|expensive|but|got)\b/i;
 const pickVerb = /\b(?:take|add|want|wan|go with|go for|choose|chose|pick|buy|order|get|make it|change to|switch to|confirm|i say|i said|said|i tap)\b|要|拿|买|加/i;
 const okStart = /^(?:ok|okay|yes|ya|yah|yeah|sure)\b/i;
-const yesHedge = /\b(?:but|other|others|else|another|cheaper|instead|wait|boss|expensive|ex|how about|what about|hmm|or not|anot)\b/i;
+const yesHedge = /\b(?:but|other|others|else|another|cheaper|instead|wait|boss|expensive|ex|how about|what about|hmm|or not|anot|think|later|consider)\b/i;
+const yesWords = /^(?:ok(?:ay)?|yes|ya|yah|yeah|sure)\b[\s,!.]*/i;
+// A chip Claude wrote to browse on ("More tong options", "Show tong sizes") names a kind of product, not a pick.
+const browsingChip = /^(?:show|see|more)\b|\b(?:options|sizes|other)\b/i;
 const acceptStart = /^\s*(?:(?:aiya|aiyo|haiz|wah|eh|ok(?:ay)?|ya|yes)[\s,!.]+)*(?:ok(?:ay)?|yes|ya|yah|yeah|yep|sure|confirm|go ahead|(?:just\s+)?(?:add|take))\b|^\s*can\s*(?:la|lah|lor|liao|already|alr)?\s*(?:\d+\s*(?:pcs?|units?)?)?[\s.!]*$|^\s*(?:好的|可以|就这个)/i;
 const thisOne = /\b(?:this|that|tis|dis|tat|it)\b/i;
 const bareQuantity = /^\s*(?:just|only)?\s*(?:x\s*)?\d+\s*(?:pcs?|pieces?|units?|sets?|nos?)?\s*(?:only|la|lah|lor|leh|ah|can|pls|please|thanks)?[\s.!,;]*$/i;
@@ -153,6 +156,7 @@ type Pointing = Map<PickText, Map<string, ShownCard[]>>;
 
 /** What one customer text says about this card: it picks it, turns it down, or says nothing about it. */
 function textVerdict(code: string, quantity: number | null, sent: PickText, recent: boolean, replies: PickReply[], pointing: Pointing): "pick" | "refuse" | null {
+  if (sent.chip && browsingChip.test(sent.text)) return null;
   const seenSets = replies.slice(0, sent.seen).map((reply) => reply.cards);
   const seenCards = seenSets.flat();
   const all = clausesOf(sent.text);
@@ -185,10 +189,12 @@ function textVerdict(code: string, quantity: number | null, sent: PickText, rece
       && next.every((card) => card === shown || ![...hits(card, clause)].some((hit) => mine.has(hit)));
   })) return "pick";
 
-  // A yes to the only card Claire just showed, with no hedge and no other card named.
+  // A yes to the only card Claire just showed, with no hedge and no other card named. A text that also asks something
+  // ("ok, how much?") says yes only with the number in the yes itself ("ok 2, how much total?").
+  const asks = all.some((clause) => isQuestion(clause) || asksFirst(clause.replace(yesWords, "")));
   if (before?.cards.length === 1 && same(before.cards[0].code, code) && !yesHedge.test(sent.text)
     && !seenCards.some((card) => !same(card.code, code) && clauses.some((clause) => points(card.code, clause)))
-    && clauses.some((clause) => acceptStart.test(clause)
+    && clauses.some((clause) => (acceptStart.test(clause) && (!asks || (quantity !== null && quantityStated(quantity, [clause]))))
       || (quantity !== null && !asksFirst(clause) && quantityStated(quantity, [clause]) && thisOne.test(clause))
       || (bareQuantity.test(clause) && askedHowMany.test(before.text)))) return "pick";
 

@@ -67,9 +67,17 @@ export function nextEnquiry(current: AgentReply["enquiry"], reply: AgentReply["e
   return { lines, totals: { ...totals, grandTotal: Math.round(totals.grandTotal * 100) / 100 } };
 }
 
-/** How the browser marks a card tap and a chip tap in the chat history. */
+/** How the browser marks a card tap, a chip tap and a photo (with its caption, or NO_CAPTION) in the chat history. */
 export const TAP_PREFIX = "[tap]";
 export const CHIP_PREFIX = "[chip]";
+export const PHOTO_PREFIX = "[photo]";
+export const NO_CAPTION = "(no caption)";
+
+/** The words a customer history entry carries: the text, or a photo's caption. A photo sent without a caption has none. */
+export function customerWords(content: string) {
+  const text = content.startsWith(PHOTO_PREFIX) ? content.slice(PHOTO_PREFIX.length).trim() : content;
+  return text && text !== NO_CAPTION ? text : null;
+}
 
 /** A product card as noted in the chat history. price is null when the card showed no checked price. */
 export type ShownCard = { code: string; name: string; price: number | null; link: string | null };

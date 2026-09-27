@@ -5,6 +5,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import sharp from "sharp";
 import type { AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
+import { searchSlots } from "./facts";
 import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, product } from "./testing";
@@ -162,6 +163,25 @@ test("a style-only problem with little time left is tidied and sent without a re
   assert.equal(reply.message, "Got it. Which size do you need?");
 });
 
+test("a problem code can fix, with little time left, is fixed in code and sent without a repair call", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "That covers our torch range. This one is $31.31.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "This one is $31.31.");
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+});
+
+test("a made-up card with little time left still gets its repair", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "Try this.", card_ids: ["FAKE-1"] }), answer({ message: "What will you use it for?" })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, "What will you use it for?");
+});
+
 test("a style-only repair that fails sends the tidied first answer", async () => {
   const { client } = fakeClient([answer({ message: "Noted. Which size do you need?" }), new Error("overloaded")]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
@@ -315,6 +335,22 @@ test("the first call may always use tools", async () => {
   const { client, bodies } = fakeClient([answer({ message: "What will you use it for?" })]);
   await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 5_000, fallbackReserveMs: 500 });
   assert.equal((bodies[0].tool_choice as { type: string }).type, "auto");
+});
+
+test("a turn's own searches never time out in the shared search queue", async () => {
+  // Three list items in one round, 3 phrasings and a category each: 12 searches through a 4-slot queue that gives up after 200 ms.
+  const shared = searchSlots(4, 200);
+  const slow = deps();
+  const { searchDirect, searchCategory } = slow;
+  const later = <T>(work: () => Promise<T>) => shared(() => new Promise<T>((resolve) => { setTimeout(() => resolve(work()), 150); }));
+  slow.searchDirect = (query, limit) => later(() => searchDirect(query, limit));
+  slow.searchCategory = (words, limit, maxPrice) => later(() => searchCategory(words, limit, maxPrice));
+  const search = (id: string, item: string) => ({ type: "tool_use", id, name: "search_catalogue", input: { queries: [item, `${item} steel`, `${item} pro`], category: "torches" } });
+  const threeItems = { ...toolCall("t1", "search_catalogue", {}), content: [search("t1", "torch"), search("t2", "burner"), search("t3", "lighter")] } as unknown as Anthropic.Message;
+  const { client, bodies } = fakeClient([threeItems, answer({ message: "Here is what I found." })]);
+  await runAgentTurn({ request: request({}), deps: slow, client, model: "claude-sonnet-5" });
+  const results = JSON.stringify(bodies[1].messages.at(-1));
+  assert.doesNotMatch(results, /SEARCH_UNAVAILABLE|Category search failed/);
 });
 
 test("every turn logs one line of codes and counts, never text", async (t) => {
@@ -517,6 +553,15 @@ test("customer texts exclude chip taps, earlier and current", () => {
   assert.deepEqual(texts, ["blow torch"]);
 });
 
+test("a photo sent without a caption is not a typed message; a caption is", () => {
+  const texts = recentCustomerTexts(request({
+    event: { type: "text", text: "this one" },
+    history: [{ role: "user", content: "need 4 of these" }, { role: "user", content: "[photo] (no caption)" }],
+  }));
+  assert.deepEqual(texts, ["this one", "need 4 of these"]);
+  assert.deepEqual(recentCustomerTexts(request({ history: [{ role: "user", content: "[photo] 2 of this" }] })), ["blow torch", "2 of this"]);
+});
+
 test("a chip tap is never a quantity: the enquiry tool refuses", async () => {
   const { client, bodies } = fakeClient([
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 5 }),
@@ -704,6 +749,36 @@ test("a reply that says added without an update is sent back with tools, and the
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /no update_enquiry call succeeded/);
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
   assert.equal(reply.message, "Got it: 2 Safico torches. Anything else?");
+});
+
+test("a permission question is sent back with tools, and the add then goes through", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "Shall I add 2 to your enquiry?" }),
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+    answer({ message: "Got it: 2 Safico torches. Anything else?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok 2 first" }, history: [{ role: "user", content: "torch" }, saficoShown] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal((bodies[1].tool_choice as { type: string }).type, "auto");
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /Don't ask permission to add/);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
+  assert.equal(reply.message, "Got it: 2 Safico torches. Anything else?");
+});
+
+test("a permission question with no tool round left is repaired without asking for update_enquiry", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["torch"] }),
+    toolCall("t2", "search_catalogue", { queries: ["gas torch"] }),
+    answer({ message: "Shall I add 2 to your enquiry?" }),
+    answer({ message: "Which torch would you like?" }),
+  ]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: "2 torches" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal((bodies.at(-1)!.tool_choice as { type: string }).type, "none");
+  const repair = JSON.stringify(bodies.at(-1)!.messages.at(-1));
+  assert.match(repair, /Don't ask permission to add/);
+  assert.doesNotMatch(repair, /update_enquiry/);
 });
 
 test("a false add claim that survives the nudge and the repair is replaced", async () => {
