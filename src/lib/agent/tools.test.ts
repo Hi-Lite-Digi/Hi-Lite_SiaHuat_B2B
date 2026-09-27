@@ -329,11 +329,49 @@ test("find_alternatives keeps candidates that share a name word, same leaf categ
 
 test("alternatives with only generic words in common are dropped", async () => {
   const body = await alternativesFor("HB1", [
-    product({ stock_id: "HB1", name: "CORDLESS HAND BLENDER 1 YEAR WARRANTY" }),
+    product({ stock_id: "HB1", name: "CORDLESS HAND BLENDER PRO, 1 YEAR WARRANTY, UK PLUG, DOMESTIC USE" }),
     product({ stock_id: "FAN", name: "STAND FAN 1 YEAR WARRANTY" }),
+    product({ stock_id: "GRINDER", name: "COFFEE GRINDER PRO 1400RPM, 1-PHASE, UK PLUG, COMMERCIAL USE" }),
     product({ stock_id: "STICK", name: "STICK BLENDER" }),
   ]);
   assert.deepEqual(body.products.map((item) => item.stock_id), ["STICK"]);
+});
+
+test("a brand name doesn't hide the kind words inside it, and plurals match", async () => {
+  const body = await alternativesFor("PN28", [
+    product({ stock_id: "PN28", name: "PANASONIC PAN 28CM", brand: "PANASONIC" }),
+    product({ stock_id: "WOK", name: "WOK 30CM" }),
+    product({ stock_id: "FRY", name: "FRY PANS 24CM" }),
+  ]);
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["FRY"]);
+});
+
+test("a lid or cover for another product is not an alternative, unless a lid is what is out", async () => {
+  const pots = [
+    product({ stock_id: "4020", name: "Stainless Steel Bain Marie Pot 12Qt/11.4L" }),
+    product({ stock_id: "4010C", name: "Stainless Steel Cover For #4010 Pot" }),
+    product({ stock_id: "4012C", name: "S/S COVER for #4012 POT" }),
+    product({ stock_id: "4010", name: "S/S BAIN MARIE POT 1.25qt/1.2L" }),
+  ];
+  assert.deepEqual((await alternativesFor("4020", pots)).products.map((item) => item.stock_id), ["4010"]);
+  assert.deepEqual((await alternativesFor("4010C", pots)).products.map((item) => item.stock_id), ["4020", "4012C", "4010"]);
+});
+
+test("find_alternatives live-checks the product it was asked about and keeps it for the reply", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico], { "970S": { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 } });
+  const ctx = context(deps);
+  const body = JSON.parse((await runTool("find_alternatives", { stock_id: "970S" }, ctx)).content) as AlternativesBody & { source?: FactBody };
+  assert.deepEqual([ctx.seen.get("970S")?.verified, ctx.seen.get("970S")?.product.stock_status], [true, "out_of_stock"]);
+  assert.deepEqual([body.source?.stock_id, body.source?.stock, body.source?.price_and_stock_verified_live], ["970S", "out_of_stock", true]);
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["F46700", "BTS-8026D"]);
+});
+
+test("when no candidate's stock could be checked, find_alternatives says so instead of 'no close match'", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico], { F46700: "fail", "BTS-8026D": "fail" });
+  const body = JSON.parse((await runTool("find_alternatives", { stock_id: "970S" }, context(deps))).content) as AlternativesBody;
+  assert.deepEqual(body.products, []);
+  assert.match(body.note ?? "", /couldn't be checked/);
+  assert.doesNotMatch(body.note ?? "", /No close in-stock match/);
 });
 
 test("find_alternatives returns nothing rather than unrelated products", async () => {

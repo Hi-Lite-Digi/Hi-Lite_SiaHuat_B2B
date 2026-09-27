@@ -231,18 +231,25 @@ const ABSENCE_ISSUE_PREFIX = "This 'we don't have it'";
 // a completeness nor an absence claim, and "the only one of these" is about the cards shown.
 const ENQUIRY_TALK = /\b(?:enquiry|added|removed|updated|your\s+(?:list|order|cart))\b/i;
 const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
-const COMPLETE = /\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b|\bno\s+other\b|\bnothing\s+else\b|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b/i;
+// "Nothing else to add?", "No other questions", "Everything else looks fine" and "The only option now is to ask sales" aren't about the range.
+const COMPLETE = /\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b(?!\s+(?:looks?|is\s+(?:fine|good|ok|okay|set))\b)|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b(?!\s+(?:\w+\s+)?is\s+to\b)|\bno\s+other\b(?!\s+(?:questions?|changes?)\b)|\bnothing\s+else\b(?!\s+(?:to\s+add|needed)\b)|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b/i;
+// "No other sizes showed up, but there may be more" says the list may not be complete.
+const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that" or "couldn't find the photo" is not about a product.
 const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price))`;
 const ABSENT = new RegExp(String.raw`\b(?:we|i|sia\s+huat)\s+(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not)\s+(?:carry|stock|sell)\b|\b(?:we|i)\s+(?:don['’]?t|do\s+not)\s+have\s+(?:a|an|any|another|other|bundled|boxed|pre[- ]?\w+|such)\b${NOT_A_PRODUCT}|\bnot\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b${NOT_A_PRODUCT}|\b(?:i['’]?m|am)\s+not\s+finding\b|\bno\s+(?:direct\s+|close\s+|similar\s+)?(?:substitute|alternative|replacement)s?\b(?!\s+needed)|\bcan['’]?t\s+offer\s+(?:a|an|any)\s+(?:substitute|alternative)|\bnone\s+of\s+our\b`, "i");
 // "Under" and "below" only count before a price or a budget: "none turned up under that name" is not about price (runs-new2 c01-B T9).
-const BUDGET = /\bnothing\s+(?:cheaper|less\s+expensive|under|below|within)\b|\bno(?:ne)?\s+(?:[\w-]+\s+){0,6}(?:cheaper\b|(?:under|below)\s+(?:S?\$\s?\d|\d|(?:your|that|the)\s+(?:budget|price)\b|budget\b)|within\s+(?:your|that|the)\s+budget\b)|\b(?:don['’]?t|do\s+not)\s+have\s+(?:[\w-]+\s+){0,6}(?:in\s+that|under|below|within)\s+(?:[\w-]+\s+){0,2}(?:budget|price)/i;
-// "We don't sell mangoes - we're a kitchen and F&B equipment supplier" already says what Sia Huat supplies, as the prompt asks.
-const SAYS_WHAT_WE_SUPPLY = /\bF&B\b/i;
-const STOCK = /\b(?:out\s+of\s+stock|sold\s+out|not\s+in\s+stock)\b|\bno\s+stock\b(?!\s+(?:figure|info|information|count|data|details?|level))/i;
-const IN_STOCK = /(?<!not\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b/i;
+const PRICE_LIMIT = String.raw`(?:the\s+)?(?:S?\$\s?\d|\d|(?:your|that|the)\s+(?:budget|price|amount)\b|budget\b)`;
+const BUDGET = new RegExp(String.raw`\b(?:no(?:ne)?|nothing)\s+(?:[\w-]+\s+){0,6}(?:cheaper\b|less\s+expensive\b|(?:under|below)\s+${PRICE_LIMIT}|within\s+(?:your|that|the)\s+(?:budget|price)\b)|\b(?:don['’]?t|do\s+not)\s+have\s+(?:[\w-]+\s+){0,6}(?:in\s+that|under|below|within)\s+(?:(?:[\w-]+\s+){0,2}(?:budget|price)|${PRICE_LIMIT})`, "i");
+// "We don't sell mangoes - we're a kitchen and F&B equipment supplier" already says what Sia Huat supplies, as the prompt asks;
+// "F&B-grade vacuum sealers" is product talk.
+const SAYS_WHAT_WE_SUPPLY = /\bF&B\s+(?:equipment|supplies|supplier|smallwares|needs)\b|\b(?:equipment|tableware)\s+supplier\b/i;
+const NOT = String.raw`(?:not|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?t)`;
+const STOCK = new RegExp(String.raw`\b(?:out\s+of\s+stock|sold\s+out|${NOT}\s+in\s+stock)\b|\bno\s+stock\b(?!\s+(?:figure|info|information|count|data|details?|level))`, "i");
+const IN_STOCK = new RegExp(String.raw`(?<!\b${NOT}\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b`, "i");
 const HEDGE = /\b(?:may|might|could)\s+be\b|\bnot\s+(?:yet\s+)?confirmed\b|\bunconfirmed\b|\bneeds?\s+checking\b/i;
-const PLURAL = /\b(?:both|all|these|those|they|them)\b/i;
+// A plural subject: "both", "all", "they", or a plural verb ("X, Y and Z are out of stock").
+const PLURAL = /\b(?:both|all|these|those|they|them|are|were)\b/i;
 const CLAIM_FIXES = {
   complete: "No search this turn listed a whole category (complete: true). Say these are some of the options and offer to narrow down.",
   budget: "No search this turn listed a whole priced category. Say what you found under the budget so far and offer to check the whole range.",
@@ -265,10 +272,10 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     const item = seen.get(card.code);
     return !!item?.verified && (item.product.stock_status === "out_of_stock" || item.product.available_quantity === 0);
   };
-  // Each part that says "out of stock" is judged on its subject: the products that part points at; with "both" or "all", also
-  // those of the parts before it ("(Kenwood x-Tract, Adler 2L) are both out of stock"); with "it", those of the part just before.
-  // Other parts ("closest in-stock alternatives are ...") are not judged, nor is a part that says in stock or hedges, nor a
-  // subject that points at no product ("the 12QT pot").
+  // Each part that says "out of stock" is judged on its subject: the products that part points at; with a plural subject
+  // since the last stock talk ("GF-33, GS-7 and XXGS-9 are out of stock"), also those of the parts before it; with "it" or a
+  // bare "is", those of the nearest part before that names a product. Other parts ("closest in-stock alternatives are ...")
+  // are not judged, nor is a part that says in stock or hedges, nor a subject that points at no product ("the 12QT pot").
   const stockBacked = (sentence: string) => {
     const parts = sentence.split(/[,;]|\s[-–—]\s|\b(?:and|but|while)\b/i).filter((part) => part.trim());
     const aboutStock = (part: string) => STOCK.test(part) || IN_STOCK.test(part);
@@ -276,18 +283,22 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
       if (!STOCK.test(part) || IN_STOCK.test(part) || HEDGE.test(part)) return true;
       const own = pointedBy(part, cards);
       const start = parts.slice(0, index).findLastIndex(aboutStock) + 1;
-      const before = PLURAL.test(part) ? parts.slice(start, index) : !own.length && index > start ? [parts[index - 1]] : [];
-      return [...own, ...before.flatMap((earlier) => pointedBy(earlier, cards))].every(soldOut);
+      const earlier = parts.slice(start, index);
+      const nearest = earlier.findLast((text) => pointedBy(text, cards).length);
+      const before = PLURAL.test(parts.slice(start, index + 1).join(" ")) ? earlier : !own.length && nearest ? [nearest] : [];
+      return [...own, ...before.flatMap((text) => pointedBy(text, cards))].every(soldOut);
     });
   };
   return sentences(message).flatMap((sentence) => {
     const talk = ENQUIRY_TALK.test(sentence);
     // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it".
     const range = BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
-      : COMPLETE.test(sentence) && !talk && !RELATIVE.test(sentence) ? (complete ? null : "complete" as const)
+      : COMPLETE.test(sentence) && !talk && !RELATIVE.test(sentence) && !OPEN_ENDED.test(sentence) ? (complete ? null : "complete" as const)
       : ABSENT.test(sentence) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence) ? (absenceBacked ? null : "absence" as const)
       : null;
-    const kind = range ?? (STOCK.test(sentence) && !stockBacked(sentence) ? "stock" as const : null);
+    // An unbacked stock claim is removed if it survives the repair, so it outranks a "we don't have it", which is only reworded.
+    const stock = STOCK.test(sentence) && !stockBacked(sentence);
+    const kind = range === "absence" && stock ? "stock" as const : range ?? (stock ? "stock" as const : null);
     return kind ? [{ sentence, kind }] : [];
   });
 }

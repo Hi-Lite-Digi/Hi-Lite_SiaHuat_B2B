@@ -533,6 +533,9 @@ const stockSeen = new Map<string, CheckedProduct>([
   ["VD-KT", { product: product({ stock_id: "VD-KT", name: "Vinda Deluxe Kitchen Towel", stock_status: "unknown", in_stock: null, available_quantity: null }), verified: false }],
   ["4006", { product: product({ stock_id: "4006", name: "Beautex Kitchen Towel (Pulp), 6Rolls X 60Sheets", available_quantity: 1 }), verified: true }],
   ["GP111", { product: product({ stock_id: "GP111", name: "COFFEE BAG WITH WIRE HANDLE 4in", stock_status: "unknown", in_stock: null, available_quantity: null }), verified: false }],
+  ["GF-33", { product: product({ stock_id: "GF-33", name: "Global Chef Knife 21cm", stock_status: "unknown", in_stock: null, available_quantity: null }), verified: false }],
+  ["GS-7", { product: product({ stock_id: "GS-7", name: "Global Vegetable Knife 14cm", available_quantity: 9 }), verified: true }],
+  ["XXGS-9", { product: product({ stock_id: "XXGS-9", name: "Global Kitchen Knife 13cm", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }), verified: true }],
 ]);
 const claimReview = (message: string, searches: SearchRecord[] = []) => reviewAnswer(
   { message, card_ids: [], chips: [], show_contact: false }, stockSeen, allowed, undefined, { searches },
@@ -553,8 +556,15 @@ test("a claim that nothing fits the budget needs a complete priced search this t
   for (const message of ["Nothing cheaper in that longer length.", "I don't have a commercial blender in that lower budget range."]) {
     assert.equal(claimsOf(message, [search({ categoryFound: true, maxPrice: 20, complete: false })]).length, 1, message);
     assert.deepEqual(claimReview(message, [search({ maxPrice: 20, complete: true })]).safety, [], message);
+    // A backed budget claim isn't judged again as a "we don't have it".
+    assert.deepEqual(absenceOf(message, [search({ maxPrice: 20, complete: true })]), [], message);
   }
-  assert.deepEqual(claimsOf("No Damascus blades - none turned up under that name."), []);
+  for (const message of ["No blenders under the S$100 mark, sorry.", "There's nothing in that range under that amount.", "We don't have anything below 50 dollars."]) {
+    assert.equal(claimsOf(message).length, 1, message);
+  }
+  for (const message of ["No Damascus blades - none turned up under that name.", "Nothing under that name came up in the catalogue."]) {
+    assert.deepEqual(claimsOf(message), [], message);
+  }
 });
 
 test("a 'we don't have it' needs two searches and a found category, and is only ever a style issue", () => {
@@ -565,6 +575,7 @@ test("a 'we don't have it' needs two searches and a found category, and is only 
   assert.deepEqual(absenceOf(boxed, [search({ queries: ["dining set", "cutlery set"], category: "table-setting sets", categoryFound: true })]), []);
   assert.equal(absenceOf("I'm not finding the GN pan trolley.").length, 1);
   assert.deepEqual(absenceOf("Sorry, we don't sell mangoes - we're a kitchen and F&B equipment supplier."), []);
+  assert.equal(absenceOf("We don't sell F&B-grade vacuum sealers of that size.").length, 1);
   const torch = claimReview("Mastrad torch is out of stock, no direct substitute for it.");
   assert.deepEqual(torch.safety, []);
   assert.match(torch.style.find((issue) => issueCode(issue) === "ABSENCE") ?? "", /no direct substitute/);
@@ -580,6 +591,27 @@ test("an out-of-stock claim needs every product it points at checked live as out
   // Only the part that says out of stock is judged; "it" takes the part before.
   assert.deepEqual(claimsOf("The Kenwood x-Tract is out of stock, but the Adler 2L is worth a look."), []);
   assert.equal(claimsOf("Found the Adler 2L - but it's out of stock right now.").length, 1);
+  // A plural subject ("are", "both", "all") takes in every product named before it; a bare "is" takes the nearest one named.
+  for (const message of [
+    "GF-33, GS-7 and XXGS-9 are out of stock.",
+    "All Global knives I checked (GF-33, GS-7, XXGS-9) are out of stock.",
+    "The two cheaper options I found (Adler 2L, Kenwood x-Tract) are out of stock.",
+    "The Adler 2L and the Kenwood x-Tract are out of stock.",
+    "Both the Adler 2L and the Kenwood x-Tract are sold out.",
+    "The Adler 2L kettle, sadly, is out of stock.",
+    "The Adler 2L isn't in stock right now.",
+  ]) {
+    assert.equal(claimsOf(message).length, 1, message);
+  }
+  for (const message of ["The XXGS-9 and the Kenwood x-Tract are both out of stock.", "The Kenwood x-Tract isn't in stock right now."]) {
+    assert.deepEqual(claimsOf(message), [], message);
+  }
+});
+
+test("a sentence that is both an unbacked stock claim and a 'we don't have it' is a stock claim", () => {
+  const message = "The Adler 2L is out of stock, and we don't carry another 2L kettle.";
+  assert.equal(claimsOf(message).length, 1);
+  assert.deepEqual(absenceOf(message), []);
 });
 
 test("honest wording raises no claim, even with no searches", () => {
@@ -598,6 +630,11 @@ test("honest wording raises no claim, even with no searches", () => {
     "I don't have a live price for the GP111 yet.",
     "I couldn't find the photo on my side",
     "Everything is in stock, so you're good to go.",
+    "Nothing else to add?",
+    "No other sizes showed up in this search, but there may be more.",
+    "The only option now is to ask our sales team about a restock.",
+    "No other questions from my side.",
+    "Everything else looks fine.",
   ]) {
     assert.deepEqual(claimReview(message).safety, [], message);
     assert.deepEqual(absenceOf(message), [], message);

@@ -228,13 +228,18 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
 }
 
 // Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share.
-const GENERIC = new Set(["the", "and", "for", "per", "pcs", "set", "new", "top", "stainless", "steel", "with", "without", "black", "white", "grey", "gray", "blue", "red", "green", "silver", "size", "piece", "pieces", "year", "warranty", "domestic", "function", "speed", "come", "free", "pulse", "heat", "resistant"]);
-const kindWords = (item: Product) => new Set((item.name.toLowerCase().match(/\p{L}{3,}/gu) ?? [])
-  .filter((word) => !GENERIC.has(word) && !(item.brand ?? "").toLowerCase().includes(word)));
+const GENERIC = new Set(["the", "and", "for", "per", "pcs", "set", "new", "top", "stainless", "steel", "with", "without", "black", "white", "grey", "gray", "blue", "red", "green", "silver", "size", "piece", "pieces", "year", "warranty", "domestic", "function", "speed", "come", "free", "pulse", "heat", "resistant", "use", "pro", "rpm", "plug", "phase"]);
+const nameWords = (text: string): string[] => text.toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+// Whole brand words only: "Panasonic" must not hide "pan". "pans" matches "pan".
+const kindWords = (item: Product) => new Set(nameWords(item.name)
+  .filter((word) => !GENERIC.has(word) && !nameWords(item.brand ?? "").includes(word)).map(stem));
 /** True when the two share a word, or a 4+ letter word sits inside the other's ("torch" in "blowtorch"). */
 const sharesWord = (a: Set<string>, b: Set<string>) => [...b].some((word) => [...a].some((own) => own === word
   || (Math.min(own.length, word.length) >= 4 && (own.includes(word) || word.includes(own)))));
+// "Cover For #4010 Pot" fits another product; it is no substitute for the pot.
+const ACCESSORY = /\b(?:cover|lid)\s+for\b|\bfor\s+#/i;
 const NO_CLOSE_ALTERNATIVE = "No close in-stock match in the same range. Check size and capacity against what the customer needs; search with the customer's words and size (e.g. 'stock pot 12L') before saying there is no substitute.";
+const ALTERNATIVES_UNCHECKED = "Stock couldn't be checked live right now, so no alternative can be offered. Don't say there is no substitute; say you couldn't check stock just now.";
 
 async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: TurnContext) {
   const minQty = input.min_qty ?? 1;
@@ -255,14 +260,24 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
     const own = kindWords(source);
     const leaf = source.third_category;
     const sameLeaf = (item: Product) => Number(Boolean(leaf) && item.third_category === leaf);
-    candidates = candidates.filter((item) => sharesWord(own, kindWords(item))).sort((a, b) => sameLeaf(b) - sameLeaf(a));
+    const accessoryOk = ACCESSORY.test(source.name);
+    candidates = candidates
+      .filter((item) => sharesWord(own, kindWords(item)) && (accessoryOk || !ACCESSORY.test(item.name)))
+      .sort((a, b) => sameLeaf(b) - sameLeaf(a));
   }
-  const checked = await Promise.all(candidates.slice(0, 8).map((item) => liveCheck(item, ctx.deps)));
+  // The source is checked too, so the reply's "X is out of stock" is judged against its live stock (the memo avoids a refetch).
+  const [checkedSource, checked] = await Promise.all([
+    source && liveCheck(source, ctx.deps),
+    Promise.all(candidates.slice(0, 8).map((item) => liveCheck(item, ctx.deps))),
+  ]);
+  const sourceFact = checkedSource ? { source: remember(ctx, checkedSource) } : {};
   const available = checked
     .filter((item) => item.verified && item.product.stock_status === "in_stock" && (item.product.available_quantity ?? 0) >= minQty)
     .slice(0, 3);
-  if (!available.length) return ok({ products: [], note: NO_CLOSE_ALTERNATIVE });
-  return ok({ products: available.map((item) => remember(ctx, item)) });
+  if (!available.length) {
+    return ok({ ...sourceFact, products: [], note: checked.length && !checked.some((item) => item.verified) ? ALTERNATIVES_UNCHECKED : NO_CLOSE_ALTERNATIVE });
+  }
+  return ok({ ...sourceFact, products: available.map((item) => remember(ctx, item)) });
 }
 
 async function matchPhotoTool(ctx: TurnContext) {

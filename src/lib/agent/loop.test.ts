@@ -863,3 +863,21 @@ test("an absence claim is repaired once, then sent tidied, not removed", async (
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /This 'we don't have it' isn't backed/);
   assert.equal(reply.message, "We don't carry boxed dining sets. Plates and cutlery are sold on their own.");
 });
+
+test("an honest out-of-stock line about the product find_alternatives was asked about needs no repair", async () => {
+  const mastrad = product({ stock_id: "F46700", name: "MASTRAD EXPERT COOKING TORCH, BLACK", brand: "MASTRAD", third_category: "Gas lighters" });
+  const burner = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER SAFICO PRO", third_category: "Gas lighters" });
+  const soldOut = fakeDeps([mastrad, burner], { F46700: { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 } });
+  const message = "The Mastrad cooking torch is out of stock. The Safico gas torch burner is in stock - how many do you need?";
+  const { client, bodies } = fakeClient([toolCall("t1", "find_alternatives", { stock_id: "F46700" }), answer({ message, card_ids: ["BTS-8026D"] })]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "Choose option 2" },
+      history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "Two torches.\n[cards shown: 970S KITCHEN BLOW TORCH ($31.31); F46700 MASTRAD EXPERT COOKING TORCH, BLACK]" }],
+      shownProductIds: ["970S", "F46700"],
+    }),
+    deps: soldOut, client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+});
