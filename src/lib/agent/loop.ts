@@ -6,13 +6,13 @@ import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
 import { CHIP_PREFIX, TAP_PREFIX, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
-import { liveCheck, productFact, type FactDeps } from "./facts";
+import { liveCheck, productFact, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, issueCode, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
+  MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, issueCode, noCardFixer, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
   type EarlierTurns, type FinalAnswer, type Fixer,
 } from "./guards";
-import { pickEvidence } from "./picks";
+import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, errorCode, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -31,6 +31,7 @@ const FALLBACK_RESERVE_MS = 10_000;
 const VERIFY_FLOOR_MS = 1_000;
 const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long; with less left, the tidied answer is sent
 const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
+const EARLIER_CARD_CHECK_MS = 2_000;
 
 const finalSchema: Record<string, unknown> = {
   type: "object",
@@ -141,6 +142,34 @@ function readFinal(response: Anthropic.Message): FinalAnswer | null {
   if (!parsed.success) return null;
   if (parsed.data.message) return parsed.data;
   return parsed.data.card_ids.length ? { ...parsed.data, message: CARDS_ONLY_MESSAGE } : null;
+}
+
+/** Stores a checked product; a failed check never replaces a live-checked one. */
+function keepBest(ctx: TurnContext, checked: CheckedProduct) {
+  if (checked.verified || !ctx.seen.get(checked.product.stock_id)?.verified) ctx.seen.set(checked.product.stock_id, checked);
+}
+
+/**
+ * Cards Claude chose that this turn hasn't looked up but the customer has already seen or has on the enquiry, plus (when the
+ * message quotes an amount code can't back yet) the cards of Claire's previous reply and earlier-shown codes named in the message:
+ * looked up and live-checked by code now, so every card and price still comes from this turn's facts.
+ */
+async function attachEarlierCards(final: FinalAnswer, ctx: TurnContext, previousCodes: string[], amountsUnbacked: boolean, timeLeft: () => number): Promise<FinalAnswer> {
+  const known = new Map([...ctx.shownIds, ...ctx.lines.map((line) => line.code), ...previousCodes].map((id) => [id.toLowerCase(), id]));
+  const seen = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
+  const named = amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : [];
+  const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
+    .filter((id) => known.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified).slice(0, 5);
+  const ms = Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
+  await Promise.all(wanted.map(async (id) => {
+    const found = await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), ms, null);
+    if (!found) return;
+    // A live check that stalls sends the card unconfirmed, like a search result that wasn't checked.
+    const unconfirmed: CheckedProduct = { product: { ...found, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
+    keepBest(ctx, await withTimeout(liveCheck(found, ctx.deps, ms), ms, unconfirmed));
+  }));
+  const spelled = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
+  return { ...final, card_ids: final.card_ids.map((id) => spelled.get(id.toLowerCase()) ?? id) };
 }
 
 /** Rejects when the signal fires, so a stuck step cannot hold the turn past its deadline (the step itself keeps running). */
@@ -255,11 +284,17 @@ export async function runAgentTurn(input: {
     }
     if (!result) throw new Error("AGENT_NO_ANSWER");
 
-    let final = result.final;
-    let allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
+    const currentAllowed = () => allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
+    const previousCodes = picks.replies.at(-1)?.cards.map((card) => card.code) ?? [];
+    // Run before `allowed` is read; a lookup cut short by the deadline leaves the answer as it was.
+    const withEarlierCards = (answer: FinalAnswer) => beforeDeadline(
+      attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, timeLeft), deadline,
+    ).catch(() => answer);
+    let final = result.final && await withEarlierCards(result.final);
+    let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
-    const fixers: Fixer[] = [{ prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) }];
+    const fixers: Fixer[] = [noCardFixer, { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) }];
     // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no usable repair.
     const styleOnly = final && review && !review.safety.length && review.style.length ? final : null;
     const tidiedFirst = styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) };
@@ -285,7 +320,8 @@ export async function runAgentTurn(input: {
           repairFailed = failureCode(error, deadline);
           return tidiedFirst;
         });
-      allowed = allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
+      final = await withEarlierCards(final);
+      allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
       if (tidiedFirst && applyFixers(final.message, review.safety, fixers).left.length) {
         // The repair brought a made-up card, but the first answer was safe to send: it goes out tidied instead.

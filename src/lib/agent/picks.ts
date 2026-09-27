@@ -45,6 +45,8 @@ export function pickEvidence(history: AgentRequest["history"], event: AgentReque
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Matches this item code typed whole: "bts-8026d" in "2 pcs of bts-8026d", not in "bts-8026d2". */
+export const codePattern = (code: string) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(code)}(?![\\p{L}\\p{N}])`, "iu");
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 // Name words that say nothing about which product it is.
@@ -162,7 +164,7 @@ function textVerdict(code: string, quantity: number | null, sent: PickText, rece
     if (!pointed.has(clause)) pointed.set(clause, pointedCards(clause, seenCards, seenSets.findLast((cards) => cards.length)));
     return pointed.get(clause)!.some((card) => same(card.code, target));
   };
-  const typedCode = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(code)}(?![\\p{L}\\p{N}])`, "iu");
+  const typedCode = codePattern(code);
   // A typed code picks even in a question ("Can I get 10 pcs of BTS-8026D?").
   if (all.some((clause) => !refuses(clause) && typedCode.test(clause))) return "pick";
 

@@ -89,7 +89,8 @@ export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and i
 /** Earlier turns from the chat history: the card codes of each Claire reply, her previous message, and what the customer just sent. */
 export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
-const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b/i;
+// Keyed only on the customer's words ("show me then i tap la"), never on Claire's own "tap it".
+const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b|\bshow (?:me )?(?:it|that|the (?:card|product|one))\b|\bwhere(?:'s| is)? (?:the )?(?:card|product)\b|\b(?:i(?:'ll| will)?|let me|to|can|then i) tap\b/i;
 const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toLowerCase()))].sort().join(" ");
 const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
 const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
@@ -109,6 +110,22 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
   }
   return issues;
 }
+
+export const NO_CARD_PREFIX = "No card attached";
+// "tap it", "tap the Kenwood mixer to confirm", "tap the HET-4 card"; not a tap on a link, the PDF button or the enquiry bar, nor a water tap.
+const tapAsk = /\btap(?:ping)?\s+(?:on\s+)?(?:it|this|that|these|those|each|them|both|to\s+(?:add|confirm|select|choose|pick))\b|\btap\s+(?:the\s+)?(?:[\w'’″-]+\s+){0,5}(?:card|cards|item|product|to\s+(?:add|confirm|select|choose|pick))\b/i;
+const tapNotACard = /\btap\s+(?:the\s+)?(?:\w+\s+){0,3}(?:link|pdf|button|bar|chip|download|mic|photo|enquiry)\b/i;
+export const asksForTap = (sentence: string) => tapAsk.test(sentence) && !tapNotACard.test(sentence);
+const showPromise = /\b(?:let me|I'?ll|I will|one sec|one moment|hold on)\b[^.!?\n]{0,40}\b(?:pull|bring|show|get)\b[^.!?\n]{0,25}\bup\b|\b(?:pulling|bringing) (?:up|those|these|it|that)\b/i;
+// "Let me know the type and I'll pull up options" waits for the customer; "having trouble pulling up the catalogue" is honest.
+export const promisesToShow = (sentence: string) => showPromise.test(sentence) && !/\b(?:if|once|when|let me know|tell me|trouble|unable|cannot)\b|n['’]t\b/i.test(sentence);
+const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
+const NO_CARD_SHOW_ISSUE = `${NO_CARD_PREFIX}: you promised to show products but attached none. Attach them now or don't promise.`;
+/** After the repair, a tap request or show promise with no card attached is cut out. */
+export const noCardFixer: Fixer = {
+  prefix: NO_CARD_PREFIX,
+  fix: (message) => removeSentences(message, (s) => asksForTap(s) || promisesToShow(s)) || "Tell me which one by its name or code.",
+};
 
 /** What this turn's tools did, for checks on the reply. */
 export type TurnFacts = { lines: EnquiryReceiptLine[] };
@@ -133,6 +150,11 @@ export function reviewAnswer(
   const chips = answer.chips.filter(chipAllowed).slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
+  if (!cards.length) {
+    const said = sentences(answer.message);
+    if (said.some(asksForTap)) safety.push(NO_CARD_TAP_ISSUE);
+    if (said.some(promisesToShow)) safety.push(NO_CARD_SHOW_ISSUE);
+  }
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
@@ -157,6 +179,7 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [MONEY_ISSUE_PREFIX, "MONEY"],
   [MID_SENTENCE_ISSUE, "MID_SENTENCE"],
   [DANGLING_CURRENCY_ISSUE, "DANGLING_CURRENCY"],
+  [NO_CARD_PREFIX, "NO_CARD"],
   [REPEATED_CARDS_ISSUE, "REPEAT"],
   [REPEATED_MESSAGE_ISSUE, "REPEAT"],
 ];

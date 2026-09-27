@@ -569,6 +569,69 @@ test("'only 1 of them' after a single card is refused", async () => {
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /PRODUCT_NOT_CHOSEN/);
 });
 
+const torchShown = { role: "assistant" as const, content: `This one fits.\n[cards shown: 970S KITCHEN BLOW TORCH 970S ($31.31) <${blowtorch.source_url}>]` };
+const askedAgain = (text: string) => request({ event: { type: "text", text }, history: [{ role: "user", content: "blow torch" }, torchShown], shownProductIds: ["970S"] });
+
+test("a card shown earlier can be attached again without a tool call", async () => {
+  const lookups = deps();
+  const { client, bodies } = fakeClient([answer({ message: "Here it is again - tap it to choose.", card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: askedAgain("where the card? i tap"), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+  assert.equal(bodies.length, 1);
+  assert.ok(lookups.calls.includes("code:970S") && lookups.calls.includes("live:970S"), lookups.calls.join(" "));
+});
+
+test("a re-shown card carries today's live price", async () => {
+  const { client } = fakeClient([answer({ message: "Here it is again.", card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: askedAgain("show me again"), deps: fakeDeps([blowtorch, safico], { "970S": { price_ex_gst: 12.34 } }), client, model: "claude-sonnet-5" });
+  assert.equal(reply.cards[0].list_price, 12.34);
+});
+
+test("a repair that adds an earlier-shown card is accepted", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "No, these aren't sets." }),
+    answer({ message: "No, this one isn't a set.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: askedAgain("is it a set?"), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /no visible product cards/);
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+});
+
+const strainer = product({ stock_id: "197-55", name: "CCK Stainless Steel Deep Noodle Strainer With Stainless Steel Handle 5.5in", list_price: 25.5 });
+const strainerAsked = request({
+  event: { type: "text", text: "how much ah" },
+  history: [{ role: "user", content: "noodle strainer" }, { role: "assistant", content: `This one has a long handle.\n[cards shown: 197-55 STRAINER ($25.50) <${strainer.source_url}>]` }],
+  shownProductIds: ["197-55"],
+});
+
+test("an earlier card's price quoted without a lookup is checked by code, not repaired", async () => {
+  for (const message of ["197-55 is $25.50.", "The strainer is $25.50."]) {
+    const lookups = fakeDeps([strainer]);
+    const { client, bodies } = fakeClient([answer({ message })]);
+    const reply = await runAgentTurn({ request: strainerAsked, deps: lookups, client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 1, message);
+    assert.equal(reply.message, message);
+    assert.ok(lookups.calls.includes("live:197-55"), message);
+  }
+  const moved = fakeClient([answer({ message: "197-55 is $25.50." }), answer({ message: "197-55 is $26.00 now." })]);
+  const reply = await runAgentTurn({ request: strainerAsked, deps: fakeDeps([strainer], { "197-55": { price_ex_gst: 26 } }), client: moved.client, model: "claude-sonnet-5" });
+  assert.equal(moved.bodies.length, 2);
+  assert.match(JSON.stringify(moved.bodies[1].messages.at(-1)), /\$25\.50/);
+  assert.equal(reply.message, "197-55 is $26.00 now.");
+});
+
+test("an earlier card whose lookup stalls is attached as unconfirmed within about 2 s", async () => {
+  const stalled = deps();
+  const fetchLive = stalled.fetchLive;
+  stalled.fetchLive = (url, ms) => (url === blowtorch.source_url ? new Promise(() => undefined) : fetchLive(url, ms));
+  const { client } = fakeClient([answer({ message: "Here it is again; its stock still needs checking.", card_ids: ["970S"] })]);
+  const started = performance.now();
+  const reply = await within(runAgentTurn({ request: askedAgain("show me again"), deps: stalled, client, model: "claude-sonnet-5" }), 4_000);
+  assert.ok(performance.now() - started < 3_000);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
+});
+
 test("customer texts exclude taps and include the current message", () => {
   const texts = recentCustomerTexts(request({
     event: { type: "text", text: "3 please" },

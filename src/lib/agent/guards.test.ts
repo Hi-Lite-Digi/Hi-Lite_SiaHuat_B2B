@@ -4,8 +4,8 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, issueCode, removeAmounts,
-  reviewAnswer, tidyMessage, unverifiedAmounts, type EarlierTurns, type FinalAnswer,
+  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, issueCode,
+  noCardFixer, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type EarlierTurns, type FinalAnswer,
 } from "./guards";
 import { product } from "./testing";
 
@@ -145,6 +145,46 @@ test("repeating the previous message word for word is flagged", () => {
   const earlier = { cardSets: [], previousMessage: "which size do you need", currentText: "not sure" };
   assert.deepEqual(reviewAnswer(answer, seen, allowed, earlier).style, ["Don't repeat your previous message word for word; move the conversation forward."]);
   assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, previousMessage: "What will you use it for?" }).style, []);
+});
+
+const safetyOf = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, seen, allowed).safety;
+
+test("asking for a tap needs a card", () => {
+  for (const message of [
+    "Please tap the Kenwood mixer to confirm it.", "Please tap the HET-4 card from earlier to add the 1 unit.",
+    "Please tap HET-6 and HET-4 from the cards shown earlier.", "Could you tap on the UT16HR product to select it again?",
+  ]) {
+    assert.ok(safetyOf(message)[0]?.startsWith(NO_CARD_PREFIX), message);
+    assert.deepEqual(safetyOf(message, ["BTS-8026D"]), [], message);
+  }
+  for (const message of ["Closest is a water dispenser with a single tap.", "Tap the Download PDF button to save it.", "Tap the enquiry bar to see the lines.", "Sorry ah, done - no tap needed."]) {
+    assert.deepEqual(safetyOf(message), [], message);
+  }
+});
+
+test("promising to pull cards up needs the cards", () => {
+  for (const message of ["One sec, let me pull those up again.", "Sorry for the run-around - let me pull these up fresh for you to tap.", "One sec, pulling up the HET-4 card for you to tap."]) {
+    assert.ok(safetyOf(message)[0]?.startsWith(NO_CARD_PREFIX), message);
+  }
+  for (const message of ["Let me know the knife type and I'll pull up options.", "Sorry, having trouble pulling up the catalogue right now."]) {
+    assert.deepEqual(safetyOf(message), [], message);
+  }
+});
+
+test("a tap request or show promise with no card is cut out after the repair", () => {
+  const fixed = (message: string) => applyFixers(message, safetyOf(message), [noCardFixer]);
+  assert.deepEqual(fixed("Sorry about that. Please tap the card to confirm."), { message: "Sorry about that.", left: [] });
+  assert.deepEqual(fixed("One sec, let me pull those up again."), { message: "Tell me which one by its name or code.", left: [] });
+  assert.equal(issueCode(safetyOf("Please tap the card to confirm.")[0]), "NO_CARD");
+});
+
+test("re-showing cards is allowed when the customer asks to see or tap them", () => {
+  const tongs = new Map<string, CheckedProduct>([["UT16HR", { product: product({ stock_id: "UT16HR", name: "Stainless Steel Utility Tong with Locking Ring 16in", list_price: 5.69 }), verified: true }]]);
+  const styleFor = (currentText: string, message = "Here it is - tap it to add 4.") => reviewAnswer(
+    { message, card_ids: ["UT16HR"], chips: [], show_contact: false }, tongs, allowed, { cardSets: [["UT16HR"], ["UT16HR"]], previousMessage: null, currentText },
+  ).style;
+  for (const text of ["where the product?? show me then i tap la", "ok show me the card, i tap", "show me that one"]) assert.deepEqual(styleFor(text), [], text);
+  for (const text of ["hello police?", "any others?", "wah still nvr ans how much"]) assert.match(styleFor(text).join(" "), /already shown these same cards twice/, text);
 });
 
 test("a clean answer has no issues", () => {
