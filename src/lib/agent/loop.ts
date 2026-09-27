@@ -9,7 +9,7 @@ import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer,
   removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unknownStoreLinks, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns,
   type FinalAnswer, type Fixer,
 } from "./guards";
@@ -385,7 +385,7 @@ export async function runAgentTurn(input: {
       }
     }
 
-    const cleaned = customerMessage(final.message);
+    const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact));
     // Codes and counts only, never customer or reply text.
     console.info("[api/agent] turn", {
       ms: Math.round(performance.now() - started), rounds, forcedEarly, repaired, repairCauses,

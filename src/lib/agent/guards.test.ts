@@ -5,8 +5,8 @@ import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts,
-  removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -148,6 +148,52 @@ test("repeating the previous message word for word is flagged", () => {
   const earlier = { cardSets: [], previousMessage: "which size do you need", currentText: "not sure" };
   assert.deepEqual(reviewAnswer(answer, seen, allowed, earlier).style, ["Don't repeat your previous message word for word; move the conversation forward."]);
   assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, previousMessage: "What will you use it for?" }).style, []);
+});
+
+test("the same closing offer two replies running is flagged; a new offer, a new product, a generic closer, a plain yes or a card tap is not", () => {
+  const offerBefore = "For 4 pax, the Rooster Series Round Plate 6in and Deep Bowl 5in would work. Want me to add 4 of each to your enquiry?";
+  const offerAgain = "You're right - everything is sold as individual pieces. The Rooster plate and bowl work well together. Want me to add 4 of each?";
+  const offers = (message: string, currentText: string, previousMessage = offerBefore, cardSets: string[][] = [[]], card_ids: string[] = []) => reviewAnswer(
+    { message, card_ids, chips: [], show_contact: false }, seen, allowed, { cardSets, previousMessage, currentText },
+  ).style.filter((issue) => issueCode(issue) === "OFFER");
+  const pushback = "These are not sets these are individual plates";
+  const flagged = offers(offerAgain, pushback);
+  assert.equal(flagged.length, 1);
+  assert.ok(flagged[0].includes('the same offer ("Want me to add 4 of each to your enquiry?")'));
+  assert.match(flagged[0], /Tools are off/);
+  assert.deepEqual(offers("Got it, they're individual pieces. Want me to show the cutlery sets instead?", pushback), []);
+  assert.deepEqual(offers("Got it, they're individual pieces. Anything else?", pushback), []);
+  assert.deepEqual(offers(offerAgain, ""), []);
+  assert.deepEqual(offers(offerAgain, "ok"), []);
+  const goWith = "Want to go with that instead?";
+  assert.equal(offers(`This one is lighter. ${goWith}`, "hmm", `That one is cheaper. ${goWith}`, [["OLD"]], ["OLD"]).length, 1);
+  assert.deepEqual(offers(`This one is lighter. ${goWith}`, "hmm", `That one is cheaper. ${goWith}`, [["OLD"]], ["BTS-8026D"]), []);
+});
+
+test("asking for the photo again a second time is flagged", () => {
+  const earlier = { cardSets: [], previousMessage: "I don't see a photo attached - could you resend it?", currentText: "What product is this?" };
+  const style = (message: string) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, seen, allowed, earlier).style;
+  assert.deepEqual(style("I'm not seeing a photo come through on my end. Could you try sending it again?"), [PHOTO_AGAIN_ISSUE]);
+  assert.deepEqual(style("Still nothing here. What does it look like, and what is it used for?"), []);
+  assert.equal(issueCode(PHOTO_AGAIN_ISSUE), "REPEAT");
+});
+
+test("a repeated sales pitch is dropped unless the customer asked for contact, a quote or only said thanks", () => {
+  const earlier = (currentText: string): EarlierTurns => ({
+    cardSets: [], previousMessage: "Your enquiry is saved. Contact Sia Huat sales with the PDF to confirm ordering and delivery.", currentText,
+  });
+  const message = "Yes, each product's store page has Add to Cart. You can contact Sia Huat sales with the PDF.";
+  const answered = "Yes, each product's store page has Add to Cart.";
+  assert.equal(dropRepeatedPitch(message, earlier("then online can buy or not?"), true), answered);
+  assert.equal(dropRepeatedPitch(message, earlier("only must call sales meh"), true), answered);
+  for (const text of ["whats ur phone number", "can i speak to someone", "Can u help me do a 50 pcs qoutation", "Ok thanks"]) {
+    assert.equal(dropRepeatedPitch(message, earlier(text), true), message, text);
+  }
+  const pitchOnly = "You can contact Sia Huat sales with the PDF.";
+  assert.equal(dropRepeatedPitch(pitchOnly, earlier("then online can buy or not?"), true), pitchOnly);
+  // Without the contact block the pitch is the only pointer to sales; a first pitch is always kept.
+  assert.equal(dropRepeatedPitch(message, earlier("then online can buy or not?"), false), message);
+  assert.equal(dropRepeatedPitch(message, { ...earlier("then online can buy or not?"), previousMessage: "Here are two torches." }, true), message);
 });
 
 const safetyOf = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, seen, allowed).safety;

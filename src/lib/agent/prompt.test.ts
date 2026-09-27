@@ -106,6 +106,12 @@ test("Claire only reports enquiry changes that happened, never promises them, an
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /keep the rest in mind/);
 });
 
+test("Claire points to sales once, stops asking for a photo that doesn't arrive, and answers whether they can buy online", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Say this once"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("If it still doesn't arrive, stop asking for the photo"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Buying online: answer the question directly"));
+});
+
 test("Claire only gives store links from the tools or the chat, and handles a link that doesn't open", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("never build one from an item code"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("don't send that link again and don't blame their browser or network"));

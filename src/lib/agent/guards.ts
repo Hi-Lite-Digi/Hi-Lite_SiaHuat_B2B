@@ -101,20 +101,60 @@ const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toL
 const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
 const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
 const REPEATED_MESSAGE_ISSUE = "Don't repeat your previous message word for word; move the conversation forward.";
+// A closing offer to do something, or a push for a pick or a quantity (exam 2, c05-A: "Want me to add 4 of each?" two replies running).
+const offerPattern = /\b(?:want (?:me to|to (?:add|go|take|order))|shall (?:i|we)|should i|would you like (?:me to|to (?:add|go|order))|how many\b|go ahead|add (?:it|them|this|these|one|either|any|\d))/i;
+const genericAsk = /^(?:is there )?(?:anything|something) else\b|^what else\b/i;
+const plainYes = /^\s*(?:yes|yeah|ya|yup|ok(?:ay)?|sure|can|go ahead|add(?: it| them)?|confirm|do it)\s*(?:la|lah|leh|pls|please)?[\s.!]*$/i;
+const lastQuestion = (message: string) => sentences(message).reverse().find((sentence) => /[?？]$/.test(sentence)) ?? null;
+const OFFER_STOP = new Set(["the", "a", "an", "to", "of", "me", "you", "your", "it", "is", "are", "and", "or", "for", "i", "we", "do", "this", "that", "these", "those", "with", "in", "on"]);
+const offerWords = (text: string) => new Set((text.toLowerCase().match(/\p{L}{2,}|\d+/gu) ?? []).filter((word) => !OFFER_STOP.has(word)).map((word) => word.replace(/s$/, "")));
+/** Both are offers (not a generic "anything else?") that share 3 or more content words, and most of the shorter one's. */
+function sameOffer(current: string, previous: string) {
+  if (![current, previous].every((ask) => offerPattern.test(ask) && !genericAsk.test(ask))) return false;
+  const [now, before] = [offerWords(current), offerWords(previous)];
+  const shared = [...now].filter((word) => before.has(word)).length;
+  return shared >= 3 && shared / Math.min(now.size, before.size) >= 0.6;
+}
+const OFFER_ISSUE_PREFIX = "Your last reply ended with the same offer";
+// Claire asking for the customer's photo to be sent again (exam 2, c12: asked on every turn).
+const photoAgain = /\b(?:re-?send(?:ing)?|send(?:ing)? (?:it|the (?:photo|image|picture|pic)) (?:again|once more)|attach(?:ing)? (?:it|the (?:photo|image|picture)) again|try (?:attaching|sending|resending))\b|\b(?:photo|image|picture|pic)\b[^.?!]{0,40}\b(?:come|came|coming|go|goes|went|going) through\b/i;
+export const PHOTO_AGAIN_ISSUE = "You already asked once for the photo. Don't ask again: ask what it looks like or what it's for (shape, size, material, any brand or label) and offer Sia Huat sales (show_contact true).";
 
 function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns) {
   const issues: string[] = [];
+  const key = cardSetKey(cards.map((card) => card.stock_id));
   if (cards.length && !asksAgain.test(earlier.currentText)) {
-    const key = cardSetKey(cards.map((card) => card.stock_id));
     if (earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2) {
       issues.push(REPEATED_CARDS_ISSUE);
     }
   }
+  const previous = earlier.previousMessage;
   const plain = plainText(message);
-  if (plain && earlier.previousMessage !== null && plain === plainText(earlier.previousMessage)) {
+  if (plain && previous !== null && plain === plainText(previous)) {
     issues.push(REPEATED_MESSAGE_ISSUE);
   }
+  // A card tap (no text) or a plain yes takes the offer up; a new product is a new offer.
+  const offer = lastQuestion(message);
+  const offerBefore = previous === null ? null : lastQuestion(previous);
+  if (offer && offerBefore && earlier.currentText && !plainYes.test(earlier.currentText) && key === cardSetKey(earlier.cardSets.at(-1) ?? []) && sameOffer(offer, offerBefore)) {
+    issues.push(`${OFFER_ISSUE_PREFIX} ("${offerBefore.slice(0, 160)}") and the customer didn't take it up. Don't make it again: answer what they just said, or try a different next step. Tools are off for this fix, so don't say anything was added, removed or checked.`);
+  }
+  if (previous !== null && photoAgain.test(message) && photoAgain.test(previous)) issues.push(PHOTO_AGAIN_ISSUE);
   return issues;
+}
+
+// Pointing the customer to Sia Huat sales or the enquiry PDF.
+const handoffPitch = /\b(?:contact|reach|call|email|check with|speak (?:to|with)|talk to)\b[^.?!\n]{0,40}\bsales\b|\bPDF\b/i;
+const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to|do i))\b[^.?!]{0,30}\b(?:phone|number|contact|email|pdf)\b|\b(?:speak|talk) to (?:someone|a person|a human|staff|sales)\b|\bq(?:uo|ou)tation\b|电话|联系方式|报价/i;
+const closingOnly = /^\s*(?:ok(?:ay)?|k|thanks?|thank you|thx|ty|tq|no,? that'?s all|that'?s all|bye|noted|alright)\b[\s.!,]*(?:thanks?|thank you|thx|bye)?[\s.!]*$/i;
+
+/**
+ * The message without its sales or PDF pitch when Claire's previous reply already made it and the contact block shows (it
+ * carries the phone, email and PDF), unless the customer asked for contact or a quote, or only said thanks (exam 2, c12-stress).
+ */
+export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showContact: boolean) {
+  if (!showContact || !earlier.previousMessage || !handoffPitch.test(earlier.previousMessage) || asksForContact.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
+  return removeSentences(message, (sentence) => handoffPitch.test(sentence)) || message;
 }
 
 export const LINK_ISSUE_PREFIX = "These store links";
@@ -445,6 +485,8 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [LINK_BLAME_ISSUE, "LINK"],
   [REPEATED_CARDS_ISSUE, "REPEAT"],
   [REPEATED_MESSAGE_ISSUE, "REPEAT"],
+  [PHOTO_AGAIN_ISSUE, "REPEAT"],
+  [OFFER_ISSUE_PREFIX, "OFFER"],
 ];
 
 /** A review issue as a log code: the issue text can quote the reply, so only the code is logged. */
