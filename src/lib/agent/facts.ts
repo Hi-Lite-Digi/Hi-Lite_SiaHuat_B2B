@@ -48,7 +48,9 @@ const RETRY_DELAY_MS = 300;
 export async function retryOnce<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
-  } catch {
+  } catch (error) {
+    // A busy search already waited its turn in the queue: joining it again would double the wait.
+    if (error instanceof Error && error.message === "SEARCH_BUSY") throw error;
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS + Math.floor(Math.random() * 400)));
     return work();
   }
@@ -92,7 +94,8 @@ export function defaultFactDeps(): FactDeps {
     searchCategory: (words, limit, maxPrice) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice)),
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
-    findAlternatives: (stockId, minQty, exclude) => findAvailableCatalogueAlternatives(stockId, 30, minQty, exclude),
+    // Its broad fallback runs search_products too.
+    findAlternatives: (stockId, minQty, exclude) => searchSlot(() => findAvailableCatalogueAlternatives(stockId, 30, minQty, exclude)),
     fetchLive: fetchSiaHuatProduct,
     lookupImage: lookupCatalogueImage,
     findDetails: findCatalogueAttributes,

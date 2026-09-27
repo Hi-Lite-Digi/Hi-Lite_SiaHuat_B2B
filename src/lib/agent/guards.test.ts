@@ -168,6 +168,18 @@ test("the same closing offer two replies running is flagged; a new offer, a new 
   const goWith = "Want to go with that instead?";
   assert.equal(offers(`This one is lighter. ${goWith}`, "hmm", `That one is cheaper. ${goWith}`, [["OLD"]], ["OLD"]).length, 1);
   assert.deepEqual(offers(`This one is lighter. ${goWith}`, "hmm", `That one is cheaper. ${goWith}`, [["OLD"]], ["BTS-8026D"]), []);
+  for (const yes of ["Yes, add it", "ok can", "yes pls add"]) assert.deepEqual(offers(offerAgain, yes), [], yes);
+  // A generic closer is not an offer, wherever "anything else" sits in it.
+  const review = "Your enquiry is still open - want to review or add anything else?";
+  assert.deepEqual(offers(review, "really dun have?", review), []);
+  const addMore = "Noted: 2 Safico torches, $46.72. Would you like to add anything else?";
+  assert.deepEqual(offers(addMore, "hmm", addMore), []);
+  // An enquiry change this turn means the customer took the offer up.
+  const askCups = "Noted: 6 bowls, $30.00. How many cups would you like?";
+  const offersAfterChange = reviewAnswer({ message: askCups, card_ids: [], chips: [], show_contact: false }, seen, allowed,
+    { cardSets: [[]], previousMessage: "How many bowls would you like?", currentText: "6" }, { changes: [{ action: "add", code: "BTS-8026D" }] });
+  assert.deepEqual(offersAfterChange.style.filter((issue) => issueCode(issue) === "OFFER"), []);
+  assert.equal(offers(askCups, "6", "How many bowls would you like?").length, 1);
 });
 
 test("asking for the photo again a second time is flagged", () => {
@@ -175,6 +187,9 @@ test("asking for the photo again a second time is flagged", () => {
   const style = (message: string) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, seen, allowed, earlier).style;
   assert.deepEqual(style("I'm not seeing a photo come through on my end. Could you try sending it again?"), [PHOTO_AGAIN_ISSUE]);
   assert.deepEqual(style("Still nothing here. What does it look like, and what is it used for?"), []);
+  // The photo arriving after one resend is not a second ask.
+  assert.deepEqual(style("Thanks, the photo came through. It looks like a cassette gas torch."), []);
+  assert.deepEqual(style("Thanks for resending the photo! It looks like a cassette gas torch."), []);
   assert.equal(issueCode(PHOTO_AGAIN_ISSUE), "REPEAT");
 });
 
@@ -186,9 +201,18 @@ test("a repeated sales pitch is dropped unless the customer asked for contact, a
   const answered = "Yes, each product's store page has Add to Cart.";
   assert.equal(dropRepeatedPitch(message, earlier("then online can buy or not?"), true), answered);
   assert.equal(dropRepeatedPitch(message, earlier("only must call sales meh"), true), answered);
-  for (const text of ["whats ur phone number", "can i speak to someone", "Can u help me do a 50 pcs qoutation", "Ok thanks"]) {
+  for (const text of [
+    "whats ur phone number", "can i speak to someone", "Can u help me do a 50 pcs qoutation", "Ok thanks", "can I get a quote for 50 pcs?", "cant u just get someone call me",
+    "i want to talk to a real person", "ok bowl i call ur sales la", "ok that's all. how do i order?", "ya la add. then how i pay", "ok thanks bye",
+  ]) {
     assert.equal(dropRepeatedPitch(message, earlier(text), true), message, text);
   }
+  // The client sends back the text after this drop, so a pitch two replies back still counts.
+  const twoBack = { ...earlier("then online can buy or not?"), previousMessage: "Sorry for the confusion.", replies: [earlier("").previousMessage!, "Sorry for the confusion."] };
+  assert.equal(dropRepeatedPitch(message, twoBack, true), answered);
+  // A sentence that also says what Claire can't do is kept: it may be the answer.
+  const limited = "Your 50 pcs are set in the enquiry. I can't confirm delivery timing here - please contact Sia Huat sales directly with this enquiry.";
+  assert.equal(dropRepeatedPitch(limited, earlier("Please i need it asap"), true), limited);
   const pitchOnly = "You can contact Sia Huat sales with the PDF.";
   assert.equal(dropRepeatedPitch(pitchOnly, earlier("then online can buy or not?"), true), pitchOnly);
   // Without the contact block the pitch is the only pointer to sales; a first pitch is always kept.

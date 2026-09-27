@@ -91,9 +91,10 @@ export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and i
 
 /**
  * Earlier turns from the chat history: the card codes of each Claire reply, her previous message, what the customer just sent,
- * the store links already in the chat (card notes included), and the links of Claire's previous reply.
+ * the store links already in the chat (card notes included), the links of Claire's previous reply, and the text of all her replies
+ * in the history, oldest first (previousMessage is the last).
  */
-export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[] };
+export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[]; replies?: string[] };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
 // Keyed only on the customer's words ("show me then i tap la"), never on Claire's own "tap it".
 const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b|\bshow (?:me )?(?:it|that|the (?:card|product|one))\b|\bwhere(?:'s| is)? (?:the )?(?:card|product)\b|\b(?:i(?:'ll| will)?|let me|to|can|then i) tap\b/i;
@@ -102,9 +103,11 @@ const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/
 const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
 const REPEATED_MESSAGE_ISSUE = "Don't repeat your previous message word for word; move the conversation forward.";
 // A closing offer to do something, or a push for a pick or a quantity (exam 2, c05-A: "Want me to add 4 of each?" two replies running).
-const offerPattern = /\b(?:want (?:me to|to (?:add|go|take|order))|shall (?:i|we)|should i|would you like (?:me to|to (?:add|go|order))|how many\b|go ahead|add (?:it|them|this|these|one|either|any|\d))/i;
-const genericAsk = /^(?:is there )?(?:anything|something) else\b|^what else\b/i;
-const plainYes = /^\s*(?:yes|yeah|ya|yup|ok(?:ay)?|sure|can|go ahead|add(?: it| them)?|confirm|do it)\s*(?:la|lah|leh|pls|please)?[\s.!]*$/i;
+const offerPattern = /\b(?:want (?:me to|to (?:add|go|take|order))|shall (?:i|we)|should i|would you like (?:me to|to (?:add|go|order))|how many\b|go ahead|add (?:it|them|this|these|one|either|any|\d+)\b)/i;
+const genericAsk = /\b(?:anything|something) else\b|^what else\b/i;
+const YES = "yes|yeah|ya|yup|ok(?:ay)?|sure|can|go ahead|add(?: it| them)?|confirm|do it";
+// "yes la", "Yes, add it", "ok can", "yes pls add".
+const plainYes = new RegExp(`^\\s*(?:${YES})(?:[\\s,]*(?:${YES}|la|lah|leh|pls|please))*[\\s.!]*$`, "i");
 const lastQuestion = (message: string) => sentences(message).reverse().find((sentence) => /[?？]$/.test(sentence)) ?? null;
 const OFFER_STOP = new Set(["the", "a", "an", "to", "of", "me", "you", "your", "it", "is", "are", "and", "or", "for", "i", "we", "do", "this", "that", "these", "those", "with", "in", "on"]);
 const offerWords = (text: string) => new Set((text.toLowerCase().match(/\p{L}{2,}|\d+/gu) ?? []).filter((word) => !OFFER_STOP.has(word)).map((word) => word.replace(/s$/, "")));
@@ -118,9 +121,11 @@ function sameOffer(current: string, previous: string) {
 const OFFER_ISSUE_PREFIX = "Your last reply ended with the same offer";
 // Claire asking for the customer's photo to be sent again (exam 2, c12: asked on every turn).
 const photoAgain = /\b(?:re-?send(?:ing)?|send(?:ing)? (?:it|the (?:photo|image|picture|pic)) (?:again|once more)|attach(?:ing)? (?:it|the (?:photo|image|picture)) again|try (?:attaching|sending|resending))\b|\b(?:photo|image|picture|pic)\b[^.?!]{0,40}\b(?:come|came|coming|go|goes|went|going) through\b/i;
+// Only a question counts: "Thanks for resending, the photo came through" is not an ask.
+const asksPhotoAgain = (message: string) => sentences(message).some((sentence) => /[?？]$/.test(sentence) && photoAgain.test(sentence));
 export const PHOTO_AGAIN_ISSUE = "You already asked once for the photo. Don't ask again: ask what it looks like or what it's for (shape, size, material, any brand or label) and offer Sia Huat sales (show_contact true).";
 
-function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns) {
+function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns, changed: boolean) {
   const issues: string[] = [];
   const key = cardSetKey(cards.map((card) => card.stock_id));
   if (cards.length && !asksAgain.test(earlier.currentText)) {
@@ -133,28 +138,32 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
   if (plain && previous !== null && plain === plainText(previous)) {
     issues.push(REPEATED_MESSAGE_ISSUE);
   }
-  // A card tap (no text) or a plain yes takes the offer up; a new product is a new offer.
+  // A card tap (no text), a plain yes or an enquiry change this turn takes the offer up; a new product is a new offer.
   const offer = lastQuestion(message);
   const offerBefore = previous === null ? null : lastQuestion(previous);
-  if (offer && offerBefore && earlier.currentText && !plainYes.test(earlier.currentText) && key === cardSetKey(earlier.cardSets.at(-1) ?? []) && sameOffer(offer, offerBefore)) {
+  if (offer && offerBefore && earlier.currentText && !changed && !plainYes.test(earlier.currentText) && key === cardSetKey(earlier.cardSets.at(-1) ?? []) && sameOffer(offer, offerBefore)) {
     issues.push(`${OFFER_ISSUE_PREFIX} ("${offerBefore.slice(0, 160)}") and the customer didn't take it up. Don't make it again: answer what they just said, or try a different next step. Tools are off for this fix, so don't say anything was added, removed or checked.`);
   }
-  if (previous !== null && photoAgain.test(message) && photoAgain.test(previous)) issues.push(PHOTO_AGAIN_ISSUE);
+  if (previous !== null && asksPhotoAgain(message) && asksPhotoAgain(previous)) issues.push(PHOTO_AGAIN_ISSUE);
   return issues;
 }
 
 // Pointing the customer to Sia Huat sales or the enquiry PDF.
 const handoffPitch = /\b(?:contact|reach|call|email|check with|speak (?:to|with)|talk to)\b[^.?!\n]{0,40}\bsales\b|\bPDF\b/i;
-const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to|do i))\b[^.?!]{0,30}\b(?:phone|number|contact|email|pdf)\b|\b(?:speak|talk) to (?:someone|a person|a human|staff|sales)\b|\bq(?:uo|ou)tation\b|电话|联系方式|报价/i;
-const closingOnly = /^\s*(?:ok(?:ay)?|k|thanks?|thank you|thx|ty|tq|no,? that'?s all|that'?s all|bye|noted|alright)\b[\s.!,]*(?:thanks?|thank you|thx|bye)?[\s.!]*$/i;
+const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to|do i))\b[^.?!]{0,30}\b(?:phone|number|contact|email|pdf)\b|\b(?:speak|talk) to (?:someone|a person|a human|staff|sales)\b|\bq(?:uo|ou)t(?:e|ation)s?\b|\bcall me\b|\bget someone\b|\bsomeone (?:to )?call\b|\b(?:real|actual) (?:person|human)\b|\bi(?:['’]ll| will)? call\b|\bhow (?:to |do i |can i |i )?(?:order|buy|download|pay)\b|电话|联系方式|报价/i;
+const closingOnly = /^\s*(?:ok(?:ay)?|k|thanks?|thank you|thx|ty|tq|no,? that'?s all|that'?s all|bye|noted|alright)\b[\s.!,]*(?:(?:thanks?|thank you|thx|bye)[\s.!,]*){0,2}$/i;
+// A pitch sentence that also says what Claire can't do may be the answer to the customer's question (exam 2, s06-B: delivery timing).
+const limitation = /\b(?:can['’]?t|cannot|unable|not able|out of stock)\b/i;
 
 /**
- * The message without its sales or PDF pitch when Claire's previous reply already made it and the contact block shows (it
- * carries the phone, email and PDF), unless the customer asked for contact or a quote, or only said thanks (exam 2, c12-stress).
+ * The message without its sales or PDF pitch when one of Claire's earlier replies already made it and the contact block shows
+ * (it carries the phone, email and PDF), unless the customer asked for contact or a quote, or only said thanks (exam 2, c12-stress).
+ * Any earlier reply counts, not only the last: the history carries the text after this drop, so the pitch would come back every other turn.
  */
 export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showContact: boolean) {
-  if (!showContact || !earlier.previousMessage || !handoffPitch.test(earlier.previousMessage) || asksForContact.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
-  return removeSentences(message, (sentence) => handoffPitch.test(sentence)) || message;
+  const pitched = [...(earlier.replies ?? []), earlier.previousMessage ?? ""].some((reply) => handoffPitch.test(reply));
+  if (!showContact || !pitched || asksForContact.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
+  return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence)) || message;
 }
 
 export const LINK_ISSUE_PREFIX = "These store links";
@@ -454,7 +463,7 @@ export function reviewAnswer(
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
   if (sentences(answer.message).some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
-  style.push(...repetitionIssues(answer.message, cards, earlier));
+  style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length)));
   style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }

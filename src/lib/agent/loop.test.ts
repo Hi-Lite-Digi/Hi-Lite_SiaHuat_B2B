@@ -271,6 +271,24 @@ test("a repeated pitch is dropped without a repair call", async () => {
   assert.equal(reply.showContact, true);
 });
 
+test("a pitch dropped last turn doesn't come back: any earlier reply's pitch counts", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "Yes, each product's store page has Add to Cart. You can contact Sia Huat sales with the PDF.", show_contact: true }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "then online can buy or not?" },
+      history: [
+        { role: "user", content: "how do i order" }, { role: "assistant", content: "Contact Sia Huat sales with the PDF of your enquiry." },
+        { role: "user", content: "so troublesome" }, { role: "assistant", content: "Sorry for the confusion." },
+      ],
+    }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 1);
+  assert.equal(reply.message, "Yes, each product's store page has Add to Cart.");
+});
+
 test("after the tool-round cap Claude must answer without tools", async () => {
   const calls = Array.from({ length: MAX_TOOL_ROUNDS }, (_, index) => toolCall(`t${index}`, "search_catalogue", { queries: ["torch"] }));
   const { client, bodies } = fakeClient([...calls, answer({ message: "Here are the torches." })]);

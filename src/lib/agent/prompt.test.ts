@@ -113,6 +113,8 @@ test("Claire asks for all her searches at once and doesn't echo the customer's b
 
 test("Claire points to sales once, stops asking for a photo that doesn't arrive, and answers whether they can buy online", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Say this once"));
+  // Only repeats are limited: the first request for a person or clear frustration still gets the PDF.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("After that, mention the PDF again only when"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("If it still doesn't arrive, stop asking for the photo"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- Buying online: answer the question directly"));
 });

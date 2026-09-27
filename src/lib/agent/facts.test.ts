@@ -48,6 +48,12 @@ test("retryOnce still retries a failed call once", async () => {
   assert.equal(tries, 2);
 });
 
+test("retryOnce doesn't retry SEARCH_BUSY: the search already waited its turn", async () => {
+  let tries = 0;
+  await assert.rejects(retryOnce(async () => { tries += 1; throw new Error("SEARCH_BUSY"); }), /SEARCH_BUSY/);
+  assert.equal(tries, 1);
+});
+
 test("a live check overwrites price and stock from the store page", async () => {
   const torch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 30 });
   const checked = await liveCheck(torch, fakeDeps([torch], { "970S": { price_ex_gst: 31.31, available_quantity: 115 } }));

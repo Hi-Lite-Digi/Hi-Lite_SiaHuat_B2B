@@ -280,6 +280,7 @@ export async function runAgentTurn(input: {
   const earlier: EarlierTurns = {
     cardSets: picks.replies.map((reply) => reply.cards.map((card) => card.code)),
     previousMessage: picks.replies.at(-1)?.text ?? null,
+    replies: picks.replies.map((reply) => reply.text),
     currentText: searchText ?? "",
     // Links already in the chat may be given again: Claire's replies and their card notes, or a link the customer pasted.
     links: [...request.history.map((item) => item.content), searchText ?? ""].flatMap(storeLinks),
