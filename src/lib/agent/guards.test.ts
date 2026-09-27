@@ -225,6 +225,23 @@ test("reserved signs, Chinese product words, a leading condition and a plain 'no
   }
 });
 
+test("'Let's put aside' is not a reservation claim", () => {
+  const text = "Let's put aside the lids for now and look at the pots.";
+  assert.deepEqual(customerMessage(text), { message: text, showContact: false });
+});
+
+test("a 'no rush' opener or a condition that doesn't wait on sales still leaves a claim", () => {
+  for (const text of [
+    "No rush — your 2 units are on hold for you.", "There's no rush: your 2 are on hold for you.",
+    "Yes, no issue - your 2 units are already reserved.", "No MOQ needed and they're reserved for you.",
+    "Once you add them, they are reserved for you.", "After adding, your order is confirmed.",
+    "Once added, they're reserved for you.", "If you need more, your 2 are reserved.",
+  ]) {
+    assert.deepEqual(customerMessage(text), { message: "You can reach our sales team directly below.", showContact: true }, text);
+    assert.ok(styleOf(text).includes(RESERVATION_ISSUE), text);
+  }
+});
+
 test("an empty message stays empty and turns nothing on", () => {
   for (const text of ["", "   "]) assert.deepEqual(customerMessage(text), { message: "", showContact: false }, JSON.stringify(text));
 });

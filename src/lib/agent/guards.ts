@@ -71,14 +71,14 @@ const danglingCurrency = /(?:^|[^\w$])(?:SG?)?\$(?!\s?\d)/;
 export const DANGLING_CURRENCY_ISSUE = "A price is missing after the $ sign. Give the exact price from a tool result in this turn, or rephrase without a price.";
 
 // A reservation claim only counts with no negation or condition before it, and no condition right after it, in the same clause.
-// A sentence that opens with a condition ("Once sales confirm, ...") is conditional throughout. "No worries" negates nothing,
-// and 不锈 (stainless) and 不粘 (non-stick) are product words, not negations.
-const negatedBefore = /\b(?:no(?!\s+(?:problem|worries)\b)|not|never|nothing|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b[^.!?,;]{0,30}$|^\s*(?:once|when|after|before|if|until)\b|不(?![锈粘])|[没未]|无法/i;
+// A sentence that opens with a condition waiting on sales ("Once sales confirm, ...") is conditional throughout. A bare "no" only
+// negates when it opens the claim's subject ("No stock is reserved"), not "No rush: ...". 不锈 (stainless) and 不粘 (non-stick) are product words.
+const negatedBefore = /\b(?:not|never|nothing|no longer|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b[^.!?,;]{0,30}$|\bno(?!\s+(?:problem|worries)\b)\s+[^\s.!?,;:]+(?:\s+[^\s.!?,;:]+)?\s*$|^\s*(?:once|when|after|before|if|until)\b[^.!?]*\b(?:sales|confirm\w*)\b|不(?![锈粘])|[没未]|无法/i;
 const conditionAfter = /^[^.!?]{0,40}\b(?:when|once|after|if)\b/i;
 // "reserved" also names products (reserved signs, table cards and plaques); 保留 and 锁定 alone are product words too.
 const reserved = String.raw`reserved(?!\s+(?:table\s+)?(?:signs?|cards?|plaques?|stands?))`;
 const reservationWords = new RegExp(String.raw`\b(?:${reserved}|on hold|set aside|put aside|held for you|booked for you|locked in for you)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|预留|(?:已|已经|为您|给您|帮您)(?:保留|锁定)|订单已(?:确认|提交)`, "i"); // style tier
-const reservationClaim = new RegExp(String.raw`(?:\b(?:is|are|been|was|were|will be)|['’](?:re|s|ll be))\s+(?:already\s+|now\s+|all\s+)?(?:${reserved}|on hold|set aside|put aside)\b|\b(?:I|we)(?:'ve| have)\s+(?:reserved|set aside|put\b[^.!?]{0,25}\bon hold)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|已(?:为您|经)?(?:预留|保留|锁定)|订单已(?:确认|提交)`, "i"); // remove tier: no bare "held"
+const reservationClaim = new RegExp(String.raw`(?:\b(?:is|are|been|was|were|will be)|(?<!\blet)['’](?:re|s|ll be))\s+(?:already\s+|now\s+|all\s+)?(?:${reserved}|on hold|set aside|put aside)\b|\b(?:I|we)(?:'ve| have)\s+(?:reserved|set aside|put\b[^.!?]{0,25}\bon hold)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|已(?:为您|经)?(?:预留|保留|锁定)|订单已(?:确认|提交)`, "i"); // remove tier: no bare "held"
 const claims = (sentence: string, pattern: RegExp) => {
   const m = pattern.exec(sentence);
   return !!m && !negatedBefore.test(sentence.slice(0, m.index)) && !conditionAfter.test(sentence.slice(m.index + m[0].length));
