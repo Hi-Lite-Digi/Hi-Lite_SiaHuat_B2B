@@ -74,6 +74,9 @@ test("a price in 'the 5 dollar one' or 'the 1.2k one' form picks the card with t
   assert.equal(chose("MX1000XTXEE", 2, blenders), true);
   assert.equal(chose("MX1100XTXEE", 2, blenders), false);
   assert.equal(chose("CB15K", 2, blenders), false);
+  const comma = { texts: [said("i take the $1,220 one, 2 unit", 1)], replies: [reply([waring2l, waring64, waringGallon])] };
+  assert.equal(chose("MX1000XTXEE", 2, comma), true);
+  assert.equal(chose("MX1100XTXEE", 2, comma), false);
 });
 
 test("a size picks the card with that size", () => {
@@ -127,10 +130,17 @@ test("a yes to the only card in Claire's previous reply picks it", () => {
   const strainers = { texts: [said("ok take tis one 1pc. the 5 dollar one dun want liao", 2)], replies: [reply([cheapStrainer]), reply([meshStrainer], "It holds noodles. Want me to add 1?")] };
   assert.equal(chose("13122-0304", 1, strainers), true);
   assert.equal(chose("HL00700100301-N", 1, strainers), false);
-  for (const ask of ["How many do you need?", "Want me to add the 1 available?"]) {
+  for (const ask of ["How many do you need?", "Want me to add the 1 available?", "What quantity do you need?"]) {
     for (const [text, quantity] of [["4 can", 4], ["1 lor", 1], ["2 please", 2]] as const) {
       assert.equal(chose("BTS-8026D", quantity, { texts: [said(text, 2)], replies: [greeting, reply([safico], ask)] }), true, `${ask} ${text}`);
     }
+  }
+});
+
+test("'no rush' or 'no problem' doesn't turn a card down", () => {
+  const torches = [greeting, reply([blowtorch, safico])];
+  for (const text of ["the safico 2 pcs no rush", "no problem take the safico 2"]) {
+    assert.equal(chose("BTS-8026D", 2, { texts: [said(text, 2)], replies: torches }), true, text);
   }
 });
 
@@ -167,7 +177,9 @@ test("a complaint or a question that names a card is not a pick", () => {
   assert.equal(chose("P-16HD", 1, { texts: [said("which one better for wok frying", 2)], replies: [greeting, reply([wok, siliconeTong])] }), false);
   assert.equal(chose("HMP30.A0-WH", 2, { texts: [said("the kenwood hand mixer got whisk?", 2)], replies: [greeting, reply([handMixer, standMixer])] }), false);
   assert.equal(chose("MX010", 1, { texts: [said("hmm 500 dollar for home baking", 2)], replies: [greeting, reply([mightyMixer])] }), false);
-  assert.equal(chose("13128-0401", 1, { texts: [said("Colander too big la.", 2)], replies: [greeting, reply([skimmer])] }), false);
+  // c08-stress T3-T4: "wat" starts a question.
+  const zyliss = [greeting, reply([scissors]), reply([card("SB3038", "Stainless Steel Household Kitchen Scissors L21cm, Shibazi", 7.25), card("E910077", "Zyliss Polypropylene Basic Household Scissors Basic, Gray", 22.84)]), reply([], "Links.")];
+  assert.equal(chose("E910077", 2, { texts: [said("zyliss link cannot open leh", 4, 0), said("send me all the link la i compare. wat diff btw the 2 zyliss", 3, 1)], replies: zyliss }), false);
   assert.equal(chose("MX1000XTXEE", 1, { texts: [said("below 1k", 2)], replies: [greeting, reply([waring64, mika])] }), false);
   assert.equal(chose("Q1930", 4, { texts: [said("budget 5 dollar only per plate, need 4", 2)], replies: [greeting, reply([luminarc, carrara])] }), false);
 });
@@ -201,7 +213,7 @@ test("an ok or a number is not a yes when it hedges, asks, or the reply didn't a
   }
   const stool2 = reply([stool], "Meanwhile the closest in-stock option I have is still the Vicando 2-step folding stool in grey.");
   assert.equal(chose("FSS", 1, { texts: [said("1 unit per outlet opening", 2)], replies: [greeting, stool2] }), false);
-  for (const [text, quantity] of [["4 can", 4], ["2", 2]] as const) {
+  for (const [text, quantity] of [["4 can", 4], ["2", 2], ["does it come with 2 blades", 2], ["is it 2 years warranty", 2]] as const) {
     assert.equal(chose("MX130", quantity, { texts: [said(text, 2)], replies: offered }), false, text);
   }
 });
@@ -226,6 +238,9 @@ test("a product already on the enquiry counts as picked", () => {
 
 test("a typed item code picks the product, but not in a clause that turns it down", () => {
   assert.equal(chose("BTS-8026D", 2, { texts: [said("2 pcs of bts-8026d", 1)], replies: [greeting] }), true);
+  for (const text of ["Can I get 10 pcs of BTS-8026D?", "BTS-8026D x10 got stock or not"]) {
+    assert.equal(chose("BTS-8026D", 10, { texts: [said(text, 1)], replies: [greeting] }), true, text);
+  }
   assert.equal(chose("BTS-8026D", 2, { taps: [tap("BTS-8026D", 2, 1)], texts: [said("dont want BTS-8026D, 2 of the 970S", 3)], replies: [greeting, reply([blowtorch, safico]), reply([])] }), false);
 });
 
@@ -245,12 +260,23 @@ test("the pick evidence is read from the chat history and this turn's event", ()
   assert.equal(picks.replies[2].text, "How many?");
 });
 
-test("the pick evidence keeps a tapped card from this turn, a photo caption, and only the newest texts", () => {
+test("the pick evidence keeps a tapped card from this turn, a photo caption, and texts back to the tap window", () => {
   const tapped = pickEvidence([{ role: "user", content: "[photo] (no caption)" }, { role: "user", content: "[photo] this one got?" }], { type: "select_product", stockId: "970S" });
   assert.deepEqual(tapped.taps, [{ code: "970S", age: 0, seen: 0 }]);
   assert.deepEqual(tapped.texts.map((item) => item.text), ["this one got?"]);
-  const many = pickEvidence(["a", "b", "c", "d", "e"].map((content) => ({ role: "user" as const, content })), { type: "text", text: "f" });
-  assert.deepEqual(many.texts.map((item) => item.text), ["f", "e", "d", "c"]);
+  const many = pickEvidence(["a", "b", "c", "d", "e", "f", "g"].map((content) => ({ role: "user" as const, content })), { type: "text", text: "h" });
+  assert.deepEqual(many.texts.map((item) => item.text), ["h", "g", "f", "e", "d", "c"]);
+});
+
+test("a photo with no caption still counts as a customer message", () => {
+  const history = [
+    { role: "user" as const, content: "[tap] Picked: CASSETTE GAS TORCH BURNER SAFICO PRO (code BTS-8026D)" },
+    { role: "assistant" as const, content: "How many do you need?" },
+    { role: "user" as const, content: "[photo] (no caption)" },
+  ];
+  const image = { dataUrl: "data:image/jpeg;base64,AA==", mimeType: "image/jpeg" as const, name: "photo.jpg" };
+  assert.deepEqual(pickEvidence(history.slice(0, 2), { type: "image", image }).taps, [{ code: "BTS-8026D", age: 1, seen: 0 }]);
+  assert.deepEqual(pickEvidence(history, { type: "text", text: "4" }).taps, [{ code: "BTS-8026D", age: 2, seen: 0 }]);
 });
 
 test("hits and pointedCards find the words, sizes and price a text gives for a card", () => {
@@ -259,6 +285,7 @@ test("hits and pointedCards find the words, sizes and price a text gives for a c
   assert.deepEqual([...hits(luminarc, "budget $5 only")], []);
   assert.deepEqual(pointedCards("the 16 inch one", [tong12, tong16]).map((item) => item.code), ["UT16HR"]);
   assert.deepEqual(pointedCards("the tong", [tong12, tong16]), []);
+  assert.deepEqual(pointedCards("the $1,220 one", [waring2l, waring64]).map((item) => item.code), ["MX1000XTXEE"]);
 });
 
 test("pickedCodes lists the products the customer picked that are not on the enquiry yet", () => {
@@ -275,4 +302,105 @@ test("the steak tong accepted two messages ago is still the pick when the next r
   };
   assert.equal(chose("ST-15", 3, picks), true);
   assert.equal(chose("2564L", 3, picks), false);
+});
+
+test("a refusal older than the newest 4 texts still vetoes the tap it came after", () => {
+  const history = [
+    { role: "assistant" as const, content: "Two.\n[cards shown: 2527-001 STAINLESS STEEL DINNER KNIFE ($1.10); 8455-16 CHEF'S KNIFE 16cm w/WIDE BLADE ($32.94)]" },
+    { role: "user" as const, content: "[tap] Picked: STAINLESS STEEL DINNER KNIFE (code 2527-001)" },
+    { role: "assistant" as const, content: "How many do you need?" },
+    { role: "user" as const, content: "knife dont need, i take the plates first" },
+    ...["show me plates", "the big one", "how much ah"].flatMap((content) => [{ role: "assistant" as const, content: "Sure." }, { role: "user" as const, content }]),
+    { role: "assistant" as const, content: "It is $5." },
+  ];
+  const picks = pickEvidence(history, { type: "text", text: "4 pcs" });
+  assert.equal(customerChose("2527-001", 4, picks, []), false);
+  assert.deepEqual(pickedCodes(picks, []), []);
+});
+
+test("a pick word in another clause doesn't let a text name a card from an older reply", () => {
+  // c08-stress T7: "i dun wan kitchen" turns the Shibazi down; its "wan" is not a pick of it.
+  const note = (cards: string) => `\n[cards shown: ${cards}]`;
+  const history = [
+    { role: "assistant" as const, content: "Hi, I'm Claire." },
+    { role: "user" as const, content: "scissor got?" },
+    { role: "assistant" as const, content: "A few types." + note("ST-26 -TS- S/S KITCHEN SCISSOR 20cm, JPN ($15.50); 9300T01 Atlantic Chef Detachable Scissors ($27.43); K014 CRAB SCISSORS ($3.58)") },
+    { role: "user" as const, content: "not for food la. house use, cut paper cut box tht kind" },
+    { role: "assistant" as const, content: "Cheaper options." + note("SB3038 Stainless Steel Household Kitchen Scissors L21cm, Shibazi ($7.25); E910077 Zyliss Polypropylene Basic Household Scissors Basic, Gray ($22.84)") },
+    { role: "user" as const, content: "zyliss link cannot open leh" },
+    { role: "assistant" as const, content: "Links again." + note("E910076 Zyliss Stainless Steel Household Scissors ($29.27); E910077 Zyliss Polypropylene Basic Household Scissors Basic, Gray ($22.84)") },
+    { role: "user" as const, content: "nvm la zyliss too ex. shibazi tht one say kitchen leh, i dun wan kitchen. got other normal one not so ex?" },
+    { role: "assistant" as const, content: "This one is for the house." + note("993-003-RD Zebra Multi-Purpose Scissors 22.5cm ($19.17)") },
+    { role: "user" as const, content: "[tap] Picked: Zebra Multi-Purpose Scissors 22.5cm (code 993-003-RD)" },
+    { role: "assistant" as const, content: "Good choice. How many do you need?" },
+  ];
+  const picks = pickEvidence(history, { type: "text", text: "2 lah. this link better can open ah" });
+  assert.equal(customerChose("SB3038", 2, picks, []), false);
+  assert.deepEqual(pickedCodes(picks, []), ["993-003-RD"]);
+  // c10-persona T5: "i want for cooking" is not a pick of the serving tong named in another clause.
+  const servingTong = (code: string, size: string, price: number) => card(code, `Stainless Steel Serving Tongs ${size}`, price);
+  const tongs = [
+    greeting, reply([servingTong("488901", "L18cm", 3.21), servingTong("488902", "L23cm", 3.58)]),
+    reply([servingTong("488903", "L30cm", 4.13), card("01822302", "Piazza Nylon Perforated Kitchen & BBQ Tong L23cm", 36.61)]),
+    reply([card("UT09L", "Stainless Steel Utility Tong 9\"", 2.02), tong12, card("2564L", "Stainless Steel Utility Tong 16\"", 3.85)]),
+    reply([card("K038", "SNAIL TONG", 2.75), card("UT12L", "S/S UTILITY TONG 12\"", 2.94), steakTong]), reply([steakTong], "Good pick. How many do you need?"),
+  ];
+  const texts = [
+    said("need 4 pcs can?", 6, 0), said("Stainless Steel Steak Tong 15\"", 5, 1),
+    said("only 3? i said show me all leh. everything u got for cooking tong", 4, 2), said("these all serving tong leh. i want for cooking, stainless steel. show me all", 3, 3),
+  ];
+  assert.equal(chose("488903", 4, { texts, replies: tongs }), false);
+  assert.equal(chose("ST-15", 4, { texts, replies: tongs }), true);
+});
+
+test("c06-persona T11: the tapped strainer is the pick, not the cards the earlier complaint and wish describe", () => {
+  const sizedSkimmer = (code: string, size: string, price: number) => card(code, `S/S FINE MESH SKIMMER Ø${size}cm`, price);
+  const deepCck = card("197-55", "CCK Stainless Steel Deep Noodle Strainer With Stainless Steel Handle 5.5\"", 25.5);
+  const hl165 = card("HL165", "STAINLESS STEEL FINE MESH OIL STRAINER WITH BAMBOO HANDLE", 11.01);
+  const replies = [
+    greeting, reply([card("193012", "S/S U-SHAPE NOODLE STRAINER Ø13xH15cm", 16.97)]),
+    reply([card("V-507", "-TS- S/S RD COLANDER 36cm", 46.7), card("821", "PLASTIC ROUND COLANDER", 3.67), card("2166-BL", "PLASTIC RECTANGLE COLANDER", 7.52)]),
+    reply([meshStrainer, sizedSkimmer("13128-0403", "19", 3.21), skimmer]),
+    reply([skimmer, sizedSkimmer("13128-0403", "19", 3.21), sizedSkimmer("13128-0405", "24", 5.05)]),
+    reply([deepCck, card("HL140", "S/S CHINESE STRAINER WITH BAMBOO HANDLE Ø11\"", 51.83), card("HL177", "(26-00947) S/S NOODLE STRAINER SQ HOLES WITH BAMBOO HANDLE Ø9\"", 29.82)]),
+    reply([skimmer], "Want this one?"), reply([skimmer], "Want me to show those again?"),
+    reply([oilStrainer, deepStrainer, oilStrainer9]), reply([card("HL174", "STAINLESS STEEL NOODLE STRAINER SQUARE HOLES WITH BAMBOO HANDLE", 16.06)]),
+    reply([hl165, card("HL166", "STAINLESS STEEL FINE MESH OIL STRAINER WITH BAMBOO HANDLE", 13.94)], "Which one?"), reply([], "Good pick. How many do you need?"),
+  ];
+  const picks = {
+    taps: [tap("HL165", 11, 1)],
+    texts: [
+      said("1 enough. For home use only", 12, 0),
+      said("This one square hole leh not fine mesh. I say already fine mesh. The maggi small small bits will fall out", 10, 2),
+      said("22 dollar still ex leh. Got smaller one cheaper or not, small small one enough already", 9, 3),
+      said("Colander too big la. Want the one got handle, deep deep one, pour maggi inside then shake shake the water. Fine mesh. Not so ex", 8, 4),
+    ],
+    replies,
+  };
+  assert.equal(chose("HL165", 1, picks), true);
+  for (const code of ["V-507", "197-55", "13128-0401"]) assert.equal(chose(code, 1, picks), false, code);
+  // Known gap: at T7 itself "Fine mesh." names the skimmer Claire had just shown; only the quantity check refuses it then.
+});
+
+test("turning down one card doesn't veto a card that shares fewer of its words", () => {
+  const picks = { taps: [tap("2527-002", 2, 2)], texts: [said("4", 4, 0), said("the dinner knife no need", 3, 1)], replies: [greeting, reply([knife, fork, spoon]), reply([], "How many? Want the knife too?"), reply([], "Ok. How many forks do you need?")] };
+  assert.equal(chose("2527-002", 4, picks), true);
+  assert.equal(chose("2527-001", 4, picks), false);
+});
+
+test("a later card that shares only a material word with a tapped card doesn't void the tap", () => {
+  const bowl = card("BWL-30", "Stainless Steel Mixing Bowl 30cm", 8);
+  const picks = { taps: [tap("UT16HR", 2, 1)], texts: [said("4", 3, 0)], replies: [greeting, reply([tong16]), reply([bowl], "Here's a bowl. How many tongs do you need?")] };
+  assert.equal(chose("UT16HR", 4, picks), true);
+});
+
+test("a long run of spaces is read quickly", () => {
+  const text = `1${" ".repeat(2000)}z`;
+  const asked = reply([safico], "How many do you need?");
+  const picks: PickEvidence = { taps: [], texts: [said(text, 4, 0), said(text, 3, 1), said(text, 2, 2)], replies: [greeting, asked, asked, asked] };
+  const start = performance.now();
+  customerChose("BTS-8026D", 1, picks, []);
+  pickedCodes(picks, []);
+  const took = performance.now() - start;
+  assert.ok(took < 100, `took ${Math.round(took)} ms`);
 });

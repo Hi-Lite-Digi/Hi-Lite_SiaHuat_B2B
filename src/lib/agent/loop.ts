@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
-import type { AgentReply, AgentRequest } from "./contract";
+import { CHIP_PREFIX, TAP_PREFIX, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
@@ -31,8 +31,6 @@ const FALLBACK_RESERVE_MS = 10_000;
 const VERIFY_FLOOR_MS = 1_000;
 const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long; with less left, the tidied answer is sent
 const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
-const TAP_PREFIX = "[tap]";
-const CHIP_PREFIX = "[chip]";
 
 const finalSchema: Record<string, unknown> = {
   type: "object",

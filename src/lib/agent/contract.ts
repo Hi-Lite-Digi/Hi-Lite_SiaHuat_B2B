@@ -67,6 +67,10 @@ export function nextEnquiry(current: AgentReply["enquiry"], reply: AgentReply["e
   return { lines, totals: { ...totals, grandTotal: Math.round(totals.grandTotal * 100) / 100 } };
 }
 
+/** How the browser marks a card tap and a chip tap in the chat history. */
+export const TAP_PREFIX = "[tap]";
+export const CHIP_PREFIX = "[chip]";
+
 /** A product card as noted in the chat history. price is null when the card showed no checked price. */
 export type ShownCard = { code: string; name: string; price: number | null; link: string | null };
 
