@@ -559,10 +559,16 @@ test("a claim that nothing fits the budget needs a complete priced search this t
     // A backed budget claim isn't judged again as a "we don't have it".
     assert.deepEqual(absenceOf(message, [search({ maxPrice: 20, complete: true })]), [], message);
   }
-  for (const message of ["No blenders under the S$100 mark, sorry.", "There's nothing in that range under that amount.", "We don't have anything below 50 dollars."]) {
+  for (const message of [
+    "No blenders under the S$100 mark, sorry.", "There's nothing in that range under that amount.", "We don't have anything below 50 dollars.",
+    "Nothing below your $50 budget.", "Nothing under your S$80 budget in that size.", "Nothing within your S$50 budget, sorry.",
+    "Nothing within $50 in that length.",
+  ]) {
     assert.equal(claimsOf(message).length, 1, message);
   }
-  for (const message of ["No Damascus blades - none turned up under that name.", "Nothing under that name came up in the catalogue."]) {
+  for (const message of [
+    "No Damascus blades - none turned up under that name.", "Nothing under that name came up in the catalogue.", "No delivery within 3 days is promised.",
+  ]) {
     assert.deepEqual(claimsOf(message), [], message);
   }
 });

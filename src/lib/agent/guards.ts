@@ -238,9 +238,11 @@ const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that" or "couldn't find the photo" is not about a product.
 const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price))`;
 const ABSENT = new RegExp(String.raw`\b(?:we|i|sia\s+huat)\s+(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not)\s+(?:carry|stock|sell)\b|\b(?:we|i)\s+(?:don['’]?t|do\s+not)\s+have\s+(?:a|an|any|another|other|bundled|boxed|pre[- ]?\w+|such)\b${NOT_A_PRODUCT}|\bnot\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b${NOT_A_PRODUCT}|\b(?:i['’]?m|am)\s+not\s+finding\b|\bno\s+(?:direct\s+|close\s+|similar\s+)?(?:substitute|alternative|replacement)s?\b(?!\s+needed)|\bcan['’]?t\s+offer\s+(?:a|an|any)\s+(?:substitute|alternative)|\bnone\s+of\s+our\b`, "i");
-// "Under" and "below" only count before a price or a budget: "none turned up under that name" is not about price (runs-new2 c01-B T9).
-const PRICE_LIMIT = String.raw`(?:the\s+)?(?:S?\$\s?\d|\d|(?:your|that|the)\s+(?:budget|price|amount)\b|budget\b)`;
-const BUDGET = new RegExp(String.raw`\b(?:no(?:ne)?|nothing)\s+(?:[\w-]+\s+){0,6}(?:cheaper\b|less\s+expensive\b|(?:under|below)\s+${PRICE_LIMIT}|within\s+(?:your|that|the)\s+(?:budget|price)\b)|\b(?:don['’]?t|do\s+not)\s+have\s+(?:[\w-]+\s+){0,6}(?:in\s+that|under|below|within)\s+(?:(?:[\w-]+\s+){0,2}(?:budget|price)|${PRICE_LIMIT})`, "i");
+// "Under", "below" and "within" only count before a price or a budget: "none turned up under that name" is not about price
+// (runs-new2 c01-B T9), and a bare number after "within" isn't a price ("within 3 days").
+const BUDGET_WORD = String.raw`(?:(?:your|that|the)\s+(?:S?\$\s?[\d,.]+\s+)?(?:budget|price|amount)\b|budget\b)`;
+const PRICE_LIMIT = String.raw`(?:the\s+)?(?:S?\$\s?\d|\d|${BUDGET_WORD})`;
+const BUDGET = new RegExp(String.raw`\b(?:no(?:ne)?|nothing)\s+(?:[\w-]+\s+){0,6}(?:cheaper\b|less\s+expensive\b|(?:under|below)\s+${PRICE_LIMIT}|within\s+(?:S?\$\s?\d|${BUDGET_WORD}))|\b(?:don['’]?t|do\s+not)\s+have\s+(?:[\w-]+\s+){0,6}(?:in\s+that|under|below|within)\s+(?:(?:[\w-]+\s+){0,2}(?:budget|price)|${PRICE_LIMIT})`, "i");
 // "We don't sell mangoes - we're a kitchen and F&B equipment supplier" already says what Sia Huat supplies, as the prompt asks;
 // "F&B-grade vacuum sealers" is product talk.
 const SAYS_WHAT_WE_SUPPLY = /\bF&B\s+(?:equipment|supplies|supplier|smallwares|needs)\b|\b(?:equipment|tableware)\s+supplier\b/i;
