@@ -43,6 +43,13 @@ test("product facts carry the dimensions and a trimmed description to cite", () 
   assert.equal(productFact({ product: product({ stock_id: "B" }), verified: true }).description, null);
 });
 
+test("inch marks in names and sizes are shown as ″, so Claude never copies a raw double quote", () => {
+  const fact = productFact({ product: product({ stock_id: "A", name: `CCK Iron Frying Wok H/Duty 18"`, size: `18"` }), verified: true });
+  assert.equal(fact.name, "CCK Iron Frying Wok H/Duty 18″");
+  assert.equal(fact.size, "18″");
+  assert.ok(Object.values(fact).every((value) => typeof value !== "string" || !value.includes(`"`)));
+});
+
 test("an unverified product carries no price, so Claude cannot quote it", () => {
   const item = product({ stock_id: "A", list_price: 12 });
   assert.equal(productFact({ product: item, verified: false }).price_ex_gst, null);

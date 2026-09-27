@@ -91,7 +91,8 @@ export const agentTools: Anthropic.Tool[] = [
 ];
 
 const searchInput = z.object({
-  queries: z.array(z.string().trim().min(1).max(80)).min(1).max(3),
+  // A ″ copied from the product facts still has to match catalogue names such as 18".
+  queries: z.array(z.string().trim().min(1).max(80).transform((q) => q.replace(/[″“”]/g, '"'))).min(1).max(3),
   category: z.string().trim().min(1).max(80).nullish(),
   max_price: z.number().positive().nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),

@@ -51,6 +51,10 @@ test("the example replies in the Choosing rule pass the reply style guard", () =
   }
 });
 
+test("Claire never types a raw double quote, which would cut her reply off", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Never type the double-quote character"));
+});
+
 test("Claire gives only Sia Huat's sales contact, never another phone number or email", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked for a phone number or email, give exactly these and set show_contact true. Never give any other phone number, email or address."));
   assert.ok(CLAIRE_AGENT_PROMPT.includes(SALES_CONTACT.phone));

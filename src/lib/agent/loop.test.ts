@@ -122,6 +122,25 @@ test("a style problem that survives the repair is tidied and sent, not replaced 
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /plain, friendly customer language/);
 });
 
+test("a cut-off reply is sent back for one repair", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "We don't carry a boxed" }),
+    answer({ message: "We don't sell boxed dining sets, only single pieces." }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.equal((bodies[1].tool_choice as { type: string }).type, "none");
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /stops mid-sentence/);
+  assert.equal(reply.message, "We don't sell boxed dining sets, only single pieces.");
+});
+
+test("a cut-off that survives the repair loses only its unfinished sentence", async () => {
+  const { client } = fakeClient([answer({ message: "Sure. We don't carry a boxed" }), answer({ message: "Sure. We don't carry a boxed" })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Sure.");
+});
+
 test("a made-up card next to a style problem still gets the backup reply after the repair", async () => {
   const { client } = fakeClient([
     answer({ message: "Noted. Try this.", card_ids: ["FAKE-1"] }),

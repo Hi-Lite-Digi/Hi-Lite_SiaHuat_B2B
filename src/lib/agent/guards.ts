@@ -52,6 +52,24 @@ export function removeAmounts(message: string, amounts: string[]) {
   return message.replace(moneyPattern, (match) => (amounts.includes(match) ? "the listed price" : match));
 }
 
+/** Sentences of a reply. Splits after . ! ? only before a capital, digit, quote, bracket, bullet or $ (so "approx. 5L" and "$5.69" stay whole), after 。！？, and at line breaks. */
+export const sentences = (message: string) => message.split(/(?<=[.!?])\s+(?=[A-Z0-9"'(\-•*$])|(?<=[。！？])|\n+/).map((s) => s.trim()).filter(Boolean);
+
+/** The message without the sentences `drop` picks; other text and line breaks are kept. */
+export function removeSentences(message: string, drop: (sentence: string) => boolean) {
+  let out = message;
+  for (const sentence of sentences(message)) if (drop(sentence)) out = out.replace(sentence, "");
+  return out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// A reply cut off where Claude typed a raw " : with structured output that quote ends the message string (exam 2: 5 replies).
+const properEnding = /(?:[.!?。！？…:)\]}"'”’»″′～~]|\p{Script=Han}|\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}\p{Extended_Pictographic}]*|https?:\/\/\S+|(?:\$|S\$|SG\$|SGD\s?)\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
+const listLine = /(?:^|\n)[ \t]*(?:[-•*]|\d{1,2}[.)])[ \t]+[^\n]+$/;
+export const endsMidSentence = (message: string) => message.trim().length > 0 && !properEnding.test(message.trim()) && !listLine.test(message.trim());
+export const MID_SENTENCE_ISSUE = "Your message stops mid-sentence. A double-quote character inside the message ends it early: write the whole message again without the \" character (inches as 16in, quoted words in single quotes).";
+const danglingCurrency = /(?:^|[^\w$])(?:SG?)?\$(?!\s?\d)/;
+export const DANGLING_CURRENCY_ISSUE = "A price is missing after the $ sign. Give the exact price from a tool result in this turn, or rephrase without a price.";
+
 /** Earlier turns from the chat history: the card codes of each Claire reply, her previous message, and what the customer just sent. */
 export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
@@ -85,20 +103,28 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   // Chips that break the rules are dropped rather than sent back. A dropped chip takes any amount in it along.
   const chips = answer.chips.filter(chipAllowed).slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
-  if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools.`);
+  if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
+  if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
+  if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
   style.push(...repetitionIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }
 
 /** Light clean-up for a reply sent with style problems left after the repair. */
 export function tidyMessage(message: string) {
-  return message
+  let tidied = message
     .replace(/^\s*Noted\b/i, "Got it")
     .replace(/\b(?:show_contact|card_ids)\b/g, "")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/[ \t]+([.,!?])/g, "$1")
     .trim();
+  tidied = removeSentences(tidied, (s) => danglingCurrency.test(s)) || tidied;
+  if (endsMidSentence(tidied)) {
+    const last = [...tidied.matchAll(/[.!?](?=\s)|[。！？]/g)].at(-1); // a decimal point is not a sentence end
+    if (last?.index) tidied = tidied.slice(0, last.index + 1);
+  }
+  return tidied;
 }
 
 // honestManualHandoff appends this after removing a claim; the reply's contact block says it better.

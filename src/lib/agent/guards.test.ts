@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
-import { MONEY_ISSUE_PREFIX, allowedCents, customerMessage, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts } from "./guards";
+import {
+  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, allowedCents, customerMessage, endsMidSentence, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
+} from "./guards";
 import { product } from "./testing";
 
 const seen = new Map<string, CheckedProduct>([
@@ -64,6 +66,46 @@ test("the light clean-up swaps a leading Noted and drops JSON field names", () =
   assert.equal(tidyMessage("Noted: 2 torches."), "Got it: 2 torches.");
   assert.equal(tidyMessage("Noted, adding them now."), "Got it, adding them now.");
   assert.equal(tidyMessage("I set show_contact so you can reach sales. card_ids below."), "I set so you can reach sales. below.");
+});
+
+const styleOf = (message: string) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, seen, allowed).style;
+
+test("a reply that stops mid-sentence is a style issue", () => {
+  for (const message of [
+    "Congrats on the new place! We don't carry a boxed",
+    "For that",
+    "Here's the Rooster Series Round Plate 6",
+    "Those are single pieces, so a",
+    "4 x UT16HR at $5.69 each. If you can just say",
+  ]) {
+    assert.equal(endsMidSentence(message), true, message);
+    assert.ok(styleOf(message).includes(MID_SENTENCE_ISSUE), message);
+  }
+});
+
+test("normal endings are not mid-sentence", () => {
+  for (const message of [
+    "Here you go.", "Sure 👍", "OK 👌🏻", "Thanks 👨‍🍳", "好的，已加入。", "好的", "Total: $22.76", "Got it. Total: SGD 22.76",
+    "Link: https://store.siahuat.com/product/1", "Options:\n- A, $5\n- B, $6", "(ex GST)", "Yes, the 18″", "See you ~", `the 16" one"`,
+  ]) {
+    assert.equal(endsMidSentence(message), false, message);
+    assert.ok(!styleOf(message).includes(MID_SENTENCE_ISSUE), message);
+  }
+});
+
+test("a bare $ is a style issue; prices and SGD words are not", () => {
+  assert.ok(styleOf("197-55 is $ - let me confirm that one.").includes(DANGLING_CURRENCY_ISSUE));
+  for (const message of ["$16.97", "S$ 16.97", "SGD 16.97", "16.97 SGD", "All prices are in SGD, ex GST.", "US$5", "新币16"]) {
+    assert.ok(!styleOf(message).includes(DANGLING_CURRENCY_ISSUE), message);
+  }
+});
+
+test("tidyMessage drops an unfinished last sentence and a sentence with a bare $", () => {
+  assert.equal(tidyMessage("Congrats on the new place! We don't carry a boxed"), "Congrats on the new place!");
+  assert.equal(tidyMessage("For that"), "For that");
+  assert.equal(tidyMessage("It's $5.69 and the"), "It's $5.69 and the");
+  assert.equal(tidyMessage("Checked. 197-55 is $ - let me confirm."), "Checked.");
+  assert.equal(tidyMessage("Done! 2 torches added"), "Done!"); // a rare loss: the unfinished-looking line was complete
 });
 
 test("a card set already shown twice is flagged unless the customer asks for it again", () => {

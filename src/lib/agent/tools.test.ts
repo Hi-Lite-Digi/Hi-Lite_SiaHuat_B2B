@@ -256,6 +256,12 @@ test("clearing checks the texts that may ask for it, which include a tapped chip
   assert.equal(cleared.isError, false);
 });
 
+test("a query with the ″ inch sign Claude copied from the facts still matches a catalogue name with a raw double quote", async () => {
+  const wok = product({ stock_id: "WOK18", name: `WOK 18"` });
+  const outcome = await runTool("search_catalogue", { queries: ["wok 18″"] }, context(fakeDeps([wok])));
+  assert.deepEqual((JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> }).products.map((item) => item.stock_id), ["WOK18"]);
+});
+
 test("a one-character search such as 刀 is accepted", async () => {
   const outcome = await runTool("search_catalogue", { queries: ["刀"] }, context());
   assert.equal(outcome.isError, false);

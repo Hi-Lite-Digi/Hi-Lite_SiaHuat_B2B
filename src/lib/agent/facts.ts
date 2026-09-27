@@ -90,14 +90,17 @@ export function storeProductUrl(text: string): string | null {
   return id ? `https://store.siahuat.com/product/${id}` : null;
 }
 
+// Claude copies names and sizes into its reply; a raw " there would end the JSON message string early.
+const inchMarks = (text: string | null | undefined) => text?.replace(/"/g, "″") ?? null;
+
 /** Compact product facts for tool results. An unverified price is left out so it is never quoted. */
 export function productFact({ product, verified }: CheckedProduct, shownBefore = false) {
   return {
     stock_id: product.stock_id,
-    name: product.name,
+    name: inchMarks(product.name)!,
     brand: product.brand ?? null,
-    size: product.size ?? product.dimensions ?? null,
-    dimensions: product.dimensions ?? null,
+    size: inchMarks(product.size ?? product.dimensions),
+    dimensions: inchMarks(product.dimensions),
     description: product.description?.replace(/\s+/g, " ").trim().slice(0, 300) || null,
     price_ex_gst: verified ? product.list_price : null,
     uom: product.uom_id,
