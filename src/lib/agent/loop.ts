@@ -6,7 +6,7 @@ import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
 import { CHIP_PREFIX, TAP_PREFIX, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
-import { liveCheck, productFact, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
+import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
   ENQUIRY_CLAIM_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, reviewAnswer,
@@ -14,7 +14,7 @@ import {
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, errorCode, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, keepBest, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
 
 export type AgentClient = {
   messages: {
@@ -96,8 +96,7 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
   if (event.type === "select_product") {
     const found = await ctx.deps.findByCode(event.stockId).catch(() => null);
     if (found) {
-      const checked = await liveCheck(found, ctx.deps);
-      ctx.seen.set(checked.product.stock_id, checked);
+      const checked = keepBest(ctx, await liveCheck(found, ctx.deps));
       blocks.push({ type: "text", text: `Customer tapped this product card to choose it: ${JSON.stringify(productFact(checked, true))}` });
     } else {
       blocks.push({ type: "text", text: `Customer tapped item ${event.stockId}, but it is no longer in the catalogue.` });
@@ -144,11 +143,6 @@ function readFinal(response: Anthropic.Message): FinalAnswer | null {
   if (!parsed.success) return null;
   if (parsed.data.message) return parsed.data;
   return parsed.data.card_ids.length ? { ...parsed.data, message: CARDS_ONLY_MESSAGE } : null;
-}
-
-/** Stores a checked product; a failed check never replaces a live-checked one. */
-function keepBest(ctx: TurnContext, checked: CheckedProduct) {
-  if (checked.verified || !ctx.seen.get(checked.product.stock_id)?.verified) ctx.seen.set(checked.product.stock_id, checked);
 }
 
 /**
@@ -208,8 +202,18 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   names.push(...calls.map((call) => call.name));
   const outcomes = new Map<string, ToolOutcome>();
+  const updates = calls.filter((item) => item.name === "update_enquiry");
+  // Several adds in one round: their lookups run together first and fill the turn's memo, so the updates don't wait in turn.
+  if (updates.length > 1) {
+    await Promise.all(updates.map(async (call) => {
+      const { action, stock_id: code } = call.input as { action?: unknown; stock_id?: unknown };
+      if ((action !== "add" && action !== "set") || typeof code !== "string" || !code.trim()) return;
+      const found = await ctx.deps.findByCode(code.trim()).catch(() => null);
+      if (found) await liveCheck(found, ctx.deps);
+    }));
+  }
   // Enquiry updates change shared state, so they run one after another; lookups run in parallel.
-  for (const call of calls.filter((item) => item.name === "update_enquiry")) {
+  for (const call of updates) {
     outcomes.set(call.id, await runTool(call.name, call.input, ctx));
   }
   await Promise.all(calls.filter((item) => item.name !== "update_enquiry").map(async (call) => {
@@ -236,7 +240,11 @@ export async function runAgentTurn(input: {
   lastCallMs?: number;
 }): Promise<AgentReply> {
   const started = performance.now();
-  const { request, deps, client, model } = input;
+  const { request, client, model } = input;
+  // This turn's lookups share one memo. The backup reply gets input.deps, so it never waits on a fetch this turn left running.
+  const deps = turnDeps(input.deps);
+  // A tapped card's lookup starts now, alongside the enquiry re-check; eventContent then reads it from the memo.
+  if (request.event.type === "select_product") void deps.findByCode(request.event.stockId).then((found) => found && liveCheck(found, deps)).catch(() => null);
   const deadlineMs = input.deadlineMs ?? TURN_DEADLINE_MS;
   const fallbackReserveMs = input.fallbackReserveMs ?? FALLBACK_RESERVE_MS;
   const lastCallMs = input.lastCallMs ?? LAST_CALL_MS;
@@ -385,7 +393,7 @@ export async function runAgentTurn(input: {
     console.warn("[api/agent] fallback reply", { reason: failureCode(error, deadline), ms: Math.round(performance.now() - started) });
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
-    const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });
+    const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps: input.deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });
     return { ...reply, enquiry: replyEnquiry(ctx) };
   }
 }

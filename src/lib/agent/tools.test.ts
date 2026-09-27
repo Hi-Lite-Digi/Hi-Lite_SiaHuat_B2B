@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Product } from "@/lib/chat-contract";
 import { cardsNote } from "./contract";
-import type { CheckedProduct } from "./facts";
+import { turnDeps, type CheckedProduct } from "./facts";
 import { pickEvidence } from "./picks";
 import { agentTools, runTool, type TurnContext } from "./tools";
 import { fakeDeps, product } from "./testing";
@@ -40,18 +40,43 @@ test("search honours exclusions and budget", async () => {
   assert.deepEqual(body.products.map((item) => item.stock_id), ["BTS-8026D"]);
 });
 
-test("search results past the first 6 carry no stock figures", async () => {
-  const torches = Array.from({ length: 8 }, (_, index) => product({ stock_id: `T${index + 1}`, name: `TORCH ${index + 1}` }));
-  const ctx = context(fakeDeps(torches));
-  const outcome = await runTool("search_catalogue", { queries: ["torch"] }, ctx);
-  const body = JSON.parse(outcome.content) as { products: Array<{ stock_id: string; stock: string; available_quantity: number | null; price_and_stock_verified_live: boolean }> };
-  assert.equal(body.products.length, 8);
-  assert.ok(body.products.slice(0, 6).every((item) => item.price_and_stock_verified_live && item.available_quantity === 50));
-  for (const item of body.products.slice(6)) {
-    assert.deepEqual([item.stock, item.available_quantity, item.price_and_stock_verified_live], ["unknown", null, false]);
-    const remembered = ctx.seen.get(item.stock_id)?.product;
-    assert.deepEqual([remembered?.in_stock, remembered?.available_quantity], [null, null]);
-  }
+const torches = (count: number) => Array.from({ length: count }, (_, index) => product({ stock_id: `T${index + 1}`, name: `TORCH ${index + 1}` }));
+type FactBody = { stock_id: string; price_ex_gst: number | null; stock: string; available_quantity: number | null; price_and_stock_verified_live: boolean };
+
+test("every search result is live-checked", async () => {
+  const deps = fakeDeps(torches(10));
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(deps))).content) as { products: FactBody[] };
+  assert.equal(body.products.length, 10);
+  assert.ok(body.products.every((item) => item.price_and_stock_verified_live && item.available_quantity === 50));
+  assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, 10);
+  assert.match(agentTools[0].description ?? "", /Returns up to 10 products; each one's price and stock are checked live on the store \(price_and_stock_verified_live\)\./);
+});
+
+test("a failed live check leaves that one result unverified, with no price or stock", async () => {
+  const ctx = context(fakeDeps(torches(4), { T3: "fail" }));
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as { products: FactBody[] };
+  const failed = body.products.find((item) => item.stock_id === "T3")!;
+  assert.deepEqual([failed.price_ex_gst, failed.stock, failed.available_quantity, failed.price_and_stock_verified_live], [null, "unknown", null, false]);
+  assert.ok(body.products.filter((item) => item.stock_id !== "T3").every((item) => item.price_and_stock_verified_live));
+  const remembered = ctx.seen.get("T3")?.product;
+  assert.deepEqual([remembered?.in_stock, remembered?.available_quantity], [null, null]);
+});
+
+test("keepBest never turns a live-checked product back into an unchecked one", async () => {
+  const torch = product({ stock_id: "T7", name: "TORCH 7", list_price: 12 });
+  const seen = new Map<string, CheckedProduct>([["T7", { product: { ...torch, list_price: 12.5 }, verified: true }]]);
+  const ctx = context(fakeDeps([torch], { T7: "fail" }), { seen });
+  const body = JSON.parse((await runTool("get_product", { stock_id: "T7" }, ctx)).content) as { product: FactBody };
+  assert.deepEqual([ctx.seen.get("T7")?.verified, ctx.seen.get("T7")?.product.list_price], [true, 12.5]);
+  assert.deepEqual([body.product.price_and_stock_verified_live, body.product.price_ex_gst], [true, 12.5]);
+});
+
+test("a product live-checked earlier in the turn is not fetched again", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico]);
+  const ctx = context(undefined, { deps: turnDeps(deps) });
+  await runTool("search_catalogue", { queries: ["blow torch"] }, ctx);
+  await runTool("search_catalogue", { queries: ["kitchen blow torch"] }, ctx);
+  assert.deepEqual(deps.calls.filter((call) => call.startsWith("live:")), ["live:970S"]);
 });
 
 test("search outage is reported as a tool error", async (t) => {

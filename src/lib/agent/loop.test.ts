@@ -789,3 +789,35 @@ test("an earlier card already tried this turn is not looked up again after the r
   assert.ok(performance.now() - started < 3_000, `${Math.round(performance.now() - started)} ms`);
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
 });
+
+test("the memo does not outlive the turn", async () => {
+  const shared = deps();
+  for (let turn = 0; turn < 2; turn += 1) {
+    const { client } = fakeClient([
+      toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+      answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["970S"] }),
+    ]);
+    await runAgentTurn({ request: request({}), deps: shared, client, model: "claude-sonnet-5" });
+  }
+  assert.equal(shared.calls.filter((call) => call === "live:970S").length, 2);
+});
+
+test("two adds in one round both land", async () => {
+  const shared = deps();
+  const twoAdds = {
+    ...toolCall("t1", "update_enquiry", {}),
+    content: [
+      { type: "tool_use", id: "t1", name: "update_enquiry", input: { action: "add", stock_id: "970S", quantity: 2 } },
+      { type: "tool_use", id: "t2", name: "update_enquiry", input: { action: "add", stock_id: "BTS-8026D", quantity: 3 } },
+    ],
+  } as unknown as Anthropic.Message;
+  const { client } = fakeClient([twoAdds, answer({ message: "Got it: 2 blow torches and 3 Safico torches. Anything else?" })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "2 of the 970S and 3 of the BTS-8026D please" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: shared, client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2], ["BTS-8026D", 3]]);
+  // Both lookups start together before the first add, and the adds reuse them.
+  assert.deepEqual(shared.calls, ["code:970S", "code:BTS-8026D", "live:970S", "live:BTS-8026D"]);
+});

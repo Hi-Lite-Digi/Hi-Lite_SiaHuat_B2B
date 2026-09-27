@@ -62,6 +62,26 @@ export function defaultFactDeps(): FactDeps {
   };
 }
 
+/** One turn's lookups: the same item code or store page is fetched once, whichever step asks. Keys are exact (catalogue lookups are case-sensitive). Failures are not kept. */
+export function turnDeps(deps: FactDeps): FactDeps {
+  const codes = new Map<string, Promise<CatalogueProduct | null>>();
+  const pages = new Map<string, Promise<ScrapedSiaHuatProduct>>();
+  const once = <T>(map: Map<string, Promise<T>>, key: string, run: () => Promise<T>) => {
+    let hit = map.get(key);
+    if (!hit) {
+      hit = run();
+      map.set(key, hit);
+      hit.catch(() => map.delete(key));
+    }
+    return hit;
+  };
+  return {
+    ...deps,
+    findByCode: (code) => once(codes, code, () => deps.findByCode(code)),
+    fetchLive: (url, ms) => once(pages, url, () => deps.fetchLive(url, ms)),
+  };
+}
+
 /** Overwrites price and stock from the live store page. Any failure leaves the product unverified. */
 export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS): Promise<CheckedProduct> {
   const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };

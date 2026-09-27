@@ -35,7 +35,7 @@ export type TurnContext = {
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; price and stock of the first 6 are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all.",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all.",
     input_schema: {
       type: "object",
       properties: {
@@ -114,6 +114,7 @@ const enquiryInput = z.object({
 /** Rows asked of each search query and of the category search. */
 const QUERY_ROWS = 10;
 const CATEGORY_ROWS = 200;
+const LIVE_CHECKS_PER_SEARCH = 10; // all of them: unchecked rows showed "price to be confirmed" and were called out of stock
 const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
@@ -127,9 +128,16 @@ const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome 
 /** An error as a log code: its message when that is already a code (SUPABASE_SEARCH_500), else its name. Error text can echo customer words. */
 export const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name) : "unknown");
 
+/** Stores a checked product and returns the one kept: a failed or skipped check never replaces a live-checked one. */
+export function keepBest(ctx: TurnContext, checked: CheckedProduct) {
+  const known = ctx.seen.get(checked.product.stock_id);
+  const kept = known?.verified && !checked.verified ? known : checked;
+  ctx.seen.set(checked.product.stock_id, kept);
+  return kept;
+}
+
 function remember(ctx: TurnContext, checked: CheckedProduct) {
-  ctx.seen.set(checked.product.stock_id, checked);
-  return productFact(checked, ctx.shownIds.has(checked.product.stock_id));
+  return productFact(keepBest(ctx, checked), ctx.shownIds.has(checked.product.stock_id));
 }
 
 async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: TurnContext) {
@@ -192,9 +200,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     : categoryOutcome?.status === "rejected" ? "Category search failed."
     : !scope.exists ? `No catalogue category matches '${category}'.${categories.length ? ` Categories among these results: ${categories.join(", ")}.` : ""}`
     : null;
-  const checked = await Promise.all(top.map((item, index) => (index < 6
-    ? liveCheck(item, ctx.deps)
-    : Promise.resolve<CheckedProduct>({ product: { ...item, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false }))));
+  const checked = await Promise.all(top.slice(0, LIVE_CHECKS_PER_SEARCH).map((item) => liveCheck(item, ctx.deps)));
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
   return ok({
     products: affordable.map((item) => remember(ctx, item)),
