@@ -120,6 +120,8 @@ async function callClaude(client: AgentClient, model: string, messages: Anthropi
   const response = await client.messages.create({
     model,
     max_tokens: 4_096,
+    // Caches the conversation so far, so a later tool round or repair in this turn re-reads it instead of paying for it again.
+    cache_control: { type: "ephemeral" },
     system: [{ type: "text", text: CLAIRE_AGENT_PROMPT, cache_control: { type: "ephemeral" } }],
     tools: agentTools,
     tool_choice: { type: toolChoice },

@@ -44,20 +44,52 @@ export function withTimeout<T, L>(work: Promise<T>, ms: number, late: L): Promis
 
 const RETRY_DELAY_MS = 300;
 
-/** Runs the work again once, after a short pause, when it fails the first time. */
+/** Runs the work again once, after a short pause, when it fails the first time. The pause varies so retries don't land together. */
 export async function retryOnce<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch {
-    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS + Math.floor(Math.random() * 400)));
     return work();
   }
 }
 
+const SEARCH_CONCURRENCY = 4; // search_products fails for everyone past about 8 at once
+
+/** At most `limit` catalogue searches run at once in this server process. A search that can't start within maxWaitMs gives up with SEARCH_BUSY without running. */
+export function searchSlots(limit: number, maxWaitMs = 3_000) {
+  let active = 0;
+  const waiting: Array<{ start: () => void }> = [];
+  // A finished search hands its slot straight to the next one waiting.
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next.start();
+    else active -= 1;
+  };
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const run = () => work().finally(release);
+    if (active < limit) {
+      active += 1;
+      return run();
+    }
+    return new Promise<T>((resolve, reject) => {
+      const entry = { start: () => { clearTimeout(timer); run().then(resolve, reject); } };
+      const timer = setTimeout(() => {
+        waiting.splice(waiting.indexOf(entry), 1);
+        reject(new Error("SEARCH_BUSY"));
+      }, maxWaitMs);
+      waiting.push(entry);
+    });
+  };
+}
+
+// Module scope: defaultFactDeps runs per request, and the limit must cover every request in this process.
+const searchSlot = searchSlots(SEARCH_CONCURRENCY);
+
 export function defaultFactDeps(): FactDeps {
   return {
-    searchDirect: searchCatalogueDirect,
-    searchCategory: searchCatalogueByCategory,
+    searchDirect: (query, limit) => searchSlot(() => searchCatalogueDirect(query, limit)),
+    searchCategory: (words, limit, maxPrice) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice)),
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
     findAlternatives: (stockId, minQty, exclude) => findAvailableCatalogueAlternatives(stockId, 30, minQty, exclude),

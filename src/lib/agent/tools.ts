@@ -53,7 +53,7 @@ export const agentTools: Anthropic.Tool[] = [
   },
   {
     name: "get_product",
-    description: "Look up one product by its item code, or by a store.siahuat.com/product/<id> link the customer pasted. Price and stock are checked live.",
+    description: "Look up one product by its item code, or by a store.siahuat.com/product/<id> link the customer pasted. Price and stock are checked live. A search result already carries the same live-checked facts: don't call get_product for an item a search returned in this turn with price_and_stock_verified_live true.",
     input_schema: {
       type: "object",
       properties: {
@@ -244,7 +244,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
 async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnContext) {
   const url = input.url ? storeProductUrl(input.url) : null;
   if (!url && !input.stock_id) return fail("MISSING_FIELDS");
-  const found = url ? await ctx.deps.findBySourceUrl(url) : await ctx.deps.findByCode(input.stock_id!);
+  const found = await retryOnce(() => (url ? ctx.deps.findBySourceUrl(url) : ctx.deps.findByCode(input.stock_id!)));
   if (!found) return fail("NOT_FOUND");
   const [checked, details] = await Promise.all([liveCheck(found, ctx.deps), lookupDetails(ctx, [found.stock_id])]);
   return ok({ product: remember(ctx, withDetails(checked, details)) });

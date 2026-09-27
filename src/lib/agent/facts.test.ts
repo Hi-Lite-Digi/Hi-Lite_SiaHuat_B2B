@@ -1,8 +1,52 @@
 // src/lib/agent/facts.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
-import { liveCheck, productFact, storeDetails, storeProductUrl, turnDeps } from "./facts";
+import { liveCheck, productFact, retryOnce, searchSlots, storeDetails, storeProductUrl, turnDeps } from "./facts";
 import { fakeDeps, product } from "./testing";
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("searchSlots runs at most `limit` searches at once", async () => {
+  const slot = searchSlots(2);
+  let running = 0;
+  let peak = 0;
+  const job = (value: number) => slot(async () => {
+    running += 1;
+    peak = Math.max(peak, running);
+    await pause(20);
+    running -= 1;
+    return value;
+  });
+  assert.deepEqual(await Promise.all([1, 2, 3, 4, 5].map(job)), [1, 2, 3, 4, 5]);
+  assert.equal(peak, 2);
+});
+
+test("a rejected search frees its slot for the next one waiting", async () => {
+  const slot = searchSlots(1, 100);
+  const failing = slot(async () => { await pause(10); throw new Error("SEARCH_500"); });
+  const next = slot(async () => "next");
+  await assert.rejects(failing, /SEARCH_500/);
+  assert.equal(await next, "next");
+});
+
+test("a search that can't start within maxWaitMs gives up with SEARCH_BUSY and never runs", async () => {
+  const slot = searchSlots(1, 50);
+  const busy = slot(() => pause(200));
+  let ran = false;
+  await assert.rejects(slot(async () => { ran = true; }), /SEARCH_BUSY/);
+  await busy;
+  assert.equal(ran, false);
+  assert.equal(await slot(async () => "free again"), "free again");
+});
+
+test("retryOnce still retries a failed call once", async () => {
+  let tries = 0;
+  assert.equal(await retryOnce(async () => { tries += 1; if (tries === 1) throw new Error("DOWN"); return "ok"; }), "ok");
+  assert.equal(tries, 2);
+  tries = 0;
+  await assert.rejects(retryOnce(async () => { tries += 1; throw new Error("DOWN"); }), /DOWN/);
+  assert.equal(tries, 2);
+});
 
 test("a live check overwrites price and stock from the store page", async () => {
   const torch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 30 });

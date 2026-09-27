@@ -327,6 +327,23 @@ test("get_product resolves a pasted store link", async () => {
   assert.ok(ctx.seen.has("BTS-8026D"));
 });
 
+test("get_product retries a lookup that fails once", async () => {
+  const deps = fakeDeps([blowtorch, safico]);
+  const { findByCode, findBySourceUrl } = deps;
+  let codeTries = 0;
+  let urlTries = 0;
+  deps.findByCode = async (code) => { codeTries += 1; if (codeTries === 1) throw new Error("DB_DOWN"); return findByCode(code); };
+  deps.findBySourceUrl = async (url) => { urlTries += 1; if (urlTries === 1) throw new Error("DB_DOWN"); return findBySourceUrl(url); };
+  assert.match((await runTool("get_product", { stock_id: "970S" }, context(deps))).content, /"stock_id":"970S"/);
+  assert.match((await runTool("get_product", { url: safico.source_url }, context(deps))).content, /"stock_id":"BTS-8026D"/);
+  assert.deepEqual([codeTries, urlTries], [2, 2]);
+});
+
+test("the get_product description tells Claude not to re-look-up checked search results", () => {
+  const description = agentTools.find((tool) => tool.name === "get_product")?.description ?? "";
+  assert.ok(description.includes("don't call get_product for an item a search returned in this turn with price_and_stock_verified_live true"));
+});
+
 async function alternativeIds(deps: ReturnType<typeof fakeDeps>, minQty: number) {
   const outcome = await runTool("find_alternatives", { stock_id: "970S", min_qty: minQty }, context(deps));
   return (JSON.parse(outcome.content) as { products: Array<{ stock_id: string }> }).products.map((item) => item.stock_id);

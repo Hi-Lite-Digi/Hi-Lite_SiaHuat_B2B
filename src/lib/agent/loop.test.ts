@@ -55,6 +55,18 @@ test("Claude searches with the customer's words and recommends a grounded card",
   assert.match(JSON.stringify(second.content), /tool_result/);
 });
 
+test("every Claude call asks for conversation caching", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "Try this.", card_ids: ["FAKE-1"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["970S"] }),
+  ]);
+  await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 3);
+  assert.ok(bodies.every((body) => body.cache_control?.type === "ephemeral"));
+  assert.ok(bodies.every((body) => (body.system as Anthropic.TextBlockParam[])[0].cache_control?.type === "ephemeral"));
+});
+
 test("a tapped card plus an earlier typed quantity is added straight away", async () => {
   const { client } = fakeClient([
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
