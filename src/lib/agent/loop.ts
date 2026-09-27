@@ -156,18 +156,25 @@ function keepBest(ctx: TurnContext, checked: CheckedProduct) {
  * message quotes an amount code can't back yet) the cards of Claire's previous reply and earlier-shown codes named in the message:
  * looked up and live-checked by code now, so every card and price still comes from this turn's facts.
  */
-async function attachEarlierCards(final: FinalAnswer, ctx: TurnContext, previousCodes: string[], amountsUnbacked: boolean, timeLeft: () => number): Promise<FinalAnswer> {
+async function attachEarlierCards(
+  final: FinalAnswer, ctx: TurnContext, previousCodes: string[], amountsUnbacked: boolean, timeLeft: () => number, tried: Set<string>,
+): Promise<FinalAnswer> {
   const known = new Map([...ctx.shownIds, ...ctx.lines.map((line) => line.code), ...previousCodes].map((id) => [id.toLowerCase(), id]));
   const seen = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
   const named = amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : [];
+  // A code tried earlier this turn isn't looked up again after the repair: a stalled check would stall again.
   const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
-    .filter((id) => known.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified).slice(0, 5);
-  const ms = Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
+    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified).slice(0, 5);
+  for (const id of wanted) tried.add(id);
+  // One time limit covers each card's code lookup and live check together.
+  const end = performance.now() + Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
+  const left = () => Math.max(1, end - performance.now());
   await Promise.all(wanted.map(async (id) => {
-    const found = await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), ms, null);
+    const found = await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), left(), null);
     if (!found) return;
     // A live check that stalls sends the card unconfirmed, like a search result that wasn't checked.
     const unconfirmed: CheckedProduct = { product: { ...found, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
+    const ms = left();
     keepBest(ctx, await withTimeout(liveCheck(found, ctx.deps, ms), ms, unconfirmed));
   }));
   const spelled = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
@@ -286,8 +293,9 @@ export async function runAgentTurn(input: {
         continue;
       }
       const final = readFinal(response);
-      // One chance to make the change the reply talks about. Safe only because update_enquiry checks the pick and the typed number.
-      if (final && !nudged && round < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length) {
+      // One chance to make the change the reply talks about, only while the next round may still use tools.
+      // Safe only because update_enquiry checks the pick and the typed number.
+      if (final && !nudged && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length) {
         nudged = true;
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: CLAIM_NUDGE }] });
         continue;
@@ -298,9 +306,10 @@ export async function runAgentTurn(input: {
 
     const currentAllowed = () => allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
     const previousCodes = picks.replies.at(-1)?.cards.map((card) => card.code) ?? [];
+    const triedCodes = new Set<string>();
     // Run before `allowed` is read; a lookup cut short by the deadline leaves the answer as it was.
     const withEarlierCards = (answer: FinalAnswer) => beforeDeadline(
-      attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, timeLeft), deadline,
+      attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, timeLeft, triedCodes), deadline,
     ).catch(() => answer);
     let final = result.final && await withEarlierCards(result.final);
     let allowed = currentAllowed();

@@ -215,14 +215,14 @@ test("a successful update is recorded in ctx.changes; a refused one is not", asy
   const ctx = context(undefined, { customerTexts: ["2 please"], picks: tappedAfterTwo("BTS-8026D") });
   assert.match((await runTool("update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }, ctx)).content, /PRODUCT_NOT_CHOSEN/);
   assert.deepEqual(ctx.changes, []);
-  await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
-  assert.deepEqual(ctx.changes, [{ action: "add", code: "BTS-8026D", name: safico.name }]);
+  await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 2 }, ctx);
+  assert.deepEqual(ctx.changes, [{ action: "add", code: "BTS-8026D" }]); // the catalogue's spelling
 });
 
 test("removing a line that could not be re-checked is recorded as a change", async () => {
   const ctx = context(undefined, { uncheckedCodes: ["F46700"] });
   await runTool("update_enquiry", { action: "remove", stock_id: "F46700" }, ctx);
-  assert.deepEqual(ctx.changes, [{ action: "remove", code: "F46700", name: null }]);
+  assert.deepEqual(ctx.changes, [{ action: "remove", code: "F46700" }]);
 });
 
 test("a line that could not be re-checked can be removed or cleared, but not changed", async () => {

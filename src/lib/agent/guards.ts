@@ -115,11 +115,12 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
 }
 
 export const NO_CARD_PREFIX = "No card attached";
-// "tap it", "tap the Kenwood mixer to confirm", "tap the HET-4 card"; not a tap on a link, the PDF button or the enquiry bar, nor a water tap.
-const tapAsk = /\btap(?:ping)?\s+(?:on\s+)?(?:it|this|that|these|those|each|them|both|to\s+(?:add|confirm|select|choose|pick))\b|\btap\s+(?:the\s+)?(?:[\w'’″-]+\s+){0,5}(?:card|cards|item|product|to\s+(?:add|confirm|select|choose|pick))\b/i;
+// "tap it", "tap the Kenwood mixer to confirm", "tap the HET-4 card"; not a tap on a link, the PDF button or the enquiry bar, nor a water tap
+// ("a tap that locks": after an article it is the noun).
+const tapAsk = /(?<!\b(?:a|an|the|its|one|single)\s+)(?:\btap(?:ping)?\s+(?:on\s+)?(?:it|this|that|these|those|each|them|both|to\s+(?:add|confirm|select|choose|pick))\b|\btap\s+(?:the\s+)?(?:[\w'’″-]+\s+){0,5}(?:card|cards|item|product|to\s+(?:add|confirm|select|choose|pick))\b)/i;
 const tapNotACard = /\btap\s+(?:the\s+)?(?:\w+\s+){0,3}(?:link|pdf|button|bar|chip|download|mic|photo|enquiry)\b/i;
 export const asksForTap = (sentence: string) => tapAsk.test(sentence) && !tapNotACard.test(sentence);
-const showPromise = /\b(?:let me|I'?ll|I will|one sec|one moment|hold on)\b[^.!?\n]{0,40}\b(?:pull|bring|show|get)\b[^.!?\n]{0,25}\bup\b|\b(?:pulling|bringing) (?:up|those|these|it|that)\b/i;
+const showPromise = /\b(?:let me|I'?ll|I will|one sec|one moment|hold on)\b[^.!?\n]{0,40}\b(?:pull|bring|show|get)\b[^.!?\n]{0,25}(?<!\bset )\bup\b|\b(?:pulling|bringing) (?:up|those|these|it|that)\b/i;
 // "Let me know the type and I'll pull up options" waits for the customer; "having trouble pulling up the catalogue" is honest.
 export const promisesToShow = (sentence: string) => showPromise.test(sentence) && !/\b(?:if|once|when|let me know|tell me|trouble|unable|cannot)\b|n['’]t\b/i.test(sentence);
 const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
@@ -140,15 +141,26 @@ const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped
 const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|update|note)\b|\badding\b[^.!?\n]*\bnow\b|我来加/i;
 const honestWording = /\b(?:not|never|nothing|no longer|yet to|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
 // "Pick a plate you like, and I'll add it" waits for the customer too (exam 2, c05-B); "tap to select it, then I'll add" doesn't.
-const conditionalWording = /\b(?:if|once|after|when|let me know|tell me)\b|\b(?:pick|choose)\s+(?:a|an|one|any|the|which)\b[^.!?]*\b(?:and|then)\s+I'?ll\b/i;
+const conditionalWording = /\b(?:if|once|after|when|let me know|tell me)\b|\b(?:pick|choose)\s+(?:a|an|one|any|the|which(?:ever)?)\b[^.!?]*\b(?:and|then)\s+I'?ll\b/i;
 // "contact sales to get that line added" is advice, not a claim (exam 2, c05-stress).
-const notAboutEnquiry = /\bto get\b[^.!?]{0,30}\badded\b|\b(?:gst|tax|fee|charges?)\b[^.!?]{0,30}\badded\b|\badded\b[^.!?]{0,20}\b(?:gst|tax|on top|at checkout)\b|\bupdated (?:prices?|stock|list|link|photos?)\b|\bprices?\s+(?:has|have)\s+(?:been\s+)?(?:updated|dropped|changed)\b|\bremoved (?:[^.!?]{0,30} )?from (?:the|my) (?:list of )?(?:options|results|search)\b/i;
+const notAboutEnquiry = /\bto get\b[^.!?]{0,30}\badded\b|\b(?:gst|tax|fee|charges?)\b[^.!?]{0,30}\badded\b|\badded\b[^.!?]{0,20}\b(?:gst|tax|on top|at checkout)\b|\bupdated (?:prices?|stock|list|link|photos?)\b|\bupdated (?:\w+ )?total\b|\bprices?\s+(?:has|have|was|were|is)\s+(?:been\s+)?(?:updated|dropped|changed)\b|\bremoved (?:[^.!?]{0,30} )?from (?:the|my) (?:list of )?(?:options|results|search)\b/i;
 const removalWord = /\b(?:removed|removing|dropped)\b|已(?:删除|移除)/i;
-const NOT_ON_ENQUIRY = "That isn't on your enquiry yet.";
+// "Already added", "2 so far", "both are in your enquiry" describe the enquiry as it stands: true while the item is on it.
+// A leading "Done" or "just added" reports a change this turn instead.
+const statusWording = /\b(?:already|so far|still)\b/i;
+const onEnquiryWording = /\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b/i;
+const reportsChange = /^\s*done\b|\bjust\s+(?:added|put|updated|removed)\b/i;
+// Clauses: split at commas outside brackets, semicolons, dashes between words and a bracket holding its own change
+// ("(19.1cm removed)"); never at a colon, so "Got it: 2 torches" stays whole.
+const clausesOf = (sentence: string) => sentence
+  .split(/,\s+(?![^()]*\))|[;；，]\s*|\s*[–—]\s*|\s-\s|\s*\((?=[^()]*\b(?:added|removed|updated|dropped)\b)/i)
+  .map((part) => part.trim()).filter(Boolean);
+// The fixer's line: true for a false add, change or removal, including of an item already on the enquiry.
+const NOT_ON_ENQUIRY = "That change isn't on your enquiry yet.";
 
 /**
  * Sentences that say an item was added, changed or removed, or promise to do it, when update_enquiry didn't do that
- * for the item this turn. The item is the product whose code the sentence types, else the one its words point at.
+ * for the item this turn. The item is the product whose code the clause types, else the one its words point at.
  */
 function falseEnquiryClaims(message: string, facts: ClaimFacts) {
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -157,19 +169,32 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
     ...facts.lines.map((line) => ({ code: line.code, name: line.item, price: null, link: null })),
   ];
   const onLines = (card: ShownCard) => facts.lines.some((line) => same(line.code, card.code));
-  const changed = (card: ShownCard) => facts.changes.some((change) => change.code !== null && same(change.code, card.code));
+  const changed = (card: ShownCard, actions: EnquiryChange["action"][] = ["add", "set", "remove"]) => facts.changes.some((change) => change.code !== null && same(change.code, card.code) && actions.includes(change.action));
+  const point = (text: string) => {
+    const typed = cards.filter((card) => codePattern(card.code).test(text));
+    return typed.length ? typed : pointedCards(text, cards);
+  };
+  // A clause with a change word, judged on its own: a swap's "HET-4 removed" and "WCT708K added" each hold for their item.
+  const falseClause = (clause: string, statusAllowed: boolean) => {
+    if (honestWording.test(clause)) return false;
+    const status = statusAllowed && (statusWording.test(clause) || !changeClaim.test(clause.replace(onEnquiryWording, "")));
+    const pointed = point(clause);
+    if (!pointed.length) return !facts.changes.length && !(status && facts.lines.length);
+    if (removalWord.test(clause)) return pointed.some((card) => onLines(card) && !changed(card, ["remove", "set"]));
+    // An add or update needs its own change this turn; a status line only needs the item on the enquiry.
+    return pointed.some((card) => !onLines(card) || !(status || changed(card, ["add", "set"])));
+  };
   return sentences(message).filter((sentence) => {
     if (notAboutEnquiry.test(sentence)) return false;
-    // A condition ("once you pick one, I'll add it") only excuses a sentence with no past-tense claim in it.
-    const claim = changeClaim.test(sentence) && !honestWording.test(sentence) && !(conditionalWording.test(sentence) && !/\b(?:added|removed|updated)\b/i.test(sentence));
     const promise = promiseChange.test(sentence) && !honestWording.test(sentence) && !conditionalWording.test(sentence);
-    if (!claim && !promise) return false;
-    const typed = cards.filter((card) => codePattern(card.code).test(sentence));
-    const pointed = typed.length ? typed : pointedCards(sentence, cards);
-    if (promise && !(pointed.length && pointed.every(changed))) return true;
-    if (!claim) return false;
-    if (!pointed.length) return !facts.changes.length;
-    return removalWord.test(sentence) ? pointed.some(onLines) : pointed.some((card) => !onLines(card));
+    if (promise) {
+      const pointed = point(sentence);
+      if (!(pointed.length && pointed.every((card) => changed(card)))) return true;
+    }
+    // A condition ("once you pick one, I'll add it") only excuses a sentence with no past-tense claim in it.
+    if (!changeClaim.test(sentence) || (conditionalWording.test(sentence) && !/\b(?:added|removed|updated)\b/i.test(sentence))) return false;
+    const clauses = clausesOf(sentence).filter((clause) => changeClaim.test(clause));
+    return (clauses.length ? clauses : [sentence]).some((clause) => falseClause(clause, !reportsChange.test(sentence)));
   });
 }
 
@@ -178,18 +203,23 @@ export function enquiryClaimIssues(message: string, facts: ClaimFacts) {
   return falseEnquiryClaims(message, facts).map((sentence) => `${ENQUIRY_CLAIM_PREFIX} for: "${sentence.slice(0, 120)}". No update_enquiry call succeeded for it in this turn, so don't say it was added, changed or removed, and don't promise to do it later. Say it isn't on the enquiry yet and what you still need (which product, or how many).`);
 }
 
-/** The message with its false enquiry claims replaced by one "That isn't on your enquiry yet." where the first one was. */
+/** The message with its false enquiry claims replaced by one NOT_ON_ENQUIRY line where the first one was. */
 export function withoutEnquiryClaims(message: string, facts: ClaimFacts) {
   const [first, ...rest] = falseEnquiryClaims(message, facts);
   if (!first) return message;
   return removeSentences(message.replace(first, NOT_ON_ENQUIRY), (sentence) => rest.includes(sentence));
 }
 
-// Old Claire's reply-style text for a permission question; the new Claire gets NO_PERMISSION_ISSUE instead.
+// Old Claire's reply-style text for a permission question; the new Claire gets NO_PERMISSION_ISSUE (or, when the question
+// isn't about adding, NO_SHOW_PERMISSION_ISSUE) instead.
 const CHOOSE_FIRST = "The customer must choose a product card first";
 export const NO_PERMISSION_ISSUE = "Don't ask permission to add it. If the customer picked the product and typed how many, add it now with update_enquiry; if the quantity is missing, ask how many.";
+export const NO_SHOW_PERMISSION_ISSUE = "Don't ask permission to show a product or check its stock: the cards already show it with the stock the tools found. Just say what you found.";
 // "Want me to add it?", "Once you confirm I'll add it"; not "Want me to add 5, or check alternatives?" nor "How many, so I can add it?".
 const asksToConfirmAdd = /\b(?:shall|should|can|may|want|would you like)\b(?![^?？\n]*\bor\b)[^?？\n]*(?<!\bso I can )\badd\b[^?？\n]*[?？]|\bonce you confirm\b[^.!?\n]*\badd\b|\bconfirming:?[^.?!\n]*\?/i;
+// Judged per sentence, so "you can download the PDF. Anything else to add?" isn't one question. "How many would you like to
+// add?" and "What else can I add?" ask what the prompt wants asked; "Want me to add it, and how many?" still asks permission.
+const asksPermissionToAdd = (sentence: string) => asksToConfirmAdd.test(sentence) && !/\b(?:how many|else)\b[^?？]*\badd\b|\badd\s+(?:anything|more|another)\b/i.test(sentence);
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";
 const UNKNOWN_CARD_ISSUE_PREFIX = "card_ids must come from a tool result";
@@ -205,12 +235,12 @@ export function reviewAnswer(
   const style: string[] = [];
   const ids = [...new Set(answer.card_ids)];
   const unknown = ids.filter((id) => !seen.has(id));
-  if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn; not found: ${unknown.join(", ")}.`);
+  if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn or shown earlier in this chat; not found: ${unknown.join(", ")}.`);
   if (ids.length > 5) style.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A dropped chip takes any amount in it along.
-  // A 'Yes, add it' chip is the confirm step the owner ruled out.
-  const chips = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b/i.test(chip)).slice(0, 3);
+  // A 'Yes, add it' chip is the confirm step the owner ruled out; 'Add more items' is not.
+  const chips = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip)).slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
   if (turn.changes) safety.push(...enquiryClaimIssues(answer.message, { lines: turn.lines ?? [], changes: turn.changes, seen }));
@@ -220,8 +250,8 @@ export function reviewAnswer(
     if (said.some(promisesToShow)) safety.push(NO_CARD_SHOW_ISSUE);
   }
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null })
-    .map((issue) => (issue.startsWith(CHOOSE_FIRST) ? NO_PERMISSION_ISSUE : issue)));
-  if (asksToConfirmAdd.test(answer.message) && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
+    .map((issue) => (!issue.startsWith(CHOOSE_FIRST) ? issue : /\badd\b/i.test(answer.message) ? NO_PERMISSION_ISSUE : NO_SHOW_PERMISSION_ISSUE)));
+  if (sentences(answer.message).some(asksPermissionToAdd) && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
   if (promiseLater.test(answer.message)) style.push(PROMISE_LATER_ISSUE);
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);

@@ -4,9 +4,9 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE,
-  allowedCents, applyFixers, customerMessage, endsMidSentence, issueCode, noCardFixer, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, withoutEnquiryClaims,
-  type EarlierTurns, type FinalAnswer, type TurnFacts,
+  DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE, NO_SHOW_PERMISSION_ISSUE, PROMISE_LATER_ISSUE,
+  RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, reviewAnswer, tidyMessage,
+  unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange } from "./tools";
@@ -22,6 +22,7 @@ test("cards must come from this turn's tool results", () => {
   const review = reviewAnswer({ message: "Here you go.", card_ids: ["BTS-8026D", "FAKE"], chips: [], show_contact: false }, seen, allowed);
   assert.deepEqual(review.cards.map((card) => card.stock_id), ["BTS-8026D"]);
   assert.match(review.safety.join(" "), /not found: FAKE/);
+  assert.match(review.safety.join(" "), /or shown earlier in this chat/);
 });
 
 test("only live-checked prices and enquiry totals may appear as amounts", () => {
@@ -159,7 +160,10 @@ test("asking for a tap needs a card", () => {
     assert.ok(safetyOf(message)[0]?.startsWith(NO_CARD_PREFIX), message);
     assert.deepEqual(safetyOf(message, ["BTS-8026D"]), [], message);
   }
-  for (const message of ["Closest is a water dispenser with a single tap.", "Tap the Download PDF button to save it.", "Tap the enquiry bar to see the lines.", "Sorry ah, done - no tap needed."]) {
+  for (const message of [
+    "Closest is a water dispenser with a single tap.", "Tap the Download PDF button to save it.", "Tap the enquiry bar to see the lines.", "Sorry ah, done - no tap needed.",
+    "The dispenser has a tap that locks.", "It comes with a tap to add water.",
+  ]) {
     assert.deepEqual(safetyOf(message), [], message);
   }
 });
@@ -168,7 +172,7 @@ test("promising to pull cards up needs the cards", () => {
   for (const message of ["One sec, let me pull those up again.", "Sorry for the run-around - let me pull these up fresh for you to tap.", "One sec, pulling up the HET-4 card for you to tap."]) {
     assert.ok(safetyOf(message)[0]?.startsWith(NO_CARD_PREFIX), message);
   }
-  for (const message of ["Let me know the knife type and I'll pull up options.", "Sorry, having trouble pulling up the catalogue right now."]) {
+  for (const message of ["Let me know the knife type and I'll pull up options.", "Sorry, having trouble pulling up the catalogue right now.", "Let me get that set up for you."]) {
     assert.deepEqual(safetyOf(message), [], message);
   }
 });
@@ -201,7 +205,7 @@ const line = (code: string, quantity: number) => {
   const { product: item } = shop.get(code)!;
   return { item: item.name, code, pricePerItem: item.list_price, quantity, total: item.list_price * quantity, uom: "PC" };
 };
-const added = (code: string): EnquiryChange => ({ action: "add", code, name: shop.get(code)!.product.name });
+const added = (code: string): EnquiryChange => ({ action: "add", code });
 const claimIssues = (message: string, turn: Partial<TurnFacts> = {}) => reviewAnswer(
   { message, card_ids: [], chips: [], show_contact: false }, shop, allowed, undefined, { lines: [], changes: [], ...turn },
 ).safety.filter((issue) => issue.startsWith(ENQUIRY_CLAIM_PREFIX));
@@ -221,6 +225,9 @@ test("saying the enquiry changed needs an update for that item this turn", () =>
     "I've put 2 in your enquiry.",
     "Done - both are in your enquiry now.",
     "好的，已加入2个火枪。",
+    "Added 2 Safico torches, anything else?",
+    "Added 2 Safico torches - the 3rd isn't in stock.",
+    "Added 2 torches, not 3.",
   ]) {
     assert.equal(claimIssues(message).length, 1, message);
   }
@@ -238,7 +245,49 @@ test("claims are checked per item", () => {
   assert.match(issues[0], /Let me add the bowl too/);
   assert.equal(claimIssues("Added 4 rice bowls and 4 spoons.", { lines: [line("02003-11", 4)], changes: [added("02003-11")] }).length, 1);
   assert.equal(claimIssues("Removed the rice bowls.", { lines: [line("02003-11", 4)], changes: [added("02003-11")] }).length, 1);
-  assert.deepEqual(claimIssues("Removed the rice bowls.", { changes: [{ action: "remove", code: "02003-11", name: null }] }), []);
+  assert.deepEqual(claimIssues("Removed the rice bowls.", { changes: [{ action: "remove", code: "02003-11" }] }), []);
+});
+
+test("an added or updated claim needs a change for that item this turn, even when it is on the enquiry", () => {
+  const torchOn = { lines: [line("BTS-8026D", 2)] };
+  for (const message of ["Updated: 5 Safico torches now.", "Got it: 5 Safico torches."]) assert.equal(claimIssues(message, torchOn).length, 1, message);
+  assert.deepEqual(claimIssues("It's already added (2 Safico torches).", torchOn), []);
+});
+
+test("a line about what is already on the enquiry is not a claim of a change", () => {
+  const onEnquiry = { lines: [line("BTS-8026D", 2), line("RS-J1009-7", 4)] };
+  for (const message of ["Yes, it's already added.", "Yes, both are in your enquiry.", "It's already added (2 Safico torches).", "You've added 2 Safico torches so far."]) {
+    assert.deepEqual(claimIssues(message, onEnquiry), [], message);
+    assert.equal(claimIssues(message).length, 1, message); // with nothing on the enquiry it is false
+  }
+  assert.equal(claimIssues("Done - both are in your enquiry now.", onEnquiry).length, 1);
+  // runs-new s06-B T3: the 50 were added the turn before.
+  const shot = new Map([checked("AC44-5-PC", "Polycarbonate Shot Glass With Thick Bottom Ø3.8xH9.3cm, 2oz", 2.06)]);
+  const shotLine = { item: "Polycarbonate Shot Glass With Thick Bottom Ø3.8xH9.3cm, 2oz", code: "AC44-5-PC", pricePerItem: 2.06, quantity: 50, total: 103, uom: "PC" };
+  assert.deepEqual(enquiryClaimIssues("Your 50 pcs are in the enquiry now and in stock (642 available).", { lines: [shotLine], changes: [], seen: shot }), []);
+});
+
+test("each change word is judged in its own clause", () => {
+  const facts = (names: Array<[string, string]>, lineCodes: string[], changes: EnquiryChange[]) => {
+    const found = new Map(names.map(([code, name]) => checked(code, name, 10)));
+    return { seen: found, changes, lines: lineCodes.map((code) => ({ item: found.get(code)!.product.name, code, pricePerItem: 10, quantity: 1, total: 10, uom: "PC" })) };
+  };
+  const toasters: Array<[string, string]> = [["HET-4", "Electric Toaster 4-Slot HET-4"], ["HET-6", "Electric Toaster 6-Slot HET-6"], ["WCT708K", "Waring Commercial Toaster WCT708K"]];
+  // runs-new c11-persona T11 and c07-persona T13, after update_enquiry succeeded.
+  const swap = "Swapped: HET-4 removed, WCT708K (Waring, 1 unit) added. Now: 2 HET-6 + 1 WCT708K, total SGD 923.96 (ex GST).";
+  assert.deepEqual(enquiryClaimIssues(swap, facts(toasters, ["HET-6", "WCT708K"], [{ action: "remove", code: "HET-4" }, { action: "add", code: "WCT708K" }])), []);
+  assert.deepEqual(enquiryClaimIssues(
+    "Removed - your enquiry now has just the 1 Dynamic Power Whisk Mixer, total SGD 1,340.37. Anything else?",
+    facts([["MX130", "Dynamic Mini Cordless Mixer MX130"], ["FT001", "Dynamic Power Whisk Mixer FT001"]], ["FT001"], [{ action: "remove", code: "MX130" }]),
+  ), []);
+  // The same swap when it didn't happen, or only half of it did.
+  assert.equal(enquiryClaimIssues(swap, facts(toasters, ["HET-4", "HET-6"], [])).length, 1);
+  assert.equal(enquiryClaimIssues(swap, facts(toasters, ["HET-6"], [{ action: "remove", code: "HET-4" }])).length, 1);
+  // runs-new c03-stress T10: a bracket that holds its own change is a clause too.
+  const knives: Array<[string, string]> = [["ZK-176", "Zyliss Chef Knife 17.6cm"], ["ZK-191", "Zyliss Chef Knife 19.1cm"]];
+  const knifeSwap = "Swapped: 3 Zyliss Chef Knife 17.6cm at $35.69 each now in your enquiry (19.1cm removed).";
+  assert.deepEqual(enquiryClaimIssues(knifeSwap, facts(knives, ["ZK-176"], [{ action: "remove", code: "ZK-191" }, { action: "add", code: "ZK-176" }])), []);
+  assert.equal(enquiryClaimIssues(knifeSwap, facts(knives, ["ZK-191"], [])).length, 1);
 });
 
 test("honest or conditional wording is not a claim", () => {
@@ -255,15 +304,20 @@ test("honest or conditional wording is not a claim", () => {
     "Tell me how many and I'll add them right away.",
     "Best if you contact Sia Huat sales directly to get that line added.",
     "Pick a plate style and a bowl style you like, and I'll add the quantities you need.",
+    "Pick whichever suits and I'll add it to your enquiry.",
+    "The price was updated today.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
   }
+  assert.deepEqual(claimIssues("Your updated total is $46.72.", { lines: [line("BTS-8026D", 2)] }), []);
 });
 
 test("a false claim is replaced by one plain line where the first one was", () => {
   const facts = { lines: [line("RS-J1009-7", 4)], changes: [added("RS-J1009-7")], seen: shop };
-  assert.equal(withoutEnquiryClaims("Plate qty 4 done. Let me add the bowl too. Anything else?", facts), "Plate qty 4 done. That isn't on your enquiry yet. Anything else?");
-  assert.equal(withoutEnquiryClaims("Added the spoons. Added the rice bowls too.", { ...facts, seen: shop }), "That isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("Plate qty 4 done. Let me add the bowl too. Anything else?", facts), "Plate qty 4 done. That change isn't on your enquiry yet. Anything else?");
+  assert.equal(withoutEnquiryClaims("Added the spoons. Added the rice bowls too.", { ...facts, seen: shop }), "That change isn't on your enquiry yet.");
+  // The torch is on the enquiry at 2, so the line must not say it isn't there at all.
+  assert.equal(withoutEnquiryClaims("Updated: 5 Safico torches now.", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That change isn't on your enquiry yet.");
   assert.equal(withoutEnquiryClaims("Here you go.", facts), "Here you go.");
 });
 
@@ -272,20 +326,35 @@ test("asking permission to add is a style issue", () => {
   const withCard = styleWith("The Safico fits. Want me to add it to your enquiry?", ["BTS-8026D"]);
   assert.deepEqual(withCard.filter((issue) => issue === NO_PERMISSION_ISSUE).length, 1);
   assert.ok(!withCard.some((issue) => issue.startsWith("The customer must choose a product card first")));
-  for (const message of ["Shall I add 2 to your enquiry?", "Once you confirm I'll add it right away.", "Confirming: 3pcs of this one?"]) {
+  for (const message of [
+    "Shall I add 2 to your enquiry?", "Once you confirm I'll add it right away.", "Confirming: 3pcs of this one?",
+    "Want me to add the CB15K, and how many units total?", "You already saw the plate. Want me to add any of these, and how many of each?",
+  ]) {
     assert.ok(styleWith(message).includes(NO_PERMISSION_ISSUE), message);
   }
   for (const message of [
     "How many do you need?", "Only 5 in stock. Want me to add 5 now, or check alternatives for the 6th?",
     "How many would you like so I can add it for you?", "I'll try the search again once you confirm.",
+    // runs-new2 c11-persona T9 and s06-B T2: a closing question after a sentence with "can".
+    "Delivery and lead times aren't something I can confirm here — Sia Huat sales will work that out based on your enquiry once it's submitted. Anything else you'd like to add?",
+    "I can't issue a formal quotation PDF here, but you can download the enquiry summary from the bar to send to Sia Huat sales for a formal quote. Anything else to add?",
+    "Got it: 2 Safico torches. You can download the PDF from the enquiry bar. Anything else you'd like to add?",
+    "How many would you like to add?", "How many should I add?", "How many do you need so we can add it?",
+    "Would you like to add anything else?", "What else can I add for you?",
   ]) {
     assert.ok(!styleWith(message).includes(NO_PERMISSION_ISSUE), message);
   }
+  // Asking to check stock or show a card is not about adding.
+  const checkStock = styleWith("The Safico fits. Want me to check stock on it?", ["BTS-8026D"]);
+  assert.ok(checkStock.includes(NO_SHOW_PERMISSION_ISSUE) && !checkStock.includes(NO_PERMISSION_ISSUE));
 });
 
 test("a confirm-add chip is dropped", () => {
   const review = reviewAnswer({ message: "Which one would you like?", card_ids: [], chips: ["Yes, add it", "Show others"], show_contact: false }, seen, allowed);
   assert.deepEqual(review.chips, ["Show others"]);
+  const chipsOf = (chips: string[]) => reviewAnswer({ message: "Which one would you like?", card_ids: [], chips, show_contact: false }, seen, allowed).chips;
+  assert.deepEqual(chipsOf(["Add it", "Confirm", "Add both"]), []);
+  assert.deepEqual(chipsOf(["Add more items", "Add another item"]), ["Add more items", "Add another item"]);
 });
 
 test("promising to come back later is a style issue and is dropped when tidied", () => {

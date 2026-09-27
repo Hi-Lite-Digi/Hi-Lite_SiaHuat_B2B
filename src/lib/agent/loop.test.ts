@@ -666,7 +666,7 @@ test("a false add claim that survives the nudge and the repair is replaced", asy
   assert.equal(bodies.length, 3);
   assert.equal(reply.provider, "anthropic");
   assert.doesNotMatch(reply.message, /added/i);
-  assert.equal(reply.message, "That isn't on your enquiry yet. Anything else?");
+  assert.equal(reply.message, "That change isn't on your enquiry yet. Anything else?");
 });
 
 test("no nudge when little time is left: the repair runs instead", async () => {
@@ -683,5 +683,86 @@ test("a 'Noted: 2 torches' claim with no update is replaced after the repair", a
   const { client } = fakeClient([claim, claim, claim]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
-  assert.equal(reply.message, "That isn't on your enquiry yet.");
+  assert.equal(reply.message, "That change isn't on your enquiry yet.");
+});
+
+test("a reply about what is already on the enquiry is sent without a nudge", async () => {
+  const cases: Array<[string, string, AgentRequest["enquiry"]]> = [
+    ["added alr?", "Yes, it's already added. Anything else?", [{ stockId: "970S", quantity: 2 }]],
+    ["the 2 blow torch added already?", "Yes, both are in your enquiry.", [{ stockId: "970S", quantity: 2 }, { stockId: "BTS-8026D", quantity: 1 }]],
+  ];
+  for (const [text, message, enquiry] of cases) {
+    const { client, bodies } = fakeClient([answer({ message })]);
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text }, enquiry }), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 1, message);
+    assert.equal(reply.message, message);
+    assert.doesNotMatch(reply.message, /isn't on your enquiry/);
+    assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), enquiry.map((item) => [item.stockId, item.quantity]));
+  }
+});
+
+test("an 'Updated: 5' reply for a line already on the enquiry is nudged until update_enquiry runs", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "Updated: 5 Safico torches now." }),
+    toolCall("t1", "update_enquiry", { action: "set", stock_id: "BTS-8026D", quantity: 5 }),
+    answer({ message: "Updated: 5 Safico torches now." }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "make it 5" }, enquiry: [{ stockId: "BTS-8026D", quantity: 2 }] }), deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), NUDGE);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 5]]);
+  assert.equal(reply.message, "Updated: 5 Safico torches now.");
+});
+
+test("a true removal reply that names the item left is sent as it is", async () => {
+  const message = "Removed - your enquiry now has just the 1 Safico torch burner, total $23.36. Anything else?";
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", { action: "remove", stock_id: "970S" }), answer({ message })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "i never said i want the blow torch. remove it" }, enquiry: [{ stockId: "970S", quantity: 1 }, { stockId: "BTS-8026D", quantity: 1 }] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 1]]);
+});
+
+test("no nudge on the last round that may use tools: the repair runs instead", async () => {
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["torch"] }),
+    toolCall("t2", "search_catalogue", { queries: ["gas torch"] }),
+    answer({ message: "Adding 2 torches now." }),
+    answer({ message: "Which torch would you like?" }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "2 torches" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual(bodies.map((body) => (body.tool_choice as { type: string }).type), ["auto", "auto", "auto", "none"]);
+  assert.ok(!bodies.some((body) => NUDGE.test(JSON.stringify(body.messages))));
+  assert.equal(reply.message, "Which torch would you like?");
+});
+
+test("an earlier card's code lookup and live check share one time limit", async () => {
+  const slow = deps();
+  const findByCode = slow.findByCode;
+  slow.findByCode = (code) => new Promise((resolve) => { setTimeout(() => resolve(findByCode(code)), 1_900); });
+  slow.fetchLive = () => new Promise(() => undefined);
+  const { client } = fakeClient([answer({ message: "Here it is again.", card_ids: ["970S"] })]);
+  const started = performance.now();
+  const reply = await within(runAgentTurn({ request: askedAgain("show me again"), deps: slow, client, model: "claude-sonnet-5" }), 5_000);
+  assert.ok(performance.now() - started < 2_700, `${Math.round(performance.now() - started)} ms`);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
+});
+
+test("an earlier card already tried this turn is not looked up again after the repair", async () => {
+  const stalled = deps();
+  const fetchLive = stalled.fetchLive;
+  stalled.fetchLive = (url, ms) => (url === blowtorch.source_url ? new Promise(() => undefined) : fetchLive(url, ms));
+  const { client, bodies } = fakeClient([
+    answer({ message: "Noted. Here it is again.", card_ids: ["970S"] }),
+    answer({ message: "Here it is again.", card_ids: ["970S"] }),
+  ]);
+  const started = performance.now();
+  const reply = await within(runAgentTurn({ request: askedAgain("show me again"), deps: stalled, client, model: "claude-sonnet-5" }), 6_000);
+  assert.equal(bodies.length, 2);
+  assert.ok(performance.now() - started < 3_000, `${Math.round(performance.now() - started)} ms`);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
 });

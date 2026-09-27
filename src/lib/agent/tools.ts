@@ -9,7 +9,7 @@ import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct
 import { customerChose, pickedCodes, type PickEvidence } from "./picks";
 
 /** One change update_enquiry made to the enquiry. */
-export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null; name: string | null };
+export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null };
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -216,7 +216,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   if (input.action !== "clear" && ctx.uncheckedCodes.some((item) => item.toLowerCase() === code)) {
     if (input.action !== "remove") return fail("STOCK_UNVERIFIED");
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
-    ctx.changes.push({ action: "remove", code: input.stock_id ?? null, name: null });
+    ctx.changes.push({ action: "remove", code: input.stock_id ?? null });
     return ok(enquiryState(ctx));
   }
   const lineCodes = ctx.lines.map((line) => line.code);
@@ -235,7 +235,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   if (result.product) remember(ctx, result.product);
   if (!result.ok) return fail(result.error, { available: result.available ?? undefined, notice: result.notice || undefined });
   ctx.lines = result.lines;
-  ctx.changes.push({ action: input.action, code: input.stock_id ?? null, name: result.product?.product.name ?? null });
+  ctx.changes.push({ action: input.action, code: result.product?.product.stock_id ?? input.stock_id ?? null });
   if (input.action === "clear") ctx.uncheckedCodes = [];
   return ok({ ...enquiryState(ctx), notice: result.notice || undefined });
 }
