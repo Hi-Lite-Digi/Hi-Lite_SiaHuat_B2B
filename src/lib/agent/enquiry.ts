@@ -27,8 +27,19 @@ export function enquiryTotals(lines: EnquiryReceiptLine[]) {
 const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
 // A number right after one of these is a label, not a quantity ("option 2", "size 2", "#2", "第2个", "选项2", "型号2").
 const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|size|model|type|tier|level|layer|deck|burner|door|outlet|branch|table|page|step)|#|第|选项|型号)\s*)`;
-// A number right before one of these is a size, a count of parts, a pack size or an ordinal ("3-tier", "4 outlets", "48pcs/ctn", "2nd", "2号", "2款").
-const notQuantityAfter = String.raw`(?![-\s]*(?:tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th)\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款])`;
+const sizeOrPartWords = String.raw`tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|ppl|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th|dollars?|bucks|sgd|cents?`;
+// A number right before one of these is a size, a count of parts or people, a price, a pack size or an ordinal
+// ("3-tier", "4 ppl", "5 dollar", "48pcs/ctn", "2nd", "2号"), or not a count at all ("20+", "1 more time", "26 too long", 16", "4 or 6 slot").
+const notQuantityAfter = String.raw`(?![-\s]*(?:${sizeOrPartWords})\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款]|\s*\+|\s+more\s+times?\b|\s+too\b|\s*(?:"|″|”|'')(?!\w)|\s*(?:or|to)\s*\d+[-\s]*(?:${sizeOrPartWords})\b)`;
+// "one" as a quantity: at the start, after a buying word, before a count word, or "one each / one of each"; never "that one" or "one of them".
+const oneAsQuantity = /(?:^\s*|\b(?:just|only|want|need|take|buy|add|order|get)\s+)one\b(?!\s+of\b(?!\s+each))|\bone\s+(?:each|of\s+each)\b|\bone\s*(?:pcs?|pieces?|units?|sets?|boxe?s?|ctns?|cartons?|pkts?|packets?|packs?)\b/i;
+
+/** Numbers that are never quantities: list labels ("1) pot" on 2+ lines), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
+function withoutNonQuantities(text: string) {
+  const labels = text.match(/^[ \t]*\d{1,2}[ \t]*[).][ \t]+\S/gm) ?? [];
+  const unlabelled = labels.length >= 2 ? text.replace(/^[ \t]*\d{1,2}[ \t]*[).][ \t]+/gm, "") : text;
+  return unlabelled.replace(/\bthe\s+\d+\s+(?:again|of them|cards?|ones?)\b/gi, " ").replace(/\b\d+\s*-?\s*in\s*-?\s*\d+\b/gi, " ");
+}
 
 const chineseDigits = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
 
@@ -47,18 +58,20 @@ function chineseNumerals(quantity: number) {
  * prices ("$23", "S$ 23"), option/model numbers, tiers, burners and outlet counts do not count.
  * Chinese numerals count only before a measure word (两个, 五箱) or at the end of the text,
  * and never as an ordinal or an option/model number (第二个, 选项二, 型号二).
- * Numbers joined to a code or a fraction ("218455-20", "BTS-8026", "1/2 GN") do not count either.
- * Known gap: the pronoun "one" ("the blue one") still counts as quantity 1.
+ * Numbers joined to a code or a fraction ("218455-20", "BTS-8026", "1/2 GN") do not count either, nor list labels,
+ * "3-in-1", prices ("5 dollar"), head counts ("4 ppl"), "20+", "1 more time" and inch sizes (16").
+ * The word "one" counts only when said as a quantity ("just one", "one pc"), not as a pronoun ("the blue one").
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?![\\w.])`, "i");
+  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.\\d)`, "i");
   const word = numberWords[quantity];
+  const wordQuantity = quantity === 1 ? oneAsQuantity : word !== undefined ? new RegExp(`\\b${word}\\b`, "i") : null;
   const chinese = chineseNumerals(quantity);
   const chineseQuantity = chinese.length
     ? new RegExp(`(?<![一二两三四五六七八九十百千万零第]|选项|型号)(?:${chinese.join("|")})(?=[个件只把套箱包盒台支张条打瓶罐双]|\\s*$)`)
     : null;
-  return customerTexts.some((text) => digits.test(text)
-    || (word !== undefined && new RegExp(`\\b${word}\\b`, "i").test(text))
+  return customerTexts.map(withoutNonQuantities).some((text) => digits.test(text)
+    || (wordQuantity !== null && wordQuantity.test(text))
     || (chineseQuantity !== null && chineseQuantity.test(text)));
 }
 

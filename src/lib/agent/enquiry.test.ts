@@ -207,6 +207,39 @@ test("numbers inside item codes and GN fractions are not quantities", () => {
   assert.equal(quantityStated(2, ["2 pcs of the 1/2 GN pan"]), true);
 });
 
+test("a number followed by a full stop still counts, a decimal does not", () => {
+  assert.equal(quantityStated(2, ["ok 2. how many u have in stock"]), true);
+  assert.equal(quantityStated(2, ["2. also 1 of the 6 slot"]), true);
+  assert.equal(quantityStated(2, ["2.5 kg"]), false);
+});
+
+test("product names, prices, head counts, repeats and inch sizes are not quantities", () => {
+  const notQuantities: Array<[number, string]> = [
+    [3, "how about cordless 3-in-1 blender"], [3, "cordless 3 in 1 blender"], [4, "need dining set 4 ppl"], [1, "1 more time ask me tap"],
+    [5, "the 5 dollar one la"], [62, "62 bucks some more"], [20, "wah 20+ so ex for tong"], [4, "4 or 6 slot"], [2, "show the 2 again i tap"],
+    [26, "change to the 16cm wide one. 26 too long"], [16, 'the 16" one'], [18, "CCK 18″ wok pls"],
+  ];
+  for (const [quantity, text] of notQuantities) assert.equal(quantityStated(quantity, [text]), false, text);
+  const quantities: Array<[number, string]> = [[20, "20 more"], [3, "3"], [4, '4 x 16" tongs'], [5, "1) Pot x 5\n2) Lid\n3) Ladle"]];
+  for (const [quantity, text] of quantities) assert.equal(quantityStated(quantity, [text]), true, text);
+});
+
+test("the labels of a numbered list are not quantities", () => {
+  const list = [
+    "Hi, can you send me a quote for the following items:", "1) Stainless Steel Pot 12QT", "2) Stainless Steel Strainer for the 12QT Pot",
+    "3) Stainless Steel Ladle 4oz, 6oz, 8oz, length approximate 10inch", '4) 1/2 Stainless Steel Pan, 6" Deep', '5) 1/4 Stainless Steel Pan, 6" Deep',
+    "6) Lid for 1/2 S/S Pan with notch for ladle", "7) Lid for 1/4 S/S Pan with notch for ladle", "8) Oyster Knife with Plastic Handle",
+  ].join("\n");
+  for (const text of [list, list.replace(/^(\d)\)/gm, "$1.")]) {
+    for (let quantity = 1; quantity <= 8; quantity++) assert.equal(quantityStated(quantity, [text]), false, `${quantity} in the ${text.includes("1)") ? "1)" : "1."} list`);
+  }
+});
+
+test("the word one counts only when it is said as a quantity", () => {
+  for (const text of ["take one of each", "one enough.. wait", "just one", "i want one", "one pc", "One please"]) assert.equal(quantityStated(1, [text]), true, text);
+  for (const text of ["got cheaper one or not", "that one got plate bowl all?", "the 5 dollar one la", "only one of them", "the 3 one"]) assert.equal(quantityStated(1, [text]), false, text);
+});
+
 test("adding to a line already on the enquiry needs a number typed in this message", async () => {
   const deps = fakeDeps([torch]);
   const lines = [{ item: torch.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];

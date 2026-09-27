@@ -513,6 +513,23 @@ test("only the previous reply's cards count: a single card there is the customer
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
 });
 
+test("the 3-in-1 in a request is not quantity 3", async () => {
+  const blender = product({ stock_id: "MX130", name: "CORDLESS 3 IN 1 HAND BLENDER MX130", list_price: 62 });
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "MX130", quantity: 3 }),
+    answer({ message: "How many do you need?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "show me" },
+      history: [{ role: "user", content: "got cordless 3 in 1 blender whisk kind anot" }, { role: "assistant", content: `This one has a whisk.\n[cards shown: MX130 ${blender.name} ($62.00) <${blender.source_url}>]` }],
+    }),
+    deps: fakeDeps([blender]), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /QTY_NOT_STATED/);
+});
+
 test("customer texts exclude taps and include the current message", () => {
   const texts = recentCustomerTexts(request({
     event: { type: "text", text: "3 please" },
