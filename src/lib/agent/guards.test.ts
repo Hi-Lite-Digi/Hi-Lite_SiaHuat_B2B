@@ -4,12 +4,12 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE, NO_SHOW_PERMISSION_ISSUE, PROMISE_LATER_ISSUE,
-  RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, reviewAnswer, tidyMessage,
-  unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE, NO_SHOW_PERMISSION_ISSUE, PROMISE_LATER_ISSUE,
+  RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, removeClaims, reviewAnswer,
+  stockIssues, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
-import type { EnquiryChange } from "./tools";
+import type { EnquiryChange, SearchRecord } from "./tools";
 
 const seen = new Map<string, CheckedProduct>([
   ["BTS-8026D", { product: product({ stock_id: "BTS-8026D", list_price: 23.36 }), verified: true }],
@@ -524,4 +524,105 @@ test("Sia Huat's sales contact, prices, item codes, dates and size lists pass un
   ]) {
     assert.deepEqual(customerMessage(safe), { message: safe, showContact: false }, safe);
   }
+});
+
+const search = (overrides: Partial<SearchRecord> = {}): SearchRecord => ({ queries: ["tongs"], category: null, categoryFound: false, maxPrice: null, complete: false, ...overrides });
+const stockSeen = new Map<string, CheckedProduct>([
+  ["BLP10.A0WH", { product: product({ stock_id: "BLP10.A0WH", name: "Kenwood Blender x-Tract 1.5L", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }), verified: true }],
+  ["1052", { product: product({ stock_id: "1052", name: "Adler Kettle 2L", stock_status: "unknown", in_stock: null, available_quantity: null }), verified: false }],
+  ["VD-KT", { product: product({ stock_id: "VD-KT", name: "Vinda Deluxe Kitchen Towel", stock_status: "unknown", in_stock: null, available_quantity: null }), verified: false }],
+  ["4006", { product: product({ stock_id: "4006", name: "Beautex Kitchen Towel (Pulp), 6Rolls X 60Sheets", available_quantity: 1 }), verified: true }],
+  ["GP111", { product: product({ stock_id: "GP111", name: "COFFEE BAG WITH WIRE HANDLE 4in", stock_status: "unknown", in_stock: null, available_quantity: null }), verified: false }],
+]);
+const claimReview = (message: string, searches: SearchRecord[] = []) => reviewAnswer(
+  { message, card_ids: [], chips: [], show_contact: false }, stockSeen, allowed, undefined, { searches },
+);
+const claimsOf = (message: string, searches: SearchRecord[] = []) => claimReview(message, searches).safety.filter((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX));
+const absenceOf = (message: string, searches: SearchRecord[] = []) => claimReview(message, searches).style.filter((issue) => issueCode(issue) === "ABSENCE");
+
+test("a claim that the range is complete needs a complete search this turn", () => {
+  for (const message of ["That covers our tong range.", "Comes in two sizes, 6″ and 8″.", "Everything else in-stock is Atlantic Chef."]) {
+    assert.equal(claimsOf(message).length, 1, message);
+    assert.equal(claimsOf(message, [search({ complete: false })]).length, 1, message);
+    assert.deepEqual(claimsOf(message, [search({ complete: true })]), [], message);
+  }
+  assert.equal(issueCode(claimsOf("That covers our tong range.")[0]), "CLAIM");
+});
+
+test("a claim that nothing fits the budget needs a complete priced search this turn", () => {
+  for (const message of ["Nothing cheaper in that longer length.", "I don't have a commercial blender in that lower budget range."]) {
+    assert.equal(claimsOf(message, [search({ categoryFound: true, maxPrice: 20, complete: false })]).length, 1, message);
+    assert.deepEqual(claimReview(message, [search({ maxPrice: 20, complete: true })]).safety, [], message);
+  }
+  assert.deepEqual(claimsOf("No Damascus blades - none turned up under that name."), []);
+});
+
+test("a 'we don't have it' needs two searches and a found category, and is only ever a style issue", () => {
+  const boxed = "We don't carry boxed dining sets.";
+  const unbacked = claimReview(boxed, [search({ queries: ["dining set"], categoryFound: false })]);
+  assert.deepEqual(unbacked.safety, []);
+  assert.equal(unbacked.style.filter((issue) => issueCode(issue) === "ABSENCE").length, 1);
+  assert.deepEqual(absenceOf(boxed, [search({ queries: ["dining set", "cutlery set"], category: "table-setting sets", categoryFound: true })]), []);
+  assert.equal(absenceOf("I'm not finding the GN pan trolley.").length, 1);
+  assert.deepEqual(absenceOf("Sorry, we don't sell mangoes - we're a kitchen and F&B equipment supplier."), []);
+  const torch = claimReview("Mastrad torch is out of stock, no direct substitute for it.");
+  assert.deepEqual(torch.safety, []);
+  assert.match(torch.style.find((issue) => issueCode(issue) === "ABSENCE") ?? "", /no direct substitute/);
+});
+
+test("an out-of-stock claim needs every product it points at checked live as out of stock", () => {
+  assert.equal(claimsOf("The two cheaper options I found (Kenwood x-Tract, Adler 2L) are both out of stock.").length, 1);
+  assert.deepEqual(claimsOf("The Kenwood x-Tract is out of stock."), []);
+  assert.equal(claimsOf("Beautex Kitchen Towel (4006) only has 1 pkt left in stock, and the Vinda Deluxe pkt is currently out of stock.").length, 1);
+  assert.deepEqual(claimsOf("The 12QT pot is out of stock."), []);
+  assert.deepEqual(claimsOf("GP111's stock isn't confirmed yet, so it may be out of stock."), []);
+  assert.deepEqual(claimsOf("GP111 has no stock figure yet."), []);
+  // Only the part that says out of stock is judged; "it" takes the part before.
+  assert.deepEqual(claimsOf("The Kenwood x-Tract is out of stock, but the Adler 2L is worth a look."), []);
+  assert.equal(claimsOf("Found the Adler 2L - but it's out of stock right now.").length, 1);
+});
+
+test("honest wording raises no claim, even with no searches", () => {
+  for (const message of [
+    "No other changes to your enquiry.",
+    "Everything else on your enquiry stays the same.",
+    "That's all added - anything else?",
+    "That's all set: 2 Safico torches on your enquiry.",
+    "Nothing else needed from you - the enquiry is saved.",
+    "That's everything on your list.",
+    "There are still more variants beyond these — want me to keep going by size?",
+    "I don't have a separate spec on the metal handle",
+    "I haven't found a boxed set yet - want me to check cutlery sets?",
+    "Only 3 pcs of the ST-15 in stock, so I can't do 4.",
+    "I couldn't find item code ABC-123 in our catalogue.",
+    "I don't have a live price for the GP111 yet.",
+    "I couldn't find the photo on my side",
+    "Everything is in stock, so you're good to go.",
+  ]) {
+    assert.deepEqual(claimReview(message).safety, [], message);
+    assert.deepEqual(absenceOf(message), [], message);
+  }
+});
+
+test("removeClaims drops only the unbacked claim sentences", () => {
+  assert.equal(removeClaims("That covers our tong range. Want me to add any?", [], stockSeen), "Want me to add any?");
+  assert.equal(removeClaims("Approx. 5L each. That covers our range.", [], stockSeen), "Approx. 5L each.");
+  assert.equal(removeClaims("We don't carry boxed dining sets. Want cutlery?", [], stockSeen), "We don't carry boxed dining sets. Want cutlery?");
+});
+
+test("saying all the cards are in stock when one isn't is a style issue", () => {
+  const card = (stock_id: string, stock_status: "in_stock" | "out_of_stock" | "unknown") => product({
+    stock_id, stock_status, in_stock: stock_status === "in_stock", available_quantity: stock_status === "in_stock" ? 5 : null,
+  });
+  const [inStock, out, unchecked] = [card("IN", "in_stock"), card("OUT", "out_of_stock"), card("UNK", "unknown")];
+  assert.match(stockIssues("Here are 3 porcelain options in stock.", [inStock, out]).join(" "), /OUT \(out of stock\)/);
+  assert.match(stockIssues("These are all confirmed in stock.", [inStock, unchecked]).join(" "), /stock not checked/);
+  assert.deepEqual(stockIssues("Both are in stock.", [inStock, card("IN2", "in_stock")]), []);
+  for (const message of ["The first is in stock; the second is out of stock.", "Both are 0 in stock.", "Both are not available now.", "All in stock except the Severin, which is out of stock."]) {
+    assert.deepEqual(stockIssues(message, [inStock, out]), [], message);
+  }
+  const unverified = new Map<string, CheckedProduct>([...seen, ["OLD", { product: card("OLD", "unknown"), verified: false }]]);
+  const review = reviewAnswer({ message: "Both are in stock.", card_ids: ["BTS-8026D", "OLD"], chips: [], show_contact: false }, unverified, allowed);
+  assert.equal(review.style.filter((issue) => /OLD \(stock not checked\)/.test(issue)).length, 1);
+  assert.equal(issueCode(review.style.find((issue) => /stock not checked/.test(issue))!), "CLAIM");
 });

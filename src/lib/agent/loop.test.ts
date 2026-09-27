@@ -5,6 +5,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import sharp from "sharp";
 import type { AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
+import { CLAIM_ISSUE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, product } from "./testing";
 
@@ -820,4 +821,45 @@ test("two adds in one round both land", async () => {
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2], ["BTS-8026D", 3]]);
   // Both lookups start together before the first add, and the adds reuse them.
   assert.deepEqual(shared.calls, ["code:970S", "code:BTS-8026D", "live:970S", "live:BTS-8026D"]);
+});
+
+test("an unbacked completeness claim is repaired once, then removed", async () => {
+  const claim = answer({ message: "That covers our torch range. Anything else?" });
+  const { client, bodies } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), claim, claim]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 3);
+  assert.ok(JSON.stringify(bodies[2].messages.at(-1)).includes(CLAIM_ISSUE_PREFIX));
+  assert.equal(reply.message, "Anything else?");
+});
+
+test("a completeness claim backed by a complete category search is sent unchanged", async () => {
+  const lighters = [
+    product({ stock_id: "GL1", name: "COOKING TORCH", third_category: "Gas lighters" }),
+    product({ stock_id: "GL2", name: "GAS TORCH BURNER", third_category: "Gas lighters" }),
+  ];
+  const message = "That covers our torch range. Anything else?";
+  const { client, bodies } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"], category: "gas lighters" }), answer({ message })]);
+  const reply = await runAgentTurn({ request: request({}), deps: fakeDeps(lighters), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+});
+
+test("an out-of-stock claim about a product checked live as out of stock needs no repair", async () => {
+  const message = "The kitchen blow torch is out of stock.";
+  const { client, bodies } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] }), answer({ message })]);
+  const soldOut = fakeDeps([blowtorch, safico], { "970S": { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 } });
+  const reply = await runAgentTurn({ request: request({}), deps: soldOut, client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+});
+
+test("an absence claim is repaired once, then sent tidied, not removed", async () => {
+  const claim = answer({ message: "We don't carry boxed dining sets. Plates and cutlery are sold on their own." });
+  const { client, bodies } = fakeClient([claim, claim]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "boxed dining set" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 2);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /This 'we don't have it' isn't backed/);
+  assert.equal(reply.message, "We don't carry boxed dining sets. Plates and cutlery are sold on their own.");
 });

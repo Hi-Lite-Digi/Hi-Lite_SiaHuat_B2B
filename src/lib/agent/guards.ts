@@ -7,7 +7,7 @@ import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import { codePattern, pointedCards } from "./picks";
-import type { EnquiryChange } from "./tools";
+import type { EnquiryChange, SearchRecord } from "./tools";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
 /**
@@ -132,9 +132,20 @@ export const noCardFixer: Fixer = {
 };
 
 /** What this turn's tools did, for checks on the reply. */
-export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[] };
-/** Turn facts plus the products looked up this turn, which the reply's words can point at. */
-export type ClaimFacts = TurnFacts & { seen: ReadonlyMap<string, CheckedProduct> };
+export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[] };
+/** The enquiry facts plus the products looked up this turn, which the reply's words can point at. */
+export type ClaimFacts = Pick<TurnFacts, "lines" | "changes"> & { seen: ReadonlyMap<string, CheckedProduct> };
+
+/** The products looked up this turn, as cards the reply's words can point at. */
+const seenCards = (seen: ReadonlyMap<string, CheckedProduct>): ShownCard[] => [...seen.values()]
+  .map(({ product }) => ({ code: product.stock_id, name: product.name, price: null, link: null }));
+/** The cards whose code the text types, else the ones its words point at. */
+function pointedBy(text: string, cards: ShownCard[]) {
+  // Amounts are left out: the cents of "$547.66" would point at a card coded 66 (runs-new2 c02-persona T14).
+  const words = text.replace(moneyPattern, "");
+  const typed = cards.filter((card) => codePattern(card.code).test(words));
+  return typed.length ? typed : pointedCards(words, cards);
+}
 
 export const ENQUIRY_CLAIM_PREFIX = "The enquiry didn't change";
 const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped|noted down)\b|\bput\b[^.!?\n]{0,25}\bin(?:to)?\s+(?:your|the)\s+enquiry\b|\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b|\bqty\s*\d+\s*done\b|^\s*(?:noted|got it|done|ok(?:ay)?)[:,!]?\s*\d|已(?:添加|加入|更新|删除|移除)|加好了|帮你加了/i;
@@ -165,17 +176,12 @@ const NOT_ON_ENQUIRY = "That change isn't on your enquiry yet.";
 function falseEnquiryClaims(message: string, facts: ClaimFacts) {
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   const cards: ShownCard[] = [
-    ...[...facts.seen.values()].map(({ product }) => ({ code: product.stock_id, name: product.name, price: null, link: null })),
+    ...seenCards(facts.seen),
     ...facts.lines.map((line) => ({ code: line.code, name: line.item, price: null, link: null })),
   ];
   const onLines = (card: ShownCard) => facts.lines.some((line) => same(line.code, card.code));
   const changed = (card: ShownCard, actions: EnquiryChange["action"][] = ["add", "set", "remove"]) => facts.changes.some((change) => change.code !== null && same(change.code, card.code) && actions.includes(change.action));
-  // Amounts are left out: the cents of "$547.66" would point at a card coded 66 (runs-new2 c02-persona T14).
-  const point = (text: string) => {
-    const words = text.replace(moneyPattern, "");
-    const typed = cards.filter((card) => codePattern(card.code).test(words));
-    return typed.length ? typed : pointedCards(words, cards);
-  };
+  const point = (text: string) => pointedBy(text, cards);
   // A clause with a change word, judged on its own: a swap's "HET-4 removed" and "WCT708K added" each hold for their item.
   const falseClause = (clause: string, statusAllowed: boolean) => {
     if (honestWording.test(clause)) return false;
@@ -218,6 +224,92 @@ export function withoutEnquiryClaims(message: string, facts: ClaimFacts) {
   return removeSentences(message.replace(first, NOT_ON_ENQUIRY), (sentence) => rest.includes(sentence));
 }
 
+export const CLAIM_ISSUE_PREFIX = "This claim";
+const ABSENCE_ISSUE_PREFIX = "This 'we don't have it'";
+// Claims about the range that no code checked (exam 2: "That covers our tong range", "Comes in two sizes", "Nothing cheaper in that
+// longer length", "our listings are aluminium step ladders"). Talk about the enquiry ("No other changes to your enquiry") is neither
+// a completeness nor an absence claim, and "the only one of these" is about the cards shown.
+const ENQUIRY_TALK = /\b(?:enquiry|added|removed|updated|your\s+(?:list|order|cart))\b/i;
+const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
+const COMPLETE = /\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b|\bno\s+other\b|\bnothing\s+else\b|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b/i;
+// "I don't have a spec on that" or "couldn't find the photo" is not about a product.
+const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price))`;
+const ABSENT = new RegExp(String.raw`\b(?:we|i|sia\s+huat)\s+(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not)\s+(?:carry|stock|sell)\b|\b(?:we|i)\s+(?:don['’]?t|do\s+not)\s+have\s+(?:a|an|any|another|other|bundled|boxed|pre[- ]?\w+|such)\b${NOT_A_PRODUCT}|\bnot\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b${NOT_A_PRODUCT}|\b(?:i['’]?m|am)\s+not\s+finding\b|\bno\s+(?:direct\s+|close\s+|similar\s+)?(?:substitute|alternative|replacement)s?\b(?!\s+needed)|\bcan['’]?t\s+offer\s+(?:a|an|any)\s+(?:substitute|alternative)|\bnone\s+of\s+our\b`, "i");
+// "Under" and "below" only count before a price or a budget: "none turned up under that name" is not about price (runs-new2 c01-B T9).
+const BUDGET = /\bnothing\s+(?:cheaper|less\s+expensive|under|below|within)\b|\bno(?:ne)?\s+(?:[\w-]+\s+){0,6}(?:cheaper\b|(?:under|below)\s+(?:S?\$\s?\d|\d|(?:your|that|the)\s+(?:budget|price)\b|budget\b)|within\s+(?:your|that|the)\s+budget\b)|\b(?:don['’]?t|do\s+not)\s+have\s+(?:[\w-]+\s+){0,6}(?:in\s+that|under|below|within)\s+(?:[\w-]+\s+){0,2}(?:budget|price)/i;
+// "We don't sell mangoes - we're a kitchen and F&B equipment supplier" already says what Sia Huat supplies, as the prompt asks.
+const SAYS_WHAT_WE_SUPPLY = /\bF&B\b/i;
+const STOCK = /\b(?:out\s+of\s+stock|sold\s+out|not\s+in\s+stock)\b|\bno\s+stock\b(?!\s+(?:figure|info|information|count|data|details?|level))/i;
+const IN_STOCK = /(?<!not\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b/i;
+const HEDGE = /\b(?:may|might|could)\s+be\b|\bnot\s+(?:yet\s+)?confirmed\b|\bunconfirmed\b|\bneeds?\s+checking\b/i;
+const PLURAL = /\b(?:both|all|these|those|they|them)\b/i;
+const CLAIM_FIXES = {
+  complete: "No search this turn listed a whole category (complete: true). Say these are some of the options and offer to narrow down.",
+  budget: "No search this turn listed a whole priced category. Say what you found under the budget so far and offer to check the whole range.",
+  stock: "Its stock wasn't checked live this turn, or the check says it's in stock. Describe stock only as the tool result says.",
+};
+const ABSENCE_FIX = "Say you couldn't find it in the searches you ran rather than that Sia Huat doesn't carry it; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead.";
+
+/**
+ * Sentences that claim more than this turn's searches and live checks back, one kind each: a budget or completeness claim
+ * needs a search that listed a whole (priced) category; "we don't have it" needs two different queries and a category that
+ * exists; "out of stock" needs every product it points at checked live as out of stock.
+ */
+function unbackedClaims(message: string, searches: SearchRecord[], seen: ReadonlyMap<string, CheckedProduct>) {
+  const complete = searches.some((search) => search.complete);
+  const budgetBacked = searches.some((search) => search.maxPrice !== null && search.complete);
+  const queries = new Set(searches.flatMap((search) => search.queries.map((query) => query.trim().toLowerCase())));
+  const absenceBacked = queries.size >= 2 && searches.some((search) => search.categoryFound);
+  const cards = seenCards(seen);
+  const soldOut = (card: ShownCard) => {
+    const item = seen.get(card.code);
+    return !!item?.verified && (item.product.stock_status === "out_of_stock" || item.product.available_quantity === 0);
+  };
+  // Each part that says "out of stock" is judged on its subject: the products that part points at; with "both" or "all", also
+  // those of the parts before it ("(Kenwood x-Tract, Adler 2L) are both out of stock"); with "it", those of the part just before.
+  // Other parts ("closest in-stock alternatives are ...") are not judged, nor is a part that says in stock or hedges, nor a
+  // subject that points at no product ("the 12QT pot").
+  const stockBacked = (sentence: string) => {
+    const parts = sentence.split(/[,;]|\s[-–—]\s|\b(?:and|but|while)\b/i).filter((part) => part.trim());
+    const aboutStock = (part: string) => STOCK.test(part) || IN_STOCK.test(part);
+    return parts.every((part, index) => {
+      if (!STOCK.test(part) || IN_STOCK.test(part) || HEDGE.test(part)) return true;
+      const own = pointedBy(part, cards);
+      const start = parts.slice(0, index).findLastIndex(aboutStock) + 1;
+      const before = PLURAL.test(part) ? parts.slice(start, index) : !own.length && index > start ? [parts[index - 1]] : [];
+      return [...own, ...before.flatMap((earlier) => pointedBy(earlier, cards))].every(soldOut);
+    });
+  };
+  return sentences(message).flatMap((sentence) => {
+    const talk = ENQUIRY_TALK.test(sentence);
+    // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it".
+    const range = BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
+      : COMPLETE.test(sentence) && !talk && !RELATIVE.test(sentence) ? (complete ? null : "complete" as const)
+      : ABSENT.test(sentence) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence) ? (absenceBacked ? null : "absence" as const)
+      : null;
+    const kind = range ?? (STOCK.test(sentence) && !stockBacked(sentence) ? "stock" as const : null);
+    return kind ? [{ sentence, kind }] : [];
+  });
+}
+
+/** The message without its unbacked completeness, budget and stock claims; a "we don't have it" stays for the repair to reword. */
+export function removeClaims(message: string, searches: SearchRecord[], seen: ReadonlyMap<string, CheckedProduct>) {
+  const unbacked = unbackedClaims(message, searches, seen).filter(({ kind }) => kind !== "absence").map(({ sentence }) => sentence);
+  return removeSentences(message, (sentence) => unbacked.includes(sentence));
+}
+
+const ALL_IN_STOCK_ISSUE_PREFIX = "You wrote that the cards are all in stock";
+// "All confirmed in stock", "both available", "3 porcelain options in stock"; not "Both are 0 in stock" or "not available".
+const everyCardInStock = /\b(?:all|both|every(?:thing|one)|(?:two|three|four|five|[2-5])\s+(?:[\w-]+\s+){0,3}(?:options?|ones?|models?|sizes?|picks?|items?|choices?))\b[^.?!\n]{0,60}?(?<!\b(?:0|no|not|zero)\s+)\b(?:in\s+stock|available)\b|\b(?:in\s+stock|available)\b[^.?!\n]{0,3}\b(?:all|both)\b/i;
+
+/** A style issue when the message says every card is in stock but a card isn't (or wasn't checked), unless it says which is out. */
+export function stockIssues(message: string, cards: Product[]) {
+  const notIn = cards.filter((card) => card.stock_status !== "in_stock");
+  if (!notIn.length || !everyCardInStock.test(message) || /\b(?:out\s+of\s+stock|sold\s+out)\b/i.test(message)) return [];
+  const which = notIn.map((card) => `${card.stock_id} (${card.stock_status === "out_of_stock" ? "out of stock" : "stock not checked"})`).join(", ");
+  return [`${ALL_IN_STOCK_ISSUE_PREFIX}, but ${which} ${notIn.length > 1 ? "aren't" : "isn't"}. Describe each product's stock as its tool result says.`];
+}
+
 // Old Claire's reply-style text for a permission question; the new Claire gets NO_PERMISSION_ISSUE (or, when the question
 // isn't about adding, NO_SHOW_PERMISSION_ISSUE) instead.
 const CHOOSE_FIRST = "The customer must choose a product card first";
@@ -252,6 +344,12 @@ export function reviewAnswer(
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
   if (turn.changes) safety.push(...enquiryClaimIssues(answer.message, { lines: turn.lines ?? [], changes: turn.changes, seen }));
+  for (const { sentence, kind } of turn.searches ? unbackedClaims(answer.message, turn.searches, seen) : []) {
+    // A "we don't have it" can be honest about a product type the searches missed, so it is reworded, never removed.
+    if (kind === "absence") style.push(`${ABSENCE_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${ABSENCE_FIX}`);
+    else safety.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES[kind]}`);
+  }
+  style.push(...stockIssues(answer.message, cards));
   if (!cards.length) {
     const said = sentences(answer.message);
     if (said.some(asksForTap)) safety.push(NO_CARD_TAP_ISSUE);
@@ -283,6 +381,9 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [UNKNOWN_CARD_ISSUE_PREFIX, "UNKNOWN_CARD"],
   [MONEY_ISSUE_PREFIX, "MONEY"],
   [ENQUIRY_CLAIM_PREFIX, "ENQUIRY_CLAIM"],
+  [CLAIM_ISSUE_PREFIX, "CLAIM"],
+  [ALL_IN_STOCK_ISSUE_PREFIX, "CLAIM"],
+  [ABSENCE_ISSUE_PREFIX, "ABSENCE"],
   [MID_SENTENCE_ISSUE, "MID_SENTENCE"],
   [DANGLING_CURRENCY_ISSUE, "DANGLING_CURRENCY"],
   [NO_CARD_PREFIX, "NO_CARD"],

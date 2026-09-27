@@ -15,7 +15,7 @@ const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], changes: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
-    picks: { taps: [], texts: [], replies: [] }, ...overrides,
+    picks: { taps: [], texts: [], replies: [] }, searches: [], ...overrides,
   };
 }
 
@@ -157,6 +157,16 @@ test("complete is true only when every product in the category is listed", async
 test("excluded products count as covered", async () => {
   const body = await searchBody({ queries: ["utility tong"], category: "kitchen tongs", exclude_ids: ["tong11"] }, fakeDeps(tongs(11)));
   assert.deepEqual([body.products.length, body.complete, body.more_available], [10, true, false]);
+});
+
+test("each search is recorded for the claim checks", async () => {
+  const ctx = context(fakeDeps(tongs(4)));
+  await runTool("search_catalogue", { queries: ["utility tong", "tongs"], category: "kitchen tongs", max_price: 20 }, ctx);
+  await runTool("search_catalogue", { queries: ["torch"] }, ctx);
+  assert.deepEqual(ctx.searches, [
+    { queries: ["utility tong", "tongs"], category: "kitchen tongs", categoryFound: true, maxPrice: 20, complete: true },
+    { queries: ["torch"], category: null, categoryFound: false, maxPrice: null, complete: false },
+  ]);
 });
 
 test("a query hit named with every word of the query stays ahead of a near-miss category", async () => {

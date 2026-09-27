@@ -9,8 +9,8 @@ import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  ENQUIRY_CLAIM_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, reviewAnswer,
-  tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type Fixer,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts,
+  removeClaims, reviewAnswer, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type Fixer,
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
@@ -267,6 +267,7 @@ export async function runAgentTurn(input: {
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
     picks,
+    searches: [],
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   const earlier: EarlierTurns = {
@@ -284,7 +285,7 @@ export async function runAgentTurn(input: {
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
-    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes });
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches });
     let nudged = false;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       // The first call may always use tools; after a tool round, a nearly spent budget means answer now.
@@ -325,6 +326,7 @@ export async function runAgentTurn(input: {
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
     const withoutClaims = (message: string) => withoutEnquiryClaims(message, { ...turnFacts(), seen: ctx.seen });
     const fixers: Fixer[] = [
+      { prefix: CLAIM_ISSUE_PREFIX, fix: (message) => removeClaims(message, ctx.searches, ctx.seen) },
       { prefix: ENQUIRY_CLAIM_PREFIX, fix: withoutClaims },
       noCardFixer,
       { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) },

@@ -10,6 +10,8 @@ import { customerChose, pickedCodes, type PickEvidence } from "./picks";
 
 /** One change update_enquiry made to the enquiry. */
 export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null };
+/** One search_catalogue call: what backs a reply's "that's our range", "nothing cheaper" or "we don't have it". */
+export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean };
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -30,6 +32,8 @@ export type TurnContext = {
   shownIds: ReadonlySet<string>;
   /** The taps, texts and cards in the chat that show which products the customer picked. */
   picks: PickEvidence;
+  /** This turn's searches, for the checks on the reply's claims about the range. */
+  searches: SearchRecord[];
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -193,6 +197,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const totalFound = scope.exists ? scope.total + merged.filter((item) => !inScope(item)).length : merged.length;
   // A search that returned its full row limit may have more matches than it could return.
   const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
+  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
   const leafCounts = new Map<string, number>();
   for (const item of merged) if (item.third_category) leafCounts.set(item.third_category, (leafCounts.get(item.third_category) ?? 0) + 1);
   const categories = [...leafCounts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name]) => name);
