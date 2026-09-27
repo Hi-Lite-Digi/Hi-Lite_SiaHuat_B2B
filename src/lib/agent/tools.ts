@@ -227,19 +227,41 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
   return ok({ product: remember(ctx, await liveCheck(found, ctx.deps)) });
 }
 
+// Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share.
+const GENERIC = new Set(["the", "and", "for", "per", "pcs", "set", "new", "top", "stainless", "steel", "with", "without", "black", "white", "grey", "gray", "blue", "red", "green", "silver", "size", "piece", "pieces", "year", "warranty", "domestic", "function", "speed", "come", "free", "pulse", "heat", "resistant"]);
+const kindWords = (item: Product) => new Set((item.name.toLowerCase().match(/\p{L}{3,}/gu) ?? [])
+  .filter((word) => !GENERIC.has(word) && !(item.brand ?? "").toLowerCase().includes(word)));
+/** True when the two share a word, or a 4+ letter word sits inside the other's ("torch" in "blowtorch"). */
+const sharesWord = (a: Set<string>, b: Set<string>) => [...b].some((word) => [...a].some((own) => own === word
+  || (Math.min(own.length, word.length) >= 4 && (own.includes(word) || word.includes(own)))));
+const NO_CLOSE_ALTERNATIVE = "No close in-stock match in the same range. Check size and capacity against what the customer needs; search with the customer's words and size (e.g. 'stock pot 12L') before saying there is no substitute.";
+
 async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: TurnContext) {
   const minQty = input.min_qty ?? 1;
   let candidates: Product[];
+  let source: Product | null;
   try {
-    candidates = await retryOnce(() => ctx.deps.findAlternatives(input.stock_id, minQty, new Set([...ctx.shownIds, input.stock_id])));
+    [candidates, source] = await Promise.all([
+      retryOnce(() => ctx.deps.findAlternatives(input.stock_id, minQty, new Set([...ctx.shownIds, input.stock_id]))),
+      ctx.deps.findByCode(input.stock_id).catch(() => null),
+    ]);
   } catch (error) {
     console.warn("[api/agent] search unavailable", { errors: [errorCode(error)] });
     return fail("SEARCH_UNAVAILABLE");
+  }
+  // Only products of the same kind (exam 2, s10-A: bowls and a gas cartridge offered for a torch), the same leaf category
+  // first; the catalogue's stock order breaks ties.
+  if (source) {
+    const own = kindWords(source);
+    const leaf = source.third_category;
+    const sameLeaf = (item: Product) => Number(Boolean(leaf) && item.third_category === leaf);
+    candidates = candidates.filter((item) => sharesWord(own, kindWords(item))).sort((a, b) => sameLeaf(b) - sameLeaf(a));
   }
   const checked = await Promise.all(candidates.slice(0, 8).map((item) => liveCheck(item, ctx.deps)));
   const available = checked
     .filter((item) => item.verified && item.product.stock_status === "in_stock" && (item.product.available_quantity ?? 0) >= minQty)
     .slice(0, 3);
+  if (!available.length) return ok({ products: [], note: NO_CLOSE_ALTERNATIVE });
   return ok({ products: available.map((item) => remember(ctx, item)) });
 }
 

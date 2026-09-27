@@ -311,6 +311,41 @@ test("alternatives drop products with less stock than the customer needs", async
   assert.deepEqual(await alternativeIds(short, 10), ["F46700"]);
 });
 
+type AlternativesBody = { products: Array<{ stock_id: string }>; note?: string };
+const alternativesFor = async (stockId: string, catalogue: ReturnType<typeof product>[]) => JSON.parse(
+  (await runTool("find_alternatives", { stock_id: stockId }, context(fakeDeps(catalogue)))).content,
+) as AlternativesBody;
+
+test("find_alternatives keeps candidates that share a name word, same leaf category first", async () => {
+  const body = await alternativesFor("F46700", [
+    product({ stock_id: "F46700", name: "MASTRAD COOKING TORCH", brand: "MASTRAD", third_category: "Gas lighters" }),
+    product({ stock_id: "BOWL", name: "S/S MAR BOWL", third_category: "Bowls", available_quantity: 2000 }),
+    product({ stock_id: "BLOWTORCH", name: "KITCHEN BLOWTORCH", third_category: "Kitchen tools" }),
+    product({ stock_id: "CARTRIDGE", name: "GAS CARTRIDGE", third_category: "Gas lighters" }),
+    product({ stock_id: "BURNER", name: "CASSETTE GAS TORCH BURNER", third_category: "Gas lighters" }),
+  ]);
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["BURNER", "BLOWTORCH"]);
+});
+
+test("alternatives with only generic words in common are dropped", async () => {
+  const body = await alternativesFor("HB1", [
+    product({ stock_id: "HB1", name: "CORDLESS HAND BLENDER 1 YEAR WARRANTY" }),
+    product({ stock_id: "FAN", name: "STAND FAN 1 YEAR WARRANTY" }),
+    product({ stock_id: "STICK", name: "STICK BLENDER" }),
+  ]);
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["STICK"]);
+});
+
+test("find_alternatives returns nothing rather than unrelated products", async () => {
+  const body = await alternativesFor("4020", [
+    product({ stock_id: "4020", name: "BAIN MARIE POT 12QT" }),
+    product({ stock_id: "FP24", name: "FRYING PAN 24CM" }),
+    product({ stock_id: "FP28", name: "FRYING PAN 28CM" }),
+  ]);
+  assert.deepEqual(body.products, []);
+  assert.equal(body.note, "No close in-stock match in the same range. Check size and capacity against what the customer needs; search with the customer's words and size (e.g. 'stock pot 12L') before saying there is no substitute.");
+});
+
 test("match_photo needs a photo in this turn", async () => {
   const outcome = await runTool("match_photo", {}, context());
   assert.equal(outcome.isError, true);

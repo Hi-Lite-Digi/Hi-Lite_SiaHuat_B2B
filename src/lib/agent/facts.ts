@@ -56,7 +56,7 @@ export function defaultFactDeps(): FactDeps {
     searchCategory: searchCatalogueByCategory,
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
-    findAlternatives: (stockId, minQty, exclude) => findAvailableCatalogueAlternatives(stockId, 12, minQty, exclude),
+    findAlternatives: (stockId, minQty, exclude) => findAvailableCatalogueAlternatives(stockId, 30, minQty, exclude),
     fetchLive: fetchSiaHuatProduct,
     lookupImage: lookupCatalogueImage,
   };

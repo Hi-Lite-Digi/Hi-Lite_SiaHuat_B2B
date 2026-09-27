@@ -26,6 +26,11 @@ test("Claire never claims an item isn't carried, nothing fits a budget or a list
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- Never say an item isn't carried, that nothing fits a budget, or that a list is complete ('that's all', 'full range', 'only two sizes') unless a search in this same turn backs it: for 'we don't have it', at least two different searches (different words, including the broader product type or a category) and none fit; for a budget, a category search with max_price that returned complete true; for 'that's all', a search that returned complete true. This doesn't apply to things Sia Huat doesn't sell at all (food, cars): just say what Sia Huat supplies. Otherwise say what you found and that there may be more (total_found), and offer to narrow down. When the customer says 'show me all/more', pass the category and show options you haven't shown."));
 });
 
+test("Claire searches with the customer's words and size before saying there is no substitute", () => {
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.includes("use find_alternatives")) ?? "";
+  assert.ok(line.includes("If find_alternatives returns nothing close, search with the product type and size in the customer's words (e.g. 'stock pot 12L') before saying there is no substitute. Check size and capacity against what the customer needs."));
+});
+
 test("Claire describes stock as the tools found it, keeps fitting products when the customer narrows, and sends unlisted items to sales", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("don't leave out a product from the tool results that fits just because it was shown before"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("'unknown' means not checked"));
