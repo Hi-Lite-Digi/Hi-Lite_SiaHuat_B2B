@@ -3,6 +3,9 @@ import { z } from "zod";
 import { imageAttachmentSchema, productSchema, type Product } from "@/lib/chat-contract";
 import { enquiryReceiptTotals } from "@/lib/conversation-export";
 
+/** The most product cards one reply shows. */
+const MAX_CARDS = 5;
+
 export const agentEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(500), voice: z.boolean().optional(), chip: z.boolean().optional() }),
   z.object({ type: z.literal("select_product"), stockId: z.string().trim().min(1).max(100) }),
@@ -37,7 +40,7 @@ export const enquiryLineSchema = z.object({
 
 export const agentReplySchema = z.object({
   message: z.string(),
-  cards: z.array(productSchema).max(5),
+  cards: z.array(productSchema).max(MAX_CARDS),
   chips: z.array(z.string()).max(3),
   enquiry: z.object({
     lines: z.array(enquiryLineSchema),
@@ -91,11 +94,14 @@ export function cardsNote(cards: Product[]) {
   return `\n${CARDS_NOTE}${cards.map(entry).join("; ")}]`;
 }
 
-/** The cards noted on an assistant history entry. Older notes ("CODE name" or just "CODE") read with no price or link. */
+/**
+ * The cards noted on an assistant history entry. Older notes ("CODE name" or just "CODE") read with no price or link.
+ * A reply shows at most 5 cards, so a note from the client listing more is cut to 5.
+ */
 export function parseCardsNote(content: string): ShownCard[] {
   const start = content.lastIndexOf(CARDS_NOTE);
   if (start < 0) return [];
-  return content.slice(start + CARDS_NOTE.length).replace(/\]\s*$/, "").split("; ").map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+  return content.slice(start + CARDS_NOTE.length).replace(/\]\s*$/, "").split("; ").map((entry) => entry.trim()).filter(Boolean).slice(0, MAX_CARDS).map((entry) => {
     const link = entry.match(/\s<(https?:\/\/[^\s>]+)>$/);
     let rest = link ? entry.slice(0, link.index) : entry;
     const price = rest.match(/\s\(\$(\d+(?:\.\d{1,2})?)\)$/);

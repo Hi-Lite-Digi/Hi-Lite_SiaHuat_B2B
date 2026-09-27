@@ -74,9 +74,13 @@ const danglingCurrency = /(?:^|[^\w$])(?:SG?)?\$(?!\s?\d)/;
 export const DANGLING_CURRENCY_ISSUE = "A price is missing after the $ sign. Give the exact price from a tool result in this turn, or rephrase without a price.";
 
 // A reservation claim only counts with no negation or condition before it, and no condition right after it, in the same clause.
-// A sentence that opens with a condition waiting on sales ("Once sales confirm, ...") is conditional throughout. A bare "no" only
-// negates when it opens the claim's subject ("No stock is reserved"), not "No rush: ...". 不锈 (stainless) and 不粘 (non-stick) are product words.
-const negatedBefore = /\b(?:not|never|nothing|no longer|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b[^.!?,;]{0,30}$|\bno(?!\s+(?:problem|worries)\b)\s+[^\s.!?,;:]+(?:\s+[^\s.!?,;:]+)?\s*$|^\s*(?:once|when|after|before|if|until)\b[^.!?]*\b(?:sales|confirm\w*)\b|不(?![锈粘])|[没未]|无法/i;
+// A dash (—, –, or a spaced hyphen) starts a new clause like a comma does ("Don't worry—they're reserved" is a claim).
+// A sentence that opens with a condition waiting on sales ("Once sales confirm, ...", "Once confirmed, ...") is conditional
+// throughout; one the customer meets ("Once you confirm, ...") is not. A bare "no" only negates when it opens the claim's
+// subject ("No stock is reserved"), not "No rush: ...". 不锈 (stainless) and 不粘 (non-stick) are product words.
+const inClause = String.raw`(?:(?!\s-\s)[^.!?,;—–])`;
+const clauseWord = String.raw`[^\s.!?,;:—–]+`;
+const negatedBefore = new RegExp(String.raw`\b(?:not|never|nothing|no longer|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b${inClause}{0,30}$|\bno(?!\s+(?:problem|worries)\b)\s+${clauseWord}(?:\s+${clauseWord})?\s*$|^\s*(?:once|when|after|before|if|until)\b[^.!?]*(?:\bsales\s+(?:team\s+)?(?:\w+\s+)?(?:confirm|check|approv|verif)\w*|(?<!\byou(?:'ve|\s+have)?\s+)\bconfirmed\b)|不(?![锈粘])|[没未]|无法`, "i");
 const conditionAfter = /^[^.!?]{0,40}\b(?:when|once|after|if)\b/i;
 // "reserved" also names products (reserved signs, table cards and plaques); 保留 and 锁定 alone are product words too.
 const reserved = String.raw`reserved(?!\s+(?:table\s+)?(?:signs?|cards?|plaques?|stands?))`;

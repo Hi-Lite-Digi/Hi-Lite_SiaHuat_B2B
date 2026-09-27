@@ -247,11 +247,14 @@ test("the labels of a numbered list are not quantities", () => {
   const labelsOnly: Array<[string, number[]]> = [
     ["1.pot 2.lid 3.ladle", []], ["1. Pot x 5. 2. Lid. 3. Ladle.", [5]], ["1) Pot x 5. 2) Lid. 3) Ladle.", [5]],
     ["1. Pot 12. 2. Lid 3. Ladle", [12]], ["1. Pot x 2. 2. Lid x 1. 3. Ladle", [1, 2]],
+    // A Chinese list has no space after the dot either; a label before a quote or bracket is still a label.
+    ["1.锅 2.盖 3.汤勺", []], ["我要报价 1.锅 2.盖 3.汤勺", []], ["1.锅x5 2.盖 3.汤勺", [5]], ['1."pot" 2."lid"', []], ["1.(pot) 2.(lid)", []],
   ];
   for (const [text, stated] of labelsOnly) {
     for (const quantity of [1, 2, 3, 5, 12]) assert.equal(quantityStated(quantity, [text]), stated.includes(quantity), `${quantity} in ${text}`);
   }
   assert.equal(quantityStated(2, ["ok 2."]), true);
+  for (const text of ["ok 2..", "take 2... how much", "ok 2. how many u have in stock", "2. also 1 of the 6 slot"]) assert.equal(quantityStated(2, [text]), true, text);
 });
 
 test("the word one counts only when it is said as a quantity", () => {

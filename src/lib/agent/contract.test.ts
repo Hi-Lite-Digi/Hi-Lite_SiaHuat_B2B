@@ -81,6 +81,11 @@ test("older notes without prices or links still read", () => {
   ]);
 });
 
+test("a note listing more cards than a reply can show is read as its first 5", () => {
+  const note = `[cards shown: ${Array.from({ length: 8 }, (_, i) => `C${i} Card ${i}`).join("; ")}]`;
+  assert.deepEqual(parseCardsNote(note).map((card) => card.code), ["C0", "C1", "C2", "C3", "C4"]);
+});
+
 test("a name with a semicolon or a leading bracket survives", () => {
   const sock = product({ stock_id: "CS-4", name: '(26-01688) COFFEE SOCK; 4"', list_price: 2.5, source_url: "https://store.siahuat.com/product/77" });
   assert.deepEqual(parseCardsNote(`Here.${cardsNote([sock, torch])}`), [

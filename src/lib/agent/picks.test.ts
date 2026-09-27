@@ -430,6 +430,27 @@ test("a long run of spaces is read quickly", () => {
   assert.ok(took < 100, `took ${Math.round(took)} ms`);
 });
 
+test("a request crafted with many look-alike cards and refusals is read quickly", () => {
+  // Card names and texts come from the client: 60 shared words per card once took a pick check 76 s.
+  const letters = "abcdefghijklmnopqrstuvwxyz";
+  const words = Array.from({ length: 61 }, (_, i) => `q${letters[Math.floor(i / 26)]}${letters[i % 26]}x`);
+  const shared = words.slice(0, 60).join(" ");
+  const refusal = `no ${words.join(" ")}`;
+  const history: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (let a = 0; a < 24; a += 1) {
+    const cards = [...Array.from({ length: 5 }, (_, i) => `A${a * 5 + i} ${shared}`), `B${a} ${words.join(" ")}`];
+    history.push({ role: "assistant", content: `Here.\n[cards shown: ${cards.join("; ")}]` });
+  }
+  for (let u = 0; u < 5; u += 1) history.push({ role: "user", content: Array(6).fill(refusal).join(". ") });
+  const picks = pickEvidence(history, { type: "text", text: refusal });
+  assert.ok(picks.replies.every((item) => item.cards.length <= 5));
+  const start = performance.now();
+  customerChose("A0", 2, picks, []);
+  pickedCodes(picks, []);
+  const took = performance.now() - start;
+  assert.ok(took < 2_000, `took ${Math.round(took)} ms`);
+});
+
 test("a long run of spaces in a card name is read quickly", () => {
   const name = `1${" ".repeat(1950)}!`;
   const text = "no,".repeat(50);

@@ -73,7 +73,7 @@ function chineseNumerals(quantity: number) {
  * The word "one" counts only when said as a quantity ("just one", "one pc"), not as a pronoun ("the blue one").
  */
 export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.\\w)`, "i");
+  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.[^\\s.])`, "i");
   const word = numberWords[quantity];
   const wordQuantity = quantity === 1 ? oneAsQuantity : word !== undefined ? new RegExp(`\\b${word}\\b`, "i") : null;
   const chinese = chineseNumerals(quantity);

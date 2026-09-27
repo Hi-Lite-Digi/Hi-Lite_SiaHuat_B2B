@@ -546,6 +546,13 @@ test("reserved signs, Chinese product words, a leading condition and a plain 'no
     "Once sales confirm, stock is reserved for you.",
     "No stock is reserved.",
     "No items are reserved by an enquiry.",
+    "No units are on hold.",
+    "Once you send the enquiry, sales will confirm and your order is placed.",
+    "Once confirmed by sales, your order is placed.",
+    "Once confirmed, your order is placed.",
+    "When our sales team confirms, stock is reserved for you.",
+    "Once sales have confirmed, your order is placed.",
+    "Stock isn't pre-reserved for enquiries.",
   ]) {
     assert.deepEqual(customerMessage(text), { message: text, showContact: false }, text);
     assert.ok(!styleOf(text).includes(RESERVATION_ISSUE), text);
@@ -563,6 +570,11 @@ test("a 'no rush' opener or a condition that doesn't wait on sales still leaves 
     "Yes, no issue - your 2 units are already reserved.", "No MOQ needed and they're reserved for you.",
     "Once you add them, they are reserved for you.", "After adding, your order is confirmed.",
     "Once added, they're reserved for you.", "If you need more, your 2 are reserved.",
+    // A dash starts a new clause, spaced or not; a condition the customer meets doesn't wait on sales.
+    "No rush—they're on hold for you.", "No rush—your order is confirmed.", "No MOQ—they're all reserved.",
+    "Don't worry—they're reserved for you.", "Don't worry – your 2 are reserved.", "Don't worry - your 2 are reserved.",
+    "Once you send the enquiry to sales, your 2 are reserved.", "If you confirm the quantity, your order is placed.",
+    "When you tap Send to sales, your items are on hold.", "Once you confirm, they're reserved for you.",
   ]) {
     assert.deepEqual(customerMessage(text), { message: "You can reach our sales team directly below.", showContact: true }, text);
     assert.ok(styleOf(text).includes(RESERVATION_ISSUE), text);

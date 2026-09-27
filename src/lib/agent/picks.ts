@@ -151,8 +151,11 @@ const bareQuantity = /^\s*(?:just|only)?\s*(?:x\s*)?\d+\s*(?:pcs?|pieces?|units?
 const askedHowMany = /\bhow many\b|\b(?:quantity|qty)\b|\b(?:want|shall|should|can) (?:me to |i )?add\b|\badd (?:it|this|that|one|the|\d)/i;
 const switchWord = /\b(?:change|switch|instead|rather|actually|other one)\b|换/i;
 
-/** The cards each clause of a text points at, worked out once per text. */
-type Pointing = Map<PickText, Map<string, ShownCard[]>>;
+/**
+ * Worked out once per text and clause, then shared by every code checked: the cards each clause points at, and for each
+ * hit the largest hit count of any card that has it (card names come from the client, so nothing may be redone per code).
+ */
+type Pointing = Map<PickText, { pointed: Map<string, ShownCard[]>; most: Map<string, Map<string, number>> }>;
 
 /** What one customer text says about this card: it picks it, turns it down, or says nothing about it. */
 function textVerdict(code: string, quantity: number | null, sent: PickText, recent: boolean, replies: PickReply[], pointing: Pointing): "pick" | "refuse" | null {
@@ -162,11 +165,11 @@ function textVerdict(code: string, quantity: number | null, sent: PickText, rece
   const all = clausesOf(sent.text);
   // Questions and refusals never pick.
   const clauses = all.filter((clause) => !refuses(clause) && !isQuestion(clause));
-  const pointed = pointing.get(sent) ?? new Map<string, ShownCard[]>();
-  pointing.set(sent, pointed);
+  const cache = pointing.get(sent) ?? { pointed: new Map<string, ShownCard[]>(), most: new Map<string, Map<string, number>>() };
+  pointing.set(sent, cache);
   const points = (target: string, clause: string) => {
-    if (!pointed.has(clause)) pointed.set(clause, pointedCards(clause, seenCards, seenSets.findLast((cards) => cards.length)));
-    return pointed.get(clause)!.some((card) => same(card.code, target));
+    if (!cache.pointed.has(clause)) cache.pointed.set(clause, pointedCards(clause, seenCards, seenSets.findLast((cards) => cards.length)));
+    return cache.pointed.get(clause)!.some((card) => same(card.code, target));
   };
   const typedCode = codePattern(code);
   // A typed code picks even in a question ("Can I get 10 pcs of BTS-8026D?").
@@ -201,12 +204,23 @@ function textVerdict(code: string, quantity: number | null, sent: PickText, rece
   const own = seenCards.findLast((card) => same(card.code, code));
   // A refusal turns down a card when one of its hits is not also a hit of a card the refusal names more:
   // "the dinner knife no need" is not about the dinner fork, but "cancel the chef knife and the fork" is.
+  const mostHits = (clause: string) => {
+    let most = cache.most.get(clause);
+    if (!most) {
+      most = new Map<string, number>();
+      for (const card of seenCards) {
+        const theirs = hits(card, clause);
+        for (const hit of theirs) most.set(hit, Math.max(most.get(hit) ?? 0, theirs.size));
+      }
+      cache.most.set(clause, most);
+    }
+    return most;
+  };
   const namesIt = (clause: string) => {
     const mine = own ? hits(own, clause) : new Set<string>();
-    return [...mine].some((hit) => seenCards.every((card) => {
-      const theirs = hits(card, clause);
-      return !theirs.has(hit) || theirs.size <= mine.size;
-    }));
+    if (!mine.size) return false;
+    const most = mostHits(clause);
+    return [...mine].some((hit) => (most.get(hit) ?? 0) <= mine.size);
   };
   const turnsDown = (clause: string) => refuses(clause) && !isQuestion(clause) && (typedCode.test(clause) || namesIt(clause));
   return all.some(turnsDown) ? "refuse" : null;
