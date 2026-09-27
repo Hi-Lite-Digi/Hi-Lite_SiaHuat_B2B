@@ -388,6 +388,14 @@ test("turning down one card doesn't veto a card that shares fewer of its words",
   assert.equal(chose("2527-001", 4, picks), false);
 });
 
+test("one refusal naming two cards vetoes both, even when one matches on more words", () => {
+  for (const refusal of ["cancel the chef knife and the fork", "dont need the chef knife and fork", "no need chef knife and fork", "chef knife and fork no need"]) {
+    const picks = { taps: [tap("2527-002", 2, 2)], texts: [said("4 pcs", 4, 0), said(refusal, 3, 1)], replies: [greeting, reply([chefKnife16, fork]), reply([], "How many do you need?"), reply([], "Ok, noted.")] };
+    assert.equal(chose("2527-002", 4, picks), false, refusal);
+    assert.deepEqual(pickedCodes(picks, []), [], refusal);
+  }
+});
+
 test("a later card that shares only a material word with a tapped card doesn't void the tap", () => {
   const bowl = card("BWL-30", "Stainless Steel Mixing Bowl 30cm", 8);
   const picks = { taps: [tap("UT16HR", 2, 1)], texts: [said("4", 3, 0)], replies: [greeting, reply([tong16]), reply([bowl], "Here's a bowl. How many tongs do you need?")] };
@@ -400,6 +408,18 @@ test("a long run of spaces is read quickly", () => {
   const picks: PickEvidence = { taps: [], texts: [said(text, 4, 0), said(text, 3, 1), said(text, 2, 2)], replies: [greeting, asked, asked, asked] };
   const start = performance.now();
   customerChose("BTS-8026D", 1, picks, []);
+  pickedCodes(picks, []);
+  const took = performance.now() - start;
+  assert.ok(took < 100, `took ${Math.round(took)} ms`);
+});
+
+test("a long run of spaces in a card name is read quickly", () => {
+  const name = `1${" ".repeat(1950)}!`;
+  const text = "no,".repeat(50);
+  const replies = [greeting, reply([card("X1", name)]), reply([card("X2", name)]), reply([card("X3", name)])];
+  const picks: PickEvidence = { taps: [], texts: [said(text, 4, 0), said(text, 3, 1), said(text, 2, 2)], replies };
+  const start = performance.now();
+  customerChose("X1", 2, picks, []);
   pickedCodes(picks, []);
   const took = performance.now() - start;
   assert.ok(took < 100, `took ${Math.round(took)} ms`);

@@ -66,7 +66,8 @@ function unitKey(unit: string, spaced: boolean) {
 /** Sizes and part counts written next to a number: 16" / 16 inch, 6-Slots / 6 slot, Ø25cm / 25cm, 5L / 5 litre. */
 function measures(text: string) {
   const found = new Set<string>();
-  for (const match of text.matchAll(/(?<![\w.])(\d+(?:\.\d+)?)(\s*-?\s*)("|″|”|''|[a-z]+)/gi)) {
+  // Card names come from the client, so the spaces-hyphen-spaces group must not backtrack on long runs of spaces.
+  for (const match of text.matchAll(/(?<![\w.])(\d+(?:\.\d+)?)(\s*(?:-\s*)?)("|″|”|''|[a-z]+)/gi)) {
     if (!COUNT_UNITS.test(match[3].toLowerCase())) found.add(`${Number(match[1])}${unitKey(match[3], /\s/.test(match[2]))}`);
   }
   return found;
@@ -190,12 +191,16 @@ function textVerdict(code: string, quantity: number | null, sent: PickText, rece
       || (bareQuantity.test(clause) && askedHowMany.test(before.text)))) return "pick";
 
   const own = seenCards.findLast((card) => same(card.code, code));
-  // A refusal turns down the cards it names most: "the dinner knife no need" is not about the dinner fork.
-  const namesMost = (clause: string) => {
-    const mine = own ? hits(own, clause).size : 0;
-    return mine > 0 && seenCards.every((card) => hits(card, clause).size <= mine);
+  // A refusal turns down a card when one of its hits is not also a hit of a card the refusal names more:
+  // "the dinner knife no need" is not about the dinner fork, but "cancel the chef knife and the fork" is.
+  const namesIt = (clause: string) => {
+    const mine = own ? hits(own, clause) : new Set<string>();
+    return [...mine].some((hit) => seenCards.every((card) => {
+      const theirs = hits(card, clause);
+      return !theirs.has(hit) || theirs.size <= mine.size;
+    }));
   };
-  const turnsDown = (clause: string) => refuses(clause) && !isQuestion(clause) && (typedCode.test(clause) || namesMost(clause));
+  const turnsDown = (clause: string) => refuses(clause) && !isQuestion(clause) && (typedCode.test(clause) || namesIt(clause));
   return all.some(turnsDown) ? "refuse" : null;
 }
 
