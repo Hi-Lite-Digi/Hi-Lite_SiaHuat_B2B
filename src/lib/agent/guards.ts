@@ -70,6 +70,18 @@ export const MID_SENTENCE_ISSUE = "Your message stops mid-sentence. A double-quo
 const danglingCurrency = /(?:^|[^\w$])(?:SG?)?\$(?!\s?\d)/;
 export const DANGLING_CURRENCY_ISSUE = "A price is missing after the $ sign. Give the exact price from a tool result in this turn, or rephrase without a price.";
 
+// A reservation claim only counts with no negation or condition before it, and no condition right after it, in the same clause.
+const negatedBefore = /\b(?:not|never|nothing|no longer|isn't|aren't|won't|can't|cannot|don't|doesn't|until|once|when|after|before|if)\b[^.!?,;]{0,30}$|[不没未]|无法/i;
+const conditionAfter = /^[^.!?]{0,40}\b(?:when|once|until|after|if)\b/i;
+const reservationWords = /\b(?:reserved|on hold|set aside|put aside|held for you|booked for you|locked in for you)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|预留|保留|锁定|订单已(?:确认|提交)/i; // style tier
+const reservationClaim = /\b(?:is|are|been|was|were)\s+(?:already\s+|now\s+|all\s+)?(?:reserved|on hold|set aside|put aside)\b|\b(?:I|we)(?:'ve| have)\s+(?:reserved|set aside|put\b[^.!?]{0,25}\bon hold)\b|\border (?:is|has been|was) (?:now )?(?:placed|confirmed|processed|submitted)\b|已(?:为您|经)?(?:预留|保留|锁定)|订单已(?:确认|提交)/i; // remove tier: no bare "held"
+const claims = (sentence: string, pattern: RegExp) => {
+  const m = pattern.exec(sentence);
+  return !!m && !negatedBefore.test(sentence.slice(0, m.index)) && !conditionAfter.test(sentence.slice(m.index + m[0].length));
+};
+const isReservationClaim = (sentence: string) => claims(sentence, reservationClaim);
+export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and isn't an order. Say the items are on the enquiry and Sia Huat sales confirm stock and the order.";
+
 /** Earlier turns from the chat history: the card codes of each Claire reply, her previous message, and what the customer just sent. */
 export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
@@ -107,6 +119,7 @@ export function reviewAnswer(answer: FinalAnswer, seen: Map<string, CheckedProdu
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }));
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
+  if (sentences(answer.message).some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
   style.push(...repetitionIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }
@@ -145,13 +158,16 @@ const isSalesContact = (found: string) => (found.includes("@")
   : phoneDigits(found) === phoneDigits(SALES_CONTACT.phone));
 
 /**
- * Final safety pass on the words the customer sees. A phone number or email that isn't Sia Huat's sales
- * contact is replaced with a pointer to the contact block; that, or a removed staff claim, turns the block on.
+ * Final safety pass on the words the customer sees. A sentence claiming stock is reserved or an order placed is
+ * removed (an enquiry reserves nothing). A phone number or email that isn't Sia Huat's sales contact is replaced
+ * with a pointer to the contact block; that, or a removed staff claim, turns the block on.
  */
 export function customerMessage(message: string) {
   const trimmed = message.trim();
-  const contactChecked = trimmed.replace(contactPattern, (found) => (isSalesContact(found) ? found : OTHER_CONTACT));
+  const unreserved = sentences(trimmed).some(isReservationClaim) ? removeSentences(trimmed, isReservationClaim) : trimmed;
+  if (!unreserved) return { message: CONTACT_LINE, showContact: true };
+  const contactChecked = unreserved.replace(contactPattern, (found) => (isSalesContact(found) ? found : OTHER_CONTACT));
   const checked = honestManualHandoff(contactChecked);
-  if (checked === contactChecked) return { message: contactChecked, showContact: contactChecked !== trimmed };
+  if (checked === contactChecked) return { message: contactChecked, showContact: contactChecked !== unreserved };
   return { message: checked.replace(HANDOFF_SENTENCE, "").trim() || CONTACT_LINE, showContact: true };
 }

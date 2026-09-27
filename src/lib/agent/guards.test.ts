@@ -4,7 +4,7 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, allowedCents, customerMessage, endsMidSentence, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
+  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, RESERVATION_ISSUE, allowedCents, customerMessage, endsMidSentence, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
 } from "./guards";
 import { product } from "./testing";
 
@@ -145,6 +145,36 @@ test("a reply that was only a staff claim still has words", () => {
   for (const text of ["I've notified our sales team.", "I've passed this to our sales team, they will contact you!"]) {
     assert.deepEqual(customerMessage(text), { message: "You can reach our sales team directly below.", showContact: true }, text);
   }
+});
+
+test("a claim that stock is reserved or an order placed is removed from the customer message", () => {
+  assert.equal(customerMessage("Got it. Your 2 units are already reserved in this enquiry.").message, "Got it.");
+  for (const text of ["No worries, your 2 units are already reserved.", "I've put 2 on hold for you.", "已为您预留2个。"]) {
+    assert.deepEqual(customerMessage(text), { message: "You can reach our sales team directly below.", showContact: true }, text);
+  }
+});
+
+test("reservation words that claim nothing are kept", () => {
+  for (const text of [
+    "The lid is secured with a stainless clip.",
+    "It is held in place by two screws.",
+    "Stock is reserved when sales confirm the order.",
+    "Stock isn't reserved until sales confirm.",
+    "Nothing is reserved - an enquiry doesn't hold stock.",
+    "Sia Huat sales will confirm once your order is placed.",
+    "The 21cm is confirmed in stock.",
+    "Got it: 2 torches added. Anything else?",
+  ]) {
+    assert.deepEqual(customerMessage(text), { message: text, showContact: false }, text);
+    assert.ok(!styleOf(text).includes(RESERVATION_ISSUE), text);
+  }
+});
+
+test("reservation wording is a style issue; only a firm claim is removed in code", () => {
+  for (const text of ["I've reserved them for you.", "Your order is confirmed.", "want me to add 5 now (6th on hold)"]) {
+    assert.ok(styleOf(text).includes(RESERVATION_ISSUE), text);
+  }
+  assert.equal(customerMessage("want me to add 5 now (6th on hold)").message, "want me to add 5 now (6th on hold)");
 });
 
 test("块 as a counting word is not money", () => {

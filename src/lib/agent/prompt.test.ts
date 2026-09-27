@@ -51,6 +51,15 @@ test("the example replies in the Choosing rule pass the reply style guard", () =
   }
 });
 
+test("the shared voice's example name is not in the agent prompt", () => {
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /\bMei\b/);
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("greet them by it once; never call them by a name they haven't typed in this chat."));
+});
+
+test("Claire never says an enquiry reserves or holds stock", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("that stock is reserved or held"));
+});
+
 test("Claire never types a raw double quote, which would cut her reply off", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Never type the double-quote character"));
 });
