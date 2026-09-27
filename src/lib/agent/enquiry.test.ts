@@ -220,7 +220,10 @@ test("product names, prices, head counts, repeats and inch sizes are not quantit
     [26, "change to the 16cm wide one. 26 too long"], [16, 'the 16" one'], [18, "CCK 18″ wok pls"],
   ];
   for (const [quantity, text] of notQuantities) assert.equal(quantityStated(quantity, [text]), false, text);
-  const quantities: Array<[number, string]> = [[20, "20 more"], [3, "3"], [4, '4 x 16" tongs'], [5, "1) Pot x 5\n2) Lid\n3) Ladle"]];
+  const quantities: Array<[number, string]> = [
+    [20, "20 more"], [3, "3"], [4, '4 x 16" tongs'], [5, "1) Pot x 5\n2) Lid\n3) Ladle"], [5, "1) Pot x 5 2) Lid 3) Ladle"], [2, "pot x2 + lid x3"],
+    [2, "need 2 in 2 sizes"], [2, "need 2 in 3 days"], [5, "can deliver 5 in 2 days?"],
+  ];
   for (const [quantity, text] of quantities) assert.equal(quantityStated(quantity, [text]), true, text);
 });
 
@@ -230,14 +233,26 @@ test("the labels of a numbered list are not quantities", () => {
     "3) Stainless Steel Ladle 4oz, 6oz, 8oz, length approximate 10inch", '4) 1/2 Stainless Steel Pan, 6" Deep', '5) 1/4 Stainless Steel Pan, 6" Deep',
     "6) Lid for 1/2 S/S Pan with notch for ladle", "7) Lid for 1/4 S/S Pan with notch for ladle", "8) Oyster Knife with Plastic Handle",
   ].join("\n");
-  for (const text of [list, list.replace(/^(\d)\)/gm, "$1.")]) {
-    for (let quantity = 1; quantity <= 8; quantity++) assert.equal(quantityStated(quantity, [text]), false, `${quantity} in the ${text.includes("1)") ? "1)" : "1."} list`);
+  const dotted = list.replace(/^(\d)\)/gm, "$1.");
+  // The chat box is a single-line input, so a pasted list reaches the server with its line breaks turned into spaces.
+  const forms = { "1) lines": list, "1. lines": dotted, "1) one line": list.replace(/\n/g, " "), "1. one line": dotted.replace(/\n/g, " ") };
+  for (const [form, text] of Object.entries(forms)) {
+    for (let quantity = 1; quantity <= 8; quantity++) assert.equal(quantityStated(quantity, [text]), false, `${quantity} in the ${form} list`);
   }
+  for (let quantity = 1; quantity <= 3; quantity++) assert.equal(quantityStated(quantity, ["1. pot 2. lid 3. ladle"]), false, `${quantity} in 1. pot 2. lid`);
+  assert.equal(quantityStated(1, ["1) Pot x 5 2) Lid 3) Ladle"]), false);
+  assert.equal(quantityStated(1, ["1) pot x 2 2) lid x 3 3) ladle"]), false);
 });
 
 test("the word one counts only when it is said as a quantity", () => {
   for (const text of ["take one of each", "one enough.. wait", "just one", "i want one", "one pc", "One please"]) assert.equal(quantityStated(1, [text]), true, text);
   for (const text of ["got cheaper one or not", "that one got plate bowl all?", "the 5 dollar one la", "only one of them", "the 3 one"]) assert.equal(quantityStated(1, [text]), false, text);
+});
+
+test("one counts after a short yes or a buying word, and one of the named product counts", () => {
+  const quantities = ["ok one", "yes one", "ok la one", "ok, one.", "give me one", "gimme one", "take one of the 6 slot", "also one of the 6 slot", "i want one of those", "pot x2 and one lid"];
+  for (const text of quantities) assert.equal(quantityStated(1, [text]), true, text);
+  for (const text of ["one of those got lid?", "ok the blue one", "i take one of them"]) assert.equal(quantityStated(1, [text]), false, text);
 });
 
 test("adding to a line already on the enquiry needs a number typed in this message", async () => {

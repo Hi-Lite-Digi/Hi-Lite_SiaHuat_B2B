@@ -45,7 +45,7 @@ function historyFor(items: ChatItem[]) {
       role: item.role,
       content: item.role === "user"
         ? (item.tap ? `[tap] ${item.text}` : item.chip ? `[chip] ${item.text}` : item.imageUrl ? `[photo] ${item.text || "(no caption)"}` : item.text).slice(0, 2_000)
-        : `${item.text.slice(0, 2_000 - note.length)}${note}`,
+        : `${item.text.slice(0, Math.max(0, 2_000 - note.length))}${note}`.slice(0, 2_000),
     };
   }).filter((item) => item.content.trim().length > 0);
 }

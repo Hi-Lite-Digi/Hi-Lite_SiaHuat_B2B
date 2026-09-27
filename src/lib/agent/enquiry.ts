@@ -30,15 +30,19 @@ const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|s
 const sizeOrPartWords = String.raw`tiers?|levels?|layers?|decks?|burners?|doors?|outlets?|branch(?:es)?|shops?|stores?|pax|ppl|people|persons?|slots?|steps?|qt|quarts?|l|litres?|liters?|ml|oz|cm|mm|m|inch(?:es)?|kg|g|gm|w|watts?|v|volts?|st|nd|rd|th|dollars?|bucks|sgd|cents?`;
 // A number right before one of these is a size, a count of parts or people, a price, a pack size or an ordinal
 // ("3-tier", "4 ppl", "5 dollar", "48pcs/ctn", "2nd", "2号"), or not a count at all ("20+", "1 more time", "26 too long", 16", "4 or 6 slot").
-const notQuantityAfter = String.raw`(?![-\s]*(?:${sizeOrPartWords})\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款]|\s*\+|\s+more\s+times?\b|\s+too\b|\s*(?:"|″|”|'')(?!\w)|\s*(?:or|to)\s*\d+[-\s]*(?:${sizeOrPartWords})\b)`;
-// "one" as a quantity: at the start, after a buying word, before a count word, or "one each / one of each"; never "that one" or "one of them".
-const oneAsQuantity = /(?:^\s*|\b(?:just|only|want|need|take|buy|add|order|get)\s+)one\b(?!\s+of\b(?!\s+each))|\bone\s+(?:each|of\s+each)\b|\bone\s*(?:pcs?|pieces?|units?|sets?|boxe?s?|ctns?|cartons?|pkts?|packets?|packs?)\b/i;
+const notQuantityAfter = String.raw`(?![-\s]*(?:${sizeOrPartWords})\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款]|\+|\s+more\s+times?\b|\s+too\b|\s*(?:"|″|”|'')(?!\w)|\s*(?:or|to)\s*\d+[-\s]*(?:${sizeOrPartWords})\b)`;
+// "one" as a quantity: at the start (also after "ok"/"yes"), after a buying word, before a count word, or "one each / one of each";
+// never "that one", "one of them", or "one of those" opening the text.
+const oneAsQuantity = /^\s*(?:(?:ok(?:ay)?|yes|ya|yah)\b[\s,.!]*(?:(?:la|lah|lor)\b[\s,.!]*)?)?one\b(?!\s+of\b(?!\s+each))|\b(?:just|only|want|need|take|buy|add|order|get|give\s+me|gimme|also|and)\s+one\b(?!\s+of\s+(?:them|it)\b)|\bone\s+(?:each|of\s+each)\b|\bone\s*(?:pcs?|pieces?|units?|sets?|boxe?s?|ctns?|cartons?|pkts?|packets?|packs?)\b/i;
+// The chat box is a single-line input, so a pasted list arrives as "… 1) pot 2) lid": a label starts the text or follows a space.
+const listLabel = /(?<=^|\s)(\d{1,2})[ \t]*[).][ \t]+(?=\S)/g;
 
-/** Numbers that are never quantities: list labels ("1) pot" on 2+ lines), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
+/** Numbers that are never quantities: list labels ("1) pot 2) lid", counting up from 1), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
 function withoutNonQuantities(text: string) {
-  const labels = text.match(/^[ \t]*\d{1,2}[ \t]*[).][ \t]+\S/gm) ?? [];
-  const unlabelled = labels.length >= 2 ? text.replace(/^[ \t]*\d{1,2}[ \t]*[).][ \t]+/gm, "") : text;
-  return unlabelled.replace(/\bthe\s+\d+\s+(?:again|of them|cards?|ones?)\b/gi, " ").replace(/\b\d+\s*-?\s*in\s*-?\s*\d+\b/gi, " ");
+  const labels = [...text.matchAll(listLabel)].map((match) => Number(match[1]));
+  // A lone "ok 2." or "2. also 1 of the 6 slot" is a quantity, not a list.
+  const unlabelled = labels.length >= 2 && labels.every((label, i) => label === i + 1) ? text.replace(listLabel, "") : text;
+  return unlabelled.replace(/\bthe\s+\d+\s+(?:again|of them|cards?|ones?)\b/gi, " ").replace(/\b\d+\s*-?\s*in\s*-?\s*1\b/gi, " ");
 }
 
 const chineseDigits = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
