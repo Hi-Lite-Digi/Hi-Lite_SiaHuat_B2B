@@ -3,6 +3,7 @@ import "server-only";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import {
   findAvailableCatalogueAlternatives,
+  findCatalogueAttributes,
   findCatalogueProductBySourceUrl,
   findProductForStockCheck,
   searchCatalogueByCategory,
@@ -25,9 +26,12 @@ export type FactDeps = {
   findAlternatives(stockId: string, minQty: number, exclude: ReadonlySet<string>): Promise<Product[]>;
   fetchLive(url: string, timeoutMs: number): Promise<ScrapedSiaHuatProduct>;
   lookupImage(image: ImageAttachment): Promise<CatalogueImageLookup | null>;
+  /** The catalogue's spec fields for these item codes, keyed by code. */
+  findDetails(codes: string[]): Promise<Map<string, Record<string, string>>>;
 };
 
-export type CheckedProduct = { product: Product; verified: boolean };
+/** details: the catalogue's spec fields (storeDetails); undefined until looked up this turn, null when there are none. */
+export type CheckedProduct = { product: Product; verified: boolean; details?: Record<string, string> | null };
 
 export const LIVE_CHECK_TIMEOUT_MS = 5_000;
 
@@ -59,6 +63,7 @@ export function defaultFactDeps(): FactDeps {
     findAlternatives: (stockId, minQty, exclude) => findAvailableCatalogueAlternatives(stockId, 30, minQty, exclude),
     fetchLive: fetchSiaHuatProduct,
     lookupImage: lookupCatalogueImage,
+    findDetails: findCatalogueAttributes,
   };
 }
 
@@ -113,18 +118,33 @@ export function storeProductUrl(text: string): string | null {
   return id ? `https://store.siahuat.com/product/${id}` : null;
 }
 
+const DETAIL_FIELDS = ["Country of Brand Origin", "Material", "Colour", "Capacity", "Series", "Shape", "Model", "Electrical Specifications/ Requirement", "Warranty", "Microwaveable", "NSF"];
+
+/** The spec fields worth citing. "N"/"No" is the catalogue's blank (Microwaveable N on 19,208 products), never a fact. */
+export function storeDetails(attributes?: Record<string, unknown> | null) {
+  const kept = DETAIL_FIELDS.flatMap((label): [string, string][] => {
+    const value = String(attributes?.[label] ?? "").trim();
+    return value && !/^(?:n|no|-|n\/a)$/i.test(value) && value.length <= 120 ? [[label, value]] : [];
+  });
+  return kept.length ? Object.fromEntries(kept) : undefined;
+}
+
+export const DESCRIPTION_CHARS = 2_000; // the longest catalogue description is 1,965 characters
+
 // Claude copies names and sizes into its reply; a raw " there would end the JSON message string early.
 const inchMarks = (text: string | null | undefined) => text?.replace(/"/g, "″") ?? null;
 
 /** Compact product facts for tool results. An unverified price is left out so it is never quoted. */
-export function productFact({ product, verified }: CheckedProduct, shownBefore = false) {
+export function productFact({ product, verified, details }: CheckedProduct, shownBefore = false) {
   return {
     stock_id: product.stock_id,
     name: inchMarks(product.name)!,
     brand: product.brand ?? null,
     size: inchMarks(product.size ?? product.dimensions),
     dimensions: inchMarks(product.dimensions),
-    description: product.description?.replace(/\s+/g, " ").trim().slice(0, 300) || null,
+    category: [product.category, product.subcategory, product.third_category].filter(Boolean).join(" > ") || null,
+    description: product.description?.replace(/\s+/g, " ").trim().slice(0, DESCRIPTION_CHARS) || null,
+    details: details ? Object.fromEntries(Object.entries(details).map(([label, value]) => [label, inchMarks(value)])) : null,
     price_ex_gst: verified ? product.list_price : null,
     uom: product.uom_id,
     stock: product.stock_status ?? "unknown",

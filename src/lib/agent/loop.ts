@@ -14,7 +14,7 @@ import {
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, errorCode, keepBest, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, keepBest, lookupDetails, runTool, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 
 export type AgentClient = {
   messages: {
@@ -94,9 +94,12 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
     }
   }
   if (event.type === "select_product") {
-    const found = await ctx.deps.findByCode(event.stockId).catch(() => null);
-    if (found) {
-      const checked = keepBest(ctx, await liveCheck(found, ctx.deps));
+    const [tapped, details] = await Promise.all([
+      ctx.deps.findByCode(event.stockId).then((found) => found && liveCheck(found, ctx.deps)).catch(() => null),
+      lookupDetails(ctx, [event.stockId]),
+    ]);
+    if (tapped) {
+      const checked = keepBest(ctx, withDetails(tapped, details));
       blocks.push({ type: "text", text: `Customer tapped this product card to choose it: ${JSON.stringify(productFact(checked, true))}` });
     } else {
       blocks.push({ type: "text", text: `Customer tapped item ${event.stockId}, but it is no longer in the catalogue.` });
@@ -163,13 +166,14 @@ async function attachEarlierCards(
   // One time limit covers each card's code lookup and live check together.
   const end = performance.now() + Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
   const left = () => Math.max(1, end - performance.now());
+  const details = lookupDetails(ctx, wanted.map((id) => known.get(id)!), left());
   await Promise.all(wanted.map(async (id) => {
     const found = await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), left(), null);
     if (!found) return;
     // A live check that stalls sends the card unconfirmed, like a search result that wasn't checked.
     const unconfirmed: CheckedProduct = { product: { ...found, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
     const ms = left();
-    keepBest(ctx, await withTimeout(liveCheck(found, ctx.deps, ms), ms, unconfirmed));
+    keepBest(ctx, withDetails(await withTimeout(liveCheck(found, ctx.deps, ms), ms, unconfirmed), await details));
   }));
   const spelled = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
   return { ...final, card_ids: final.card_ids.map((id) => spelled.get(id.toLowerCase()) ?? id) };

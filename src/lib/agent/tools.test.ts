@@ -79,6 +79,43 @@ test("a product live-checked earlier in the turn is not fetched again", async ()
   assert.deepEqual(deps.calls.filter((call) => call.startsWith("live:")), ["live:970S"]);
 });
 
+const specs = { "970S": { "Country of Brand Origin": "JAPAN", Material: "BRASS", Microwaveable: "N" } };
+type DetailBody = { stock_id: string; details: Record<string, string> | null; price_and_stock_verified_live: boolean };
+
+test("search results carry the catalogue spec fields, even when the live check fails", async () => {
+  const ctx = context(fakeDeps([blowtorch, mastrad, safico], { "970S": "fail" }, null, specs));
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as { products: DetailBody[] };
+  const torch = body.products.find((item) => item.stock_id === "970S")!;
+  assert.equal(torch.price_and_stock_verified_live, false);
+  assert.deepEqual(torch.details, { "Country of Brand Origin": "JAPAN", Material: "BRASS" });
+  assert.equal(body.products.find((item) => item.stock_id === "F46700")?.details, null);
+});
+
+test("a failed spec lookup leaves details null and the search still succeeds", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico], {}, null, specs);
+  deps.findDetails = async () => { throw new Error("DB_DOWN"); };
+  const outcome = await runTool("search_catalogue", { queries: ["torch"] }, context(deps));
+  const body = JSON.parse(outcome.content) as { products: DetailBody[] };
+  assert.equal(outcome.isError, false);
+  assert.equal(body.products.length, 3);
+  assert.ok(body.products.every((item) => item.details === null && item.price_and_stock_verified_live));
+});
+
+test("details are fetched in one batch per search", async () => {
+  const deps = fakeDeps(torches(10));
+  await runTool("search_catalogue", { queries: ["torch"] }, context(deps));
+  assert.deepEqual(deps.calls.filter((call) => call.startsWith("details:")), [`details:${torches(10).map((item) => item.stock_id).join(",")}`]);
+});
+
+test("details already known this turn are kept and not looked up again", async () => {
+  const deps = fakeDeps([blowtorch]);
+  const seen = new Map<string, CheckedProduct>([["970S", { product: blowtorch, verified: false, details: { Material: "BRASS" } }]]);
+  const body = JSON.parse((await runTool("get_product", { stock_id: "970S" }, context(deps, { seen }))).content) as { product: DetailBody };
+  assert.equal(body.product.price_and_stock_verified_live, true);
+  assert.deepEqual(body.product.details, { Material: "BRASS" });
+  assert.equal(deps.calls.some((call) => call.startsWith("details:")), false);
+});
+
 test("search outage is reported as a tool error", async (t) => {
   t.mock.method(console, "warn", () => undefined);
   const deps = fakeDeps([blowtorch]);

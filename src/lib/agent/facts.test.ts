@@ -1,7 +1,7 @@
 // src/lib/agent/facts.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
-import { liveCheck, productFact, storeProductUrl, turnDeps } from "./facts";
+import { liveCheck, productFact, storeDetails, storeProductUrl, turnDeps } from "./facts";
 import { fakeDeps, product } from "./testing";
 
 test("a live check overwrites price and stock from the store page", async () => {
@@ -34,19 +34,43 @@ test("product facts flag verification and earlier display", () => {
   assert.equal(fact.shown_before, true);
 });
 
-test("product facts carry the dimensions and a trimmed description to cite", () => {
-  const description = `Heavy duty   stainless steel.\n\nDishwasher safe. ${"x".repeat(400)}`;
+test("product facts carry the dimensions and the whole description", () => {
+  const description = `Heavy duty   stainless steel.\n\nDishwasher safe. ${"x".repeat(470)} The whisk attachment whips cream.`;
   const fact = productFact({ product: product({ stock_id: "A", dimensions: "W38xD55xH170cm", description }), verified: true });
   assert.equal(fact.dimensions, "W38xD55xH170cm");
-  assert.equal(fact.description?.length, 300);
   assert.ok(fact.description?.startsWith("Heavy duty stainless steel. Dishwasher safe. xxx"));
+  assert.ok(fact.description?.endsWith("The whisk attachment whips cream."));
+  const long = productFact({ product: product({ stock_id: "L", description: "y".repeat(2_500) }), verified: true });
+  assert.equal(long.description?.length, 2_000);
   assert.equal(productFact({ product: product({ stock_id: "B" }), verified: true }).description, null);
 });
 
+test("product facts carry the catalogue category path", () => {
+  const strainer = product({ stock_id: "JS08", category: "Bar Supplies", subcategory: "Bar accessories", third_category: "Cocktail and liquor accessories" });
+  assert.equal(productFact({ product: strainer, verified: true }).category, "Bar Supplies > Bar accessories > Cocktail and liquor accessories");
+  assert.equal(productFact({ product: product({ stock_id: "B" }), verified: true }).category, null);
+});
+
+test("store details keep real fields and drop the catalogue's blanks", () => {
+  assert.deepEqual(storeDetails({
+    NSF: "N", Microwaveable: "N", Warranty: "No", "Country of Brand Origin": "TAIWAN", Material: "STAINLESS STEEL",
+    Description: "The chef's knife is made from German steel.", Brand: "UB-0292", "Measurement Range": "1 YEAR WARRANTY",
+  }), { "Country of Brand Origin": "TAIWAN", Material: "STAINLESS STEEL" });
+  assert.deepEqual(storeDetails({ Microwaveable: "Y" }), { Microwaveable: "Y" });
+  assert.equal(storeDetails({}), undefined);
+});
+
+test("product facts carry the details they were given, else null", () => {
+  const item = product({ stock_id: "A" });
+  assert.deepEqual(productFact({ product: item, verified: false, details: { Material: "GLASS" } }).details, { Material: "GLASS" });
+  assert.equal(productFact({ product: item, verified: true }).details, null);
+});
+
 test("inch marks in names and sizes are shown as ″, so Claude never copies a raw double quote", () => {
-  const fact = productFact({ product: product({ stock_id: "A", name: `CCK Iron Frying Wok H/Duty 18"`, size: `18"` }), verified: true });
+  const fact = productFact({ product: product({ stock_id: "A", name: `CCK Iron Frying Wok H/Duty 18"`, size: `18"` }), verified: true, details: { Shape: `18" ROUND` } });
   assert.equal(fact.name, "CCK Iron Frying Wok H/Duty 18″");
   assert.equal(fact.size, "18″");
+  assert.deepEqual(fact.details, { Shape: "18″ ROUND" });
   assert.ok(Object.values(fact).every((value) => typeof value !== "string" || !value.includes(`"`)));
 });
 

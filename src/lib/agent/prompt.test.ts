@@ -38,7 +38,14 @@ test("Claire describes stock as the tools found it, keeps fitting products when 
 });
 
 test("Claire only states product facts the tools gave", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("Only state a product's material, features, capacity, size, compatibility or origin if it appears in the tool facts (name, size, dimensions, description). If it isn't there, say you can't confirm it and share the product link."));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Only state a product's material, features, use, capacity, size, compatibility or origin if it appears in the tool facts (name, category, size, dimensions, description, details). If it isn't there, say you can't confirm it and share the product link. Read the whole description before saying a product lacks something."));
+});
+
+test("Claire reads the store's details and category the way the catalogue means them, with no brand hard-coded", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("'Country of Brand Origin' is where the brand comes from"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("don't call it porcelain"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Use the category to tell what a product is for"));
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /Atlantic Chef|Giesser|Kikumori/);
 });
 
 test("Claire knows product cards have no photos", () => {

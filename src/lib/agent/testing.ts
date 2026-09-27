@@ -26,6 +26,7 @@ export function fakeDeps(
   catalogue: CatalogueProduct[],
   live: Record<string, LiveOverride> = {},
   image: CatalogueImageLookup | null = null,
+  details: Record<string, Record<string, string>> = {},
 ): FactDeps & { calls: string[] } {
   const calls: string[] = [];
   const byUrl = (url: string) => catalogue.find((item) => item.source_url === url);
@@ -73,6 +74,10 @@ export function fakeDeps(
     },
     async lookupImage() {
       return image;
+    },
+    async findDetails(codes) {
+      calls.push(`details:${codes.join(",")}`);
+      return new Map(codes.filter((code) => details[code]).map((code): [string, Record<string, string>] => [code, details[code]]));
     },
   };
 }

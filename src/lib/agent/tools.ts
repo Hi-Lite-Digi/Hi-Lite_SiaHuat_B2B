@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
-import { liveCheck, productFact, retryOnce, storeProductUrl, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
+import { liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
 import { customerChose, pickedCodes, type PickEvidence } from "./picks";
 
 /** One change update_enquiry made to the enquiry. */
@@ -120,6 +120,7 @@ const QUERY_ROWS = 10;
 const CATEGORY_ROWS = 200;
 const LIVE_CHECKS_PER_SEARCH = 10; // all of them: unchecked rows showed "price to be confirmed" and were called out of stock
 const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
+const DETAILS_TIMEOUT_MS = 1_500;
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
@@ -132,13 +133,31 @@ const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome 
 /** An error as a log code: its message when that is already a code (SUPABASE_SEARCH_500), else its name. Error text can echo customer words. */
 export const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name) : "unknown");
 
-/** Stores a checked product and returns the one kept: a failed or skipped check never replaces a live-checked one. */
+/**
+ * Stores a checked product and returns the one kept: a failed or skipped check never replaces a live-checked one.
+ * Details are catalogue data, not price or stock, so whichever copy has them keeps them.
+ */
 export function keepBest(ctx: TurnContext, checked: CheckedProduct) {
   const known = ctx.seen.get(checked.product.stock_id);
-  const kept = known?.verified && !checked.verified ? known : checked;
+  const best = known?.verified && !checked.verified ? known : checked;
+  const other = best === checked ? known : checked;
+  const kept = !best.details && other?.details ? { ...best, details: other.details } : best;
   ctx.seen.set(checked.product.stock_id, kept);
   return kept;
 }
+
+type Details = Map<string, Record<string, string>>;
+
+/** The catalogue's spec fields for these codes in one lookup, skipping codes this turn already has them for. A failed or slow lookup finds none. */
+export function lookupDetails(ctx: TurnContext, codes: string[], limitMs = DETAILS_TIMEOUT_MS): Promise<Details> {
+  const missing = [...new Set(codes)].filter((code) => ctx.seen.get(code)?.details === undefined);
+  const none: Details = new Map();
+  if (!missing.length) return Promise.resolve(none);
+  return withTimeout(ctx.deps.findDetails(missing).catch(() => none), Math.min(DETAILS_TIMEOUT_MS, limitMs), none);
+}
+
+/** The checked product with its looked-up details (null when there are none); keepBest keeps details already known this turn. */
+export const withDetails = (checked: CheckedProduct, found: Details): CheckedProduct => ({ ...checked, details: storeDetails(found.get(checked.product.stock_id)) ?? null });
 
 function remember(ctx: TurnContext, checked: CheckedProduct) {
   return productFact(keepBest(ctx, checked), ctx.shownIds.has(checked.product.stock_id));
@@ -205,10 +224,13 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     : categoryOutcome?.status === "rejected" ? "Category search failed."
     : !scope.exists ? `No catalogue category matches '${category}'.${categories.length ? ` Categories among these results: ${categories.join(", ")}.` : ""}`
     : null;
-  const checked = await Promise.all(top.slice(0, LIVE_CHECKS_PER_SEARCH).map((item) => liveCheck(item, ctx.deps)));
+  const [checked, details] = await Promise.all([
+    Promise.all(top.slice(0, LIVE_CHECKS_PER_SEARCH).map((item) => liveCheck(item, ctx.deps))),
+    lookupDetails(ctx, top.map((item) => item.stock_id)),
+  ]);
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
   return ok({
-    products: affordable.map((item) => remember(ctx, item)),
+    products: affordable.map((item) => remember(ctx, withDetails(item, details))),
     total_found: totalFound,
     more_available: moreAvailable,
     complete,
@@ -224,7 +246,8 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
   if (!url && !input.stock_id) return fail("MISSING_FIELDS");
   const found = url ? await ctx.deps.findBySourceUrl(url) : await ctx.deps.findByCode(input.stock_id!);
   if (!found) return fail("NOT_FOUND");
-  return ok({ product: remember(ctx, await liveCheck(found, ctx.deps)) });
+  const [checked, details] = await Promise.all([liveCheck(found, ctx.deps), lookupDetails(ctx, [found.stock_id])]);
+  return ok({ product: remember(ctx, withDetails(checked, details)) });
 }
 
 // Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share.
@@ -266,26 +289,32 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
       .sort((a, b) => sameLeaf(b) - sameLeaf(a));
   }
   // The source is checked too, so the reply's "X is out of stock" is judged against its live stock (the memo avoids a refetch).
-  const [checkedSource, checked] = await Promise.all([
+  const checking = candidates.slice(0, 8);
+  const [checkedSource, checked, details] = await Promise.all([
     source && liveCheck(source, ctx.deps),
-    Promise.all(candidates.slice(0, 8).map((item) => liveCheck(item, ctx.deps))),
+    Promise.all(checking.map((item) => liveCheck(item, ctx.deps))),
+    lookupDetails(ctx, [...(source ? [source] : []), ...checking].map((item) => item.stock_id)),
   ]);
-  const sourceFact = checkedSource ? { source: remember(ctx, checkedSource) } : {};
+  const sourceFact = checkedSource ? { source: remember(ctx, withDetails(checkedSource, details)) } : {};
   const available = checked
     .filter((item) => item.verified && item.product.stock_status === "in_stock" && (item.product.available_quantity ?? 0) >= minQty)
     .slice(0, 3);
   if (!available.length) {
     return ok({ ...sourceFact, products: [], note: checked.length && !checked.some((item) => item.verified) ? ALTERNATIVES_UNCHECKED : NO_CLOSE_ALTERNATIVE });
   }
-  return ok({ ...sourceFact, products: available.map((item) => remember(ctx, item)) });
+  return ok({ ...sourceFact, products: available.map((item) => remember(ctx, withDetails(item, details))) });
 }
 
 async function matchPhotoTool(ctx: TurnContext) {
   if (!ctx.image) return fail("NO_PHOTO");
   const result = await ctx.deps.lookupImage(ctx.image);
   if (!result) return ok({ kind: "none", products: [], note: "No catalogue photo match. Describe what you see and search by product type." });
-  const checked = await Promise.all(result.products.slice(0, 5).map((item) => liveCheck(item, ctx.deps)));
-  return ok({ kind: result.kind, exact_product: result.kind === "direct", products: checked.map((item) => remember(ctx, item)) });
+  const matches = result.products.slice(0, 5);
+  const [checked, details] = await Promise.all([
+    Promise.all(matches.map((item) => liveCheck(item, ctx.deps))),
+    lookupDetails(ctx, matches.map((item) => item.stock_id)),
+  ]);
+  return ok({ kind: result.kind, exact_product: result.kind === "direct", products: checked.map((item) => remember(ctx, withDetails(item, details))) });
 }
 
 /**

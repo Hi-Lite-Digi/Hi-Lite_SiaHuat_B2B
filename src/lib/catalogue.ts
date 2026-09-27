@@ -704,3 +704,27 @@ export async function findCatalogueProductBySourceUrl(sourceUrl: string) {
   if (!response.ok) throw new Error(`SUPABASE_PRODUCT_${response.status}`);
   return catalogueProductSchema.array().parse(await response.json())[0] ?? null;
 }
+
+/** Spec fields the crawler stored ("Country of Brand Origin", "Material", …) for these item codes, keyed by code. Used by the agent only. */
+export async function findCatalogueAttributes(codes: string[]) {
+  const found = new Map<string, Record<string, string>>();
+  const wanted = [...new Set(codes)].slice(0, 20);
+  if (!wanted.length) return found;
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
+  // Each code is quoted: some contain "/" or "," (17-0337/1101), which the in.(…) filter would otherwise split on.
+  const list = wanted.map((code) => `"${code.replace(/["\\]/g, "\\$&")}"`).join(",");
+  const query = new URLSearchParams({ stock_id: `in.(${list})`, select: "stock_id,attributes" });
+  const response = await fetch(`${url}/rest/v1/products?${query}`, {
+    headers: { apikey: key, authorization: `Bearer ${key}` },
+    cache: "no-store",
+    signal: AbortSignal.timeout(4_000),
+  });
+  if (!response.ok) throw new Error(`SUPABASE_ATTRIBUTES_${response.status}`);
+  const rows = z.object({ stock_id: z.string(), attributes: z.record(z.string(), z.unknown()).nullish() }).array().parse(await response.json());
+  for (const row of rows) {
+    found.set(row.stock_id, Object.fromEntries(Object.entries(row.attributes ?? {}).flatMap(([label, value]): [string, string][] => (value == null ? [] : [[label, String(value)]]))));
+  }
+  return found;
+}
