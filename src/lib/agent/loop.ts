@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
-import { parseCardsNote, withoutCardsNote, type AgentReply, type AgentRequest } from "./contract";
+import type { AgentReply, AgentRequest } from "./contract";
 import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
@@ -12,6 +12,7 @@ import {
   MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, issueCode, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
   type EarlierTurns, type FinalAnswer, type Fixer,
 } from "./guards";
+import { pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, errorCode, runTool, uncheckedNote, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -208,8 +209,7 @@ export async function runAgentTurn(input: {
   const timeLeft = () => workMs - (performance.now() - started);
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const customerTexts = recentCustomerTexts(request);
-  const claireReplies = request.history.filter((item) => item.role === "assistant");
-  const previousReply = claireReplies.at(-1);
+  const picks = pickEvidence(request.history, request.event);
   const ctx: TurnContext = {
     deps,
     seen: new Map(verified.products),
@@ -221,13 +221,12 @@ export async function runAgentTurn(input: {
     clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...customerTexts] : customerTexts,
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
-    tappedId: request.event.type === "select_product" ? request.event.stockId : null,
-    previousCards: previousReply ? parseCardsNote(previousReply.content) : [],
+    picks,
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   const earlier: EarlierTurns = {
-    cardSets: claireReplies.map((item) => parseCardsNote(item.content).map((card) => card.code)),
-    previousMessage: previousReply ? withoutCardsNote(previousReply.content) : null,
+    cardSets: picks.replies.map((reply) => reply.cards.map((card) => card.code)),
+    previousMessage: picks.replies.at(-1)?.text ?? null,
     currentText: searchText ?? "",
   };
 

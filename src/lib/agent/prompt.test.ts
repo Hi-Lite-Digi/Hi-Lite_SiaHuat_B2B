@@ -34,8 +34,11 @@ test("Claire knows product cards have no photos", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
 });
 
-test("Claire only adds a product the customer chose, and shows it as a card first otherwise", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Only add a product the customer tapped, named by its code, or clearly picked from the cards you showed; otherwise show it as a card first."));
+test("Claire adds a product the customer picked from any card in the chat, without a confirm step or a demand to tap", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Any card shown earlier in this chat counts"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say the system needs a tap"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Don't ask them to confirm first"));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("otherwise show it as a card first"));
 });
 
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {

@@ -4,9 +4,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
-import type { ShownCard } from "./contract";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
 import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
+import { customerChose, pickedCodes, type PickEvidence } from "./picks";
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -23,10 +23,8 @@ export type TurnContext = {
   clearTexts: string[];
   image: ImageAttachment | null;
   shownIds: ReadonlySet<string>;
-  /** The product card the customer tapped this turn, if any. */
-  tappedId: string | null;
-  /** The product cards in Claire's previous reply. */
-  previousCards: ShownCard[];
+  /** The taps, texts and cards in the chat that show which products the customer picked. */
+  picks: PickEvidence;
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -74,7 +72,7 @@ export const agentTools: Anthropic.Tool[] = [
   },
   {
     name: "update_enquiry",
-    description: "Add, set, remove or clear lines on the customer's enquiry. 'add' increases an existing line; 'set' replaces its quantity. quantity must be a number the customer typed for this item. unit 'carton' or 'packet' converts using the product's own pack size.",
+    description: "Add, set, remove or clear lines on the customer's enquiry. 'add' increases an existing line; 'set' replaces its quantity. quantity must be a number the customer typed for this item. unit 'carton' or 'packet' converts using the product's own pack size. stock_id must be a product the customer picked (a tap, its code, its name, size or price, or a yes to the only card you showed).",
     input_schema: {
       type: "object",
       properties: {
@@ -207,28 +205,6 @@ function enquiryState(ctx: TurnContext) {
   return { lines: ctx.lines, totals: enquiryTotals(ctx.lines), unchecked: uncheckedNote(ctx.uncheckedCodes) };
 }
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/**
- * True when the customer picked this product: they tapped its card this turn, it is already on the enquiry,
- * they typed its item code, it was the only card in Claire's previous reply, or it was a card in that reply
- * and they typed a word of its name (4+ letters) that none of the other cards in that reply share.
- */
-function customerChose(stockId: string, ctx: TurnContext) {
-  const same = (code: string) => code.toLowerCase() === stockId.toLowerCase();
-  if (ctx.tappedId && same(ctx.tappedId)) return true;
-  if (ctx.lines.some((line) => same(line.code))) return true;
-  const typedCode = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(stockId)}(?![\\p{L}\\p{N}])`, "iu");
-  if (ctx.customerTexts.some((text) => typedCode.test(text))) return true;
-  if (ctx.previousCards.length === 1 && same(ctx.previousCards[0].code)) return true;
-  const name = ctx.previousCards.find((card) => same(card.code))?.name;
-  if (!name) return false;
-  const otherNames = ctx.previousCards.filter((card) => !same(card.code)).map((card) => card.name.toLowerCase());
-  const words = name.toLowerCase().match(/\p{L}{4,}/gu) ?? [];
-  return words.some((word) => !otherNames.some((other) => other.includes(word))
-    && ctx.customerTexts.some((text) => new RegExp(`(?<!\\p{L})${word}`, "iu").test(text)));
-}
-
 async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext) {
   // A line that could not be re-checked stays as the browser has it: it can be removed or cleared, not changed.
   const code = input.stock_id?.toLowerCase();
@@ -237,8 +213,12 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
     return ok(enquiryState(ctx));
   }
-  if ((input.action === "add" || input.action === "set") && input.stock_id && !customerChose(input.stock_id, ctx)) {
-    return fail("PRODUCT_NOT_CHOSEN", { note: "Show this product as a card and let the customer tap it or say which one first." });
+  const lineCodes = ctx.lines.map((line) => line.code);
+  if ((input.action === "add" || input.action === "set") && input.stock_id && !customerChose(input.stock_id, input.quantity ?? null, ctx.picks, lineCodes)) {
+    return fail("PRODUCT_NOT_CHOSEN", {
+      note: "The customer hasn't picked this product: no tap, code, name, size, price or yes to it. Show the likely cards and ask which one.",
+      picked: pickedCodes(ctx.picks, lineCodes),
+    });
   }
   const result = await applyEnquiryAction(ctx.lines, {
     action: input.action,

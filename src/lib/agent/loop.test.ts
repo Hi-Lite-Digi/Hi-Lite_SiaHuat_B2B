@@ -476,7 +476,7 @@ test("a chip tap is never a quantity: the enquiry tool refuses", async () => {
     answer({ message: "Good choice. How many do you need?" }),
   ]);
   const reply = await runAgentTurn({
-    request: request({ event: { type: "text", text: "5 pcs", chip: true }, history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "This one fits.\n[cards shown: 970S KITCHEN BLOW TORCH 970S]" }] }),
+    request: request({ event: { type: "text", text: "5 pcs", chip: true }, history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "This one fits. How many do you need?\n[cards shown: 970S KITCHEN BLOW TORCH 970S]" }] }),
     deps: deps(), client, model: "claude-sonnet-5",
   });
   assert.deepEqual(reply.enquiry.lines, []);
@@ -498,7 +498,7 @@ test("with two cards shown, \"ok 2\" does not choose one: the enquiry tool refus
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /PRODUCT_NOT_CHOSEN/);
 });
 
-test("only the previous reply's cards count: a single card there is the customer's choice", async () => {
+test("a yes to the only card in Claire's previous reply picks it", async () => {
   const { client } = fakeClient([
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
     answer({ message: "Got it: 2 Safico torches. Anything else?" }),
@@ -521,13 +521,52 @@ test("the 3-in-1 in a request is not quantity 3", async () => {
   ]);
   const reply = await runAgentTurn({
     request: request({
-      event: { type: "text", text: "show me" },
+      event: { type: "text", text: "ok add it" },
       history: [{ role: "user", content: "got cordless 3 in 1 blender whisk kind anot" }, { role: "assistant", content: `This one has a whisk.\n[cards shown: MX130 ${blender.name} ($62.00) <${blender.source_url}>]` }],
     }),
     deps: fakeDeps([blender]), client, model: "claude-sonnet-5",
   });
   assert.deepEqual(reply.enquiry.lines, []);
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /QTY_NOT_STATED/);
+});
+
+test("a tap, then How many?, then a typed number adds the tapped product", async () => {
+  const { client } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 4 }),
+    answer({ message: "Got it: 4 Safico torches. Anything else?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "4 can" },
+      history: [
+        { role: "user", content: "blow torch" }, twoCardsShown,
+        { role: "user", content: "[tap] Picked: CASSETTE GAS TORCH BURNER SAFICO PRO (code BTS-8026D)" },
+        { role: "assistant", content: "How many do you need?" },
+      ],
+    }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 4]]);
+});
+
+test("'only 1 of them' after a single card is refused", async () => {
+  const mixer = product({ stock_id: "MX130", name: "Dynamic Mini Cordless Mixer 45x11cm, 10,00Rpm, 230V/220W, Capacity 4Ltr", list_price: 563.3 });
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "MX130", quantity: 1 }),
+    answer({ message: "Which one do you mean?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "only 1 of them" },
+      history: [
+        { role: "user", content: "how about cordless 3-in-1 blender, whisk product" },
+        { role: "assistant", content: `The Cuisinart is out of stock. The closest cordless option in stock is this mixer, though it's a mixer, not a blender.\n[cards shown: MX130 ${mixer.name} ($563.30) <${mixer.source_url}>]` },
+      ],
+    }),
+    deps: fakeDeps([mixer]), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /PRODUCT_NOT_CHOSEN/);
 });
 
 test("customer texts exclude taps and include the current message", () => {

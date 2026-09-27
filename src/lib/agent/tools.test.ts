@@ -1,7 +1,9 @@
 // src/lib/agent/tools.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
+import { cardsNote } from "./contract";
 import type { CheckedProduct } from "./facts";
+import { pickEvidence } from "./picks";
 import { agentTools, runTool, type TurnContext } from "./tools";
 import { fakeDeps, product } from "./testing";
 
@@ -12,7 +14,7 @@ const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
-    tappedId: null, previousCards: [], ...overrides,
+    picks: { taps: [], texts: [], replies: [] }, ...overrides,
   };
 }
 
@@ -196,8 +198,13 @@ test("match_photo needs a photo in this turn", async () => {
   assert.match(outcome.content, /NO_PHOTO/);
 });
 
+const twoCardsReply = { role: "assistant" as const, content: `Two options.${cardsNote([blowtorch, safico])}` };
+/** What the customer did this turn after Claire showed the torch and the Safico: a tap, or a typed text. */
+const tappedAfterTwo = (code: string) => pickEvidence([twoCardsReply], { type: "select_product", stockId: code });
+const typedAfter = (history: Parameters<typeof pickEvidence>[0], text: string) => pickEvidence(history, { type: "text", text });
+
 test("update_enquiry changes the turn's enquiry", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], tappedId: "BTS-8026D" });
+  const ctx = context(undefined, { customerTexts: ["2 please"], picks: tappedAfterTwo("BTS-8026D") });
   const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
   assert.equal(outcome.isError, false);
   assert.equal(ctx.lines[0].quantity, 2);
@@ -217,7 +224,7 @@ test("a line that could not be re-checked can be removed or cleared, but not cha
 });
 
 test("while a line is unchecked, update_enquiry results tell Claude not to quote a total or item count", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], tappedId: "BTS-8026D" });
+  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], picks: tappedAfterTwo("BTS-8026D") });
   const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { unchecked?: string };
   assert.match(added.unchecked ?? "", /Unchecked lines \(kept by the customer, not in these lines or totals\): F46700\./);
   assert.match(added.unchecked ?? "", /Don't quote an enquiry total or item count/);
@@ -226,42 +233,42 @@ test("while a line is unchecked, update_enquiry results tell Claude not to quote
 });
 
 const addSafico = (overrides: Partial<TurnContext>, action: "add" | "set" = "add") => runTool("update_enquiry", { action, stock_id: "BTS-8026D", quantity: 2 }, context(undefined, overrides));
-const twoCards = [{ code: "970S", name: blowtorch.name, price: null, link: null }, { code: "BTS-8026D", name: safico.name, price: null, link: null }];
 
 test("a product whose card the customer tapped this turn can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["2 please"], tappedId: "bts-8026d", previousCards: twoCards })).isError, false);
+  assert.equal((await addSafico({ customerTexts: ["2 please"], picks: tappedAfterTwo("bts-8026d") })).isError, false);
 });
 
 test("a product already on the enquiry can have its quantity changed", async () => {
   const lines = [{ item: safico.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 1, total: 23.36, uom: "PC" }];
-  const outcome = await addSafico({ customerTexts: ["make it 2"], lines, previousCards: twoCards }, "set");
+  const outcome = await addSafico({ customerTexts: ["make it 2"], lines, picks: typedAfter([twoCardsReply], "make it 2") }, "set");
   assert.equal(outcome.isError, false);
 });
 
 test("a product whose item code the customer typed can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["2 pcs of bts-8026d"], previousCards: twoCards })).isError, false);
+  assert.equal((await addSafico({ customerTexts: ["2 pcs of bts-8026d"], picks: typedAfter([twoCardsReply], "2 pcs of bts-8026d") })).isError, false);
 });
 
-test("the only product card in Claire's previous reply can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["ok 2"], previousCards: [{ code: "BTS-8026D", name: safico.name, price: null, link: null }] })).isError, false);
+test("a yes to the only product card in Claire's previous reply adds it", async () => {
+  const oneCard = { role: "assistant" as const, content: `This one runs on gas.${cardsNote([safico])}` };
+  assert.equal((await addSafico({ customerTexts: ["ok 2"], picks: typedAfter([oneCard], "ok 2") })).isError, false);
 });
 
 test("a product named by a word no other card in the previous reply shares can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["the safico one, 2 pcs"], previousCards: twoCards })).isError, false);
+  assert.equal((await addSafico({ customerTexts: ["the safico one, 2 pcs"], picks: typedAfter([twoCardsReply], "the safico one, 2 pcs") })).isError, false);
 });
 
-test("a named product that wasn't a card in the previous reply is refused", async () => {
+test("a product named before it was shown as a card is refused", async () => {
   // First message: the search finds several torches and nothing has been shown yet, so none of them was chosen.
-  const ctx = context(undefined, { customerTexts: ["I need 2 blow torches"] });
+  const ctx = context(undefined, { customerTexts: ["I need 2 blow torches"], picks: typedAfter([], "I need 2 blow torches") });
   await runTool("search_catalogue", { queries: ["torch"] }, ctx);
   const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
   assert.match(outcome.content, /PRODUCT_NOT_CHOSEN/);
-  assert.match((await addSafico({ customerTexts: ["I need 2 safico torches"] })).content, /PRODUCT_NOT_CHOSEN/);
+  assert.match((await addSafico({ customerTexts: ["I need 2 safico torches"], picks: typedAfter([], "I need 2 safico torches") })).content, /PRODUCT_NOT_CHOSEN/);
 });
 
 test("a product the customer didn't pick out of several is refused", async () => {
   for (const text of ["ok 2", "2 torches"]) {
-    const ctx = context(undefined, { customerTexts: [text], previousCards: twoCards });
+    const ctx = context(undefined, { customerTexts: [text], picks: typedAfter([twoCardsReply], text) });
     const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
     assert.equal(outcome.isError, true, text);
     assert.match(outcome.content, /PRODUCT_NOT_CHOSEN/, text);
@@ -269,9 +276,13 @@ test("a product the customer didn't pick out of several is refused", async () =>
   }
 });
 
-test("a PRODUCT_NOT_CHOSEN refusal tells Claude to show the product as a card first", async () => {
-  const outcome = await addSafico({ customerTexts: ["2 torches"], previousCards: twoCards });
-  assert.deepEqual(JSON.parse(outcome.content), { error: "PRODUCT_NOT_CHOSEN", note: "Show this product as a card and let the customer tap it or say which one first." });
+test("a PRODUCT_NOT_CHOSEN refusal tells Claude what to do and which products the customer did pick", async () => {
+  const history = [twoCardsReply, { role: "user" as const, content: "[tap] Picked: KITCHEN BLOW TORCH 970S (code 970S)" }, { role: "assistant" as const, content: "How many do you need?" }];
+  const outcome = await addSafico({ customerTexts: ["2 torches"], picks: typedAfter(history, "2 torches") });
+  const body = JSON.parse(outcome.content) as { error: string; note: string; picked: string[] };
+  assert.deepEqual(Object.keys(body), ["error", "note", "picked"]);
+  assert.equal(body.error, "PRODUCT_NOT_CHOSEN");
+  assert.deepEqual(body.picked, ["970S"]);
 });
 
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {
