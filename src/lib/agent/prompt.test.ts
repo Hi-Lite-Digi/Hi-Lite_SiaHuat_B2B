@@ -81,3 +81,9 @@ test("Claire attaches a card she mentions or asks the customer to tap, and never
   assert.ok(CLAIRE_AGENT_PROMPT.includes("any card shown earlier in this chat can be attached again"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("card_ids (0-5 item codes from tool results in this turn, or of cards already shown in this chat)"));
 });
+
+test("Claire only reports enquiry changes that happened, never promises them, and paces a list", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Only say something was added, changed or removed after update_enquiry succeeded in this turn"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are, handle up to three this turn"));
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /keep the rest in mind/);
+});

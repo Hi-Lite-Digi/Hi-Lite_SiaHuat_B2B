@@ -8,11 +8,16 @@ import { applyEnquiryAction, enquiryTotals } from "./enquiry";
 import { liveCheck, productFact, retryOnce, storeProductUrl, type CheckedProduct, type FactDeps } from "./facts";
 import { customerChose, pickedCodes, type PickEvidence } from "./picks";
 
+/** One change update_enquiry made to the enquiry. */
+export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null; name: string | null };
+
 /** Mutable state for one customer turn. */
 export type TurnContext = {
   deps: FactDeps;
   seen: Map<string, CheckedProduct>;
   lines: EnquiryReceiptLine[];
+  /** The enquiry changes that succeeded this turn: the reply may only say these happened. */
+  changes: EnquiryChange[];
   /** Enquiry codes that could not be re-checked this turn: the browser keeps its own copy of those lines. */
   uncheckedCodes: string[];
   /** The customer's recent typed texts: the only place a quantity can come from. */
@@ -211,6 +216,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   if (input.action !== "clear" && ctx.uncheckedCodes.some((item) => item.toLowerCase() === code)) {
     if (input.action !== "remove") return fail("STOCK_UNVERIFIED");
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
+    ctx.changes.push({ action: "remove", code: input.stock_id ?? null, name: null });
     return ok(enquiryState(ctx));
   }
   const lineCodes = ctx.lines.map((line) => line.code);
@@ -229,6 +235,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   if (result.product) remember(ctx, result.product);
   if (!result.ok) return fail(result.error, { available: result.available ?? undefined, notice: result.notice || undefined });
   ctx.lines = result.lines;
+  ctx.changes.push({ action: input.action, code: input.stock_id ?? null, name: result.product?.product.name ?? null });
   if (input.action === "clear") ctx.uncheckedCodes = [];
   return ok({ ...enquiryState(ctx), notice: result.notice || undefined });
 }

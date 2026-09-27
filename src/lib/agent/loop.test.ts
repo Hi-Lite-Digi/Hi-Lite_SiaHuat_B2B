@@ -113,12 +113,12 @@ test("a made-up card that survives the repair gets the backup reply", async () =
 
 test("a style problem that survives the repair is tidied and sent, not replaced by the backup reply", async () => {
   const { client, bodies } = fakeClient([
-    answer({ message: "Noted: 2 torches." }),
-    answer({ message: "Noted: 2 torches." }),
+    answer({ message: "Noted. Which size do you need?" }),
+    answer({ message: "Noted. Which size do you need?" }),
   ]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
-  assert.equal(reply.message, "Got it: 2 torches.");
+  assert.equal(reply.message, "Got it. Which size do you need?");
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /plain, friendly customer language/);
 });
 
@@ -150,17 +150,17 @@ test("a style-only problem with little time left is tidied and sent without a re
 });
 
 test("a style-only repair that fails sends the tidied first answer", async () => {
-  const { client } = fakeClient([answer({ message: "Noted: 2 torches." }), new Error("overloaded")]);
+  const { client } = fakeClient([answer({ message: "Noted. Which size do you need?" }), new Error("overloaded")]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
-  assert.equal(reply.message, "Got it: 2 torches.");
+  assert.equal(reply.message, "Got it. Which size do you need?");
 });
 
 test("a style-only answer whose repair brings a made-up card sends the tidied first answer", async () => {
-  const { client } = fakeClient([answer({ message: "Noted: 2 torches." }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
+  const { client } = fakeClient([answer({ message: "Noted. Which size do you need?" }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
-  assert.equal(reply.message, "Got it: 2 torches.");
+  assert.equal(reply.message, "Got it. Which size do you need?");
   assert.deepEqual(reply.cards, []);
 });
 
@@ -294,9 +294,9 @@ test("the turn log shows a repair skipped for time, or a failed repair replaced 
   const info = t.mock.method(console, "info", () => undefined);
   const skipped = fakeClient([answer({ message: "Noted. Which size do you need?" })]);
   await runAgentTurn({ request: request({}), deps: deps(), client: skipped.client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
-  const failed = fakeClient([answer({ message: "Noted: 2 torches." }), new Error("overloaded: blow torch")]);
+  const failed = fakeClient([answer({ message: "Noted. Which size do you need?" }), new Error("overloaded: blow torch")]);
   await runAgentTurn({ request: request({}), deps: deps(), client: failed.client, model: "claude-sonnet-5" });
-  const rejected = fakeClient([answer({ message: "Noted: 2 torches." }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
+  const rejected = fakeClient([answer({ message: "Noted. Which size do you need?" }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
   await runAgentTurn({ request: request({}), deps: deps(), client: rejected.client, model: "claude-sonnet-5" });
   const logs = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").map((call) => call.arguments[1] as Record<string, unknown>);
   assert.deepEqual(logs.map((log) => [log.repaired, log.repairCauses, log.repairSkipped, log.repairFailed]), [
@@ -638,4 +638,50 @@ test("customer texts exclude taps and include the current message", () => {
     history: [{ role: "user", content: "blow torch" }, { role: "user", content: "[tap] Picked: TORCH L15.6xW5.8xH5cm (code BTS-8026D)" }],
   }));
   assert.deepEqual(texts, ["3 please", "blow torch"]);
+});
+
+const NUDGE = /Call update_enquiry only for exactly what the customer picked/;
+const saficoShown = { role: "assistant" as const, content: `This one runs on gas.\n[cards shown: BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO ($23.36) <${safico.source_url}>]` };
+
+test("a reply that says added without an update is sent back with tools, and the add then goes through", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "Got it, adding 2 torches now." }),
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+    answer({ message: "Got it: 2 Safico torches. Anything else?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok" }, history: [{ role: "user", content: "torch 2 pcs" }, saficoShown] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal((bodies[1].tool_choice as { type: string }).type, "auto");
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /no update_enquiry call succeeded/);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
+  assert.equal(reply.message, "Got it: 2 Safico torches. Anything else?");
+});
+
+test("a false add claim that survives the nudge and the repair is replaced", async () => {
+  const claim = answer({ message: "Added: 2 torches. Anything else?" });
+  const { client, bodies } = fakeClient([claim, claim, claim]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "2 torches" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 3);
+  assert.equal(reply.provider, "anthropic");
+  assert.doesNotMatch(reply.message, /added/i);
+  assert.equal(reply.message, "That isn't on your enquiry yet. Anything else?");
+});
+
+test("no nudge when little time is left: the repair runs instead", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "Added: 2 torches." }), answer({ message: "Which torch would you like?" })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "2 torches" } }), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 24_000 });
+  assert.equal(bodies.length, 2);
+  assert.equal((bodies[1].tool_choice as { type: string }).type, "none");
+  assert.ok(!bodies.some((body) => NUDGE.test(JSON.stringify(body.messages))));
+  assert.equal(reply.message, "Which torch would you like?");
+});
+
+test("a 'Noted: 2 torches' claim with no update is replaced after the repair", async () => {
+  const claim = answer({ message: "Noted: 2 torches." });
+  const { client } = fakeClient([claim, claim, claim]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "That isn't on your enquiry yet.");
 });

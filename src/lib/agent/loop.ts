@@ -9,8 +9,8 @@ import { enquiryTotals, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, issueCode, noCardFixer, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts,
-  type EarlierTurns, type FinalAnswer, type Fixer,
+  ENQUIRY_CLAIM_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, customerMessage, enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, reviewAnswer,
+  tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type Fixer,
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
@@ -32,6 +32,7 @@ const VERIFY_FLOOR_MS = 1_000;
 const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long; with less left, the tidied answer is sent
 const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
 const EARLIER_CARD_CHECK_MS = 2_000;
+const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
 
 const finalSchema: Record<string, unknown> = {
   type: "object",
@@ -54,6 +55,7 @@ const CARDS_ONLY_MESSAGE = "Here are some options.";
 const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty message, card_ids, chips and show_contact. Answer with that JSON only.";
 const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
+const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says the enquiry changed (or will change), but no update_enquiry call succeeded for that item in this turn. Call update_enquiry only for exactly what the customer picked and the number they typed; otherwise answer without saying it changed.";
 
 /** The customer's last two typed messages (card and chip taps excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
@@ -241,6 +243,7 @@ export async function runAgentTurn(input: {
     deps,
     seen: new Map(verified.products),
     lines: verified.lines,
+    changes: [],
     uncheckedCodes: verified.unchecked,
     customerTexts,
     currentText: request.event.type === "text" && !request.event.chip ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null,
@@ -266,6 +269,8 @@ export async function runAgentTurn(input: {
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes });
+    let nudged = false;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       // The first call may always use tools; after a tool round, a nearly spent budget means answer now.
       const forceAnswer = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= lastCallMs);
@@ -280,7 +285,14 @@ export async function runAgentTurn(input: {
         messages.push({ role: "user", content: await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline) });
         continue;
       }
-      result = { final: readFinal(response), content: response.content };
+      const final = readFinal(response);
+      // One chance to make the change the reply talks about. Safe only because update_enquiry checks the pick and the typed number.
+      if (final && !nudged && round < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length) {
+        nudged = true;
+        messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: CLAIM_NUDGE }] });
+        continue;
+      }
+      result = { final, content: response.content };
     }
     if (!result) throw new Error("AGENT_NO_ANSWER");
 
@@ -292,9 +304,14 @@ export async function runAgentTurn(input: {
     ).catch(() => answer);
     let final = result.final && await withEarlierCards(result.final);
     let allowed = currentAllowed();
-    let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+    let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
-    const fixers: Fixer[] = [noCardFixer, { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) }];
+    const withoutClaims = (message: string) => withoutEnquiryClaims(message, { ...turnFacts(), seen: ctx.seen });
+    const fixers: Fixer[] = [
+      { prefix: ENQUIRY_CLAIM_PREFIX, fix: withoutClaims },
+      noCardFixer,
+      { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) },
+    ];
     // A first answer with only style problems can still be sent, lightly tidied, when there is no time or no usable repair.
     const styleOnly = final && review && !review.safety.length && review.style.length ? final : null;
     const tidiedFirst = styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) };
@@ -322,18 +339,19 @@ export async function runAgentTurn(input: {
         });
       final = await withEarlierCards(final);
       allowed = currentAllowed();
-      review = reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+      review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       if (tidiedFirst && applyFixers(final.message, review.safety, fixers).left.length) {
         // The repair brought a made-up card, but the first answer was safe to send: it goes out tidied instead.
         repairFailed = "AGENT_REPLY_REJECTED";
         final = tidiedFirst;
-        review = reviewAnswer(final, ctx.seen, allowed, earlier, { lines: ctx.lines });
+        review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       }
       const fixed = applyFixers(final.message, review.safety, fixers);
       if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
       final = { ...final, message: fixed.message };
       // Style problems left after the repair are not worth the backup reply: send the answer, lightly tidied.
-      if (review.style.length) final = { ...final, message: tidyMessage(final.message) };
+      // Checked again after tidying, which rewords the reply ("Noted: 2" becomes "Got it: 2").
+      if (review.style.length) final = { ...final, message: withoutClaims(tidyMessage(final.message)) };
       if (!final.message.trim()) {
         final = { ...final, message: review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: final.show_contact || !review.cards.length };
       }

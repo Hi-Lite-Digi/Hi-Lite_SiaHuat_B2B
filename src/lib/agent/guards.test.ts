@@ -4,10 +4,12 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  DANGLING_CURRENCY_ISSUE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, endsMidSentence, issueCode,
-  noCardFixer, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, type EarlierTurns, type FinalAnswer,
+  DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE,
+  allowedCents, applyFixers, customerMessage, endsMidSentence, issueCode, noCardFixer, removeAmounts, reviewAnswer, tidyMessage, unverifiedAmounts, withoutEnquiryClaims,
+  type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
+import type { EnquiryChange } from "./tools";
 
 const seen = new Map<string, CheckedProduct>([
   ["BTS-8026D", { product: product({ stock_id: "BTS-8026D", list_price: 23.36 }), verified: true }],
@@ -185,6 +187,110 @@ test("re-showing cards is allowed when the customer asks to see or tap them", ()
   ).style;
   for (const text of ["where the product?? show me then i tap la", "ok show me the card, i tap", "show me that one"]) assert.deepEqual(styleFor(text), [], text);
   for (const text of ["hello police?", "any others?", "wah still nvr ans how much"]) assert.match(styleFor(text).join(" "), /already shown these same cards twice/, text);
+});
+
+const checked = (stock_id: string, name: string, list_price: number): [string, CheckedProduct] => [stock_id, { product: product({ stock_id, name, list_price }), verified: true }];
+const shop = new Map<string, CheckedProduct>([
+  checked("BTS-8026D", "CASSETTE GAS TORCH BURNER SAFICO PRO", 23.36),
+  checked("RS-J1009-7", "Rooster Series Round Plate 7in", 4.2),
+  checked("RS-J1001-5", "Rooster Series Deep Bowl 5in", 3.1),
+  checked("02003-11", "Roca by Cerabon Rice Bowl Ø107xH50mm", 2.5),
+  checked("2527-003", "S/S DINNER SPOON L20cm, WAVE", 1.2),
+]);
+const line = (code: string, quantity: number) => {
+  const { product: item } = shop.get(code)!;
+  return { item: item.name, code, pricePerItem: item.list_price, quantity, total: item.list_price * quantity, uom: "PC" };
+};
+const added = (code: string): EnquiryChange => ({ action: "add", code, name: shop.get(code)!.product.name });
+const claimIssues = (message: string, turn: Partial<TurnFacts> = {}) => reviewAnswer(
+  { message, card_ids: [], chips: [], show_contact: false }, shop, allowed, undefined, { lines: [], changes: [], ...turn },
+).safety.filter((issue) => issue.startsWith(ENQUIRY_CLAIM_PREFIX));
+
+test("saying the enquiry changed needs an update for that item this turn", () => {
+  for (const message of [
+    "Got it, adding 1 Kenwood Lite Hand Mixer to your enquiry now.",
+    "Confirming: 1 Kenwood Lite Hand Mixer added to your enquiry.",
+    "I'll add that to your enquiry now.",
+    "Let me add that for you now.",
+    "I've noted down 1 unit of the strainer.",
+    "Got it: 2 torches. Anything else?",
+    "Noted: 2 torches.",
+    "Got the 3 ST-15 steak tongs added — tap the card to confirm and I'll add them",
+    "Got it — I'll note 3 units of the 6-slot toaster.",
+    "Please tap the card below to select it, then I'll add 60 pcs.",
+    "I've put 2 in your enquiry.",
+    "Done - both are in your enquiry now.",
+    "好的，已加入2个火枪。",
+  ]) {
+    assert.equal(claimIssues(message).length, 1, message);
+  }
+  const torchAdded = { lines: [line("BTS-8026D", 2)], changes: [added("BTS-8026D")] };
+  for (const message of ["Got it: 2 Safico torches. Anything else?", "You've added 2 Safico torches so far."]) {
+    assert.deepEqual(claimIssues(message, torchAdded), [], message);
+  }
+  assert.equal(issueCode(claimIssues("Noted: 2 torches.")[0]), "ENQUIRY_CLAIM");
+});
+
+test("claims are checked per item", () => {
+  const plateAdded = { lines: [line("RS-J1009-7", 4)], changes: [added("RS-J1009-7")] };
+  const issues = claimIssues("Plate qty 4 done. Let me add the bowl too.", plateAdded);
+  assert.equal(issues.length, 1);
+  assert.match(issues[0], /Let me add the bowl too/);
+  assert.equal(claimIssues("Added 4 rice bowls and 4 spoons.", { lines: [line("02003-11", 4)], changes: [added("02003-11")] }).length, 1);
+  assert.equal(claimIssues("Removed the rice bowls.", { lines: [line("02003-11", 4)], changes: [added("02003-11")] }).length, 1);
+  assert.deepEqual(claimIssues("Removed the rice bowls.", { changes: [{ action: "remove", code: "02003-11", name: null }] }), []);
+});
+
+test("honest or conditional wording is not a claim", () => {
+  for (const message of [
+    "Nothing has been added yet.",
+    "Sorry, the add didn't go through.",
+    "It wasn't actually added yet.",
+    "I'm having trouble adding it.",
+    "9% GST will be added on top at checkout.",
+    "GST will be added at checkout.",
+    "Here are the updated prices.",
+    "I removed the serving tongs from the list of options.",
+    "Want me to add it?",
+    "Tell me how many and I'll add them right away.",
+    "Best if you contact Sia Huat sales directly to get that line added.",
+    "Pick a plate style and a bowl style you like, and I'll add the quantities you need.",
+  ]) {
+    assert.deepEqual(claimIssues(message), [], message);
+  }
+});
+
+test("a false claim is replaced by one plain line where the first one was", () => {
+  const facts = { lines: [line("RS-J1009-7", 4)], changes: [added("RS-J1009-7")], seen: shop };
+  assert.equal(withoutEnquiryClaims("Plate qty 4 done. Let me add the bowl too. Anything else?", facts), "Plate qty 4 done. That isn't on your enquiry yet. Anything else?");
+  assert.equal(withoutEnquiryClaims("Added the spoons. Added the rice bowls too.", { ...facts, seen: shop }), "That isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("Here you go.", facts), "Here you go.");
+});
+
+test("asking permission to add is a style issue", () => {
+  const styleWith = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, shop, allowed).style;
+  const withCard = styleWith("The Safico fits. Want me to add it to your enquiry?", ["BTS-8026D"]);
+  assert.deepEqual(withCard.filter((issue) => issue === NO_PERMISSION_ISSUE).length, 1);
+  assert.ok(!withCard.some((issue) => issue.startsWith("The customer must choose a product card first")));
+  for (const message of ["Shall I add 2 to your enquiry?", "Once you confirm I'll add it right away.", "Confirming: 3pcs of this one?"]) {
+    assert.ok(styleWith(message).includes(NO_PERMISSION_ISSUE), message);
+  }
+  for (const message of [
+    "How many do you need?", "Only 5 in stock. Want me to add 5 now, or check alternatives for the 6th?",
+    "How many would you like so I can add it for you?", "I'll try the search again once you confirm.",
+  ]) {
+    assert.ok(!styleWith(message).includes(NO_PERMISSION_ISSUE), message);
+  }
+});
+
+test("a confirm-add chip is dropped", () => {
+  const review = reviewAnswer({ message: "Which one would you like?", card_ids: [], chips: ["Yes, add it", "Show others"], show_contact: false }, seen, allowed);
+  assert.deepEqual(review.chips, ["Show others"]);
+});
+
+test("promising to come back later is a style issue and is dropped when tidied", () => {
+  assert.ok(styleOf("Let me check the rest of your list, then get back to you with all the details.").includes(PROMISE_LATER_ISSUE));
+  assert.equal(tidyMessage("Here are the plates. I'll get back to you on the rest."), "Here are the plates.");
 });
 
 test("a clean answer has no issues", () => {
