@@ -171,22 +171,25 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
 // Pointing the customer to Sia Huat sales or the enquiry PDF.
 const handoffPitch = /\b(?:contact|reach|call|email|check with|speak (?:to|with)|talk to)\b[^.?!\n]{0,40}\bsales\b|\bPDF\b/i;
 const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to|do i))\b[^.?!]{0,30}\b(?:phone|number|contact|email|pdf)\b|\b(?:speak|talk) to (?:someone|a person|a human|staff|sales)\b|\bq(?:uo|ou)t(?:e|ation)s?\b|\bcall me\b|\bget someone\b|\bsomeone (?:to )?call\b|\b(?:real|actual) (?:person|human)\b|\bi(?:['’]ll| will)? call\b|\bhow (?:to |do i |can i |i )?(?:order|buy|download|pay)\b|电话|联系方式|报价/i;
+// Asked if she's a bot, her answer names Sia Huat's sales staff as the real people to reach (V15 prompt; exam 3, c02-stress T14).
+const asksIfBot = /\b(?:(?:chat)?bot|ai|human)\b|机器人/i;
 const closingOnly = /^\s*(?:ok(?:ay)?|k|thanks?|thank you|thx|ty|tq|no,? that'?s all|that'?s all|bye|noted|alright)\b[\s.!,]*(?:(?:thanks?|thank you|thx|bye)[\s.!,]*){0,2}$/i;
 // A pitch sentence that also says what Claire can't do may be the answer to the customer's question (exam 2, s06-B: delivery timing).
 const limitation = /\b(?:can['’]?t|cannot|unable|not able|out of stock)\b/i;
-const apology = /\b(?:sorry|apologi[sz]e|my (?:mistake|bad))\b/i;
+const apology = /\b(?:sorry|apolog(?:y|ies|i[sz]e[sd]?)|my (?:mistake|bad))\b/i;
 // What only sales can do for the customer.
 const SALES_TOPICS = [/\bsourc/i, /\bspecial[- ]order/i, /\blead[- ]?times?\b/i, /\brestock/i, /\bbulk\b/i, /\bdiscount/i, /\bdeliver/i, /\bcollect(?:ion|ing)?\b/i, /\b(?:visit\w*|showroom)\b/i, /\baddress\b/i];
 
 /**
  * The message without its sales or PDF pitch when one of Claire's earlier replies already made it and the contact block shows
- * (it carries the phone, email and PDF), unless the customer asked for contact or a quote, or only said thanks (exam 2, c12-stress).
+ * (it carries the phone and email, and the PDF link once the enquiry has items), unless the customer asked for contact or a quote,
+ * asked if Claire is a bot, or only said thanks (exam 2, c12-stress).
  * Any earlier reply counts, not only the last: the history carries the text after this drop, so the pitch would come back every other turn.
  */
 export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showContact: boolean) {
   const replies = earlier.replies ?? (earlier.previousMessage ? [earlier.previousMessage] : []);
   const pitched = replies.some((reply) => handoffPitch.test(reply));
-  if (!showContact || !pitched || asksForContact.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
+  if (!showContact || !pitched || asksForContact.test(earlier.currentText) || asksIfBot.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
   // What sales can do for this request, said for the first time or about what the customer just asked, is the answer, not a
   // repeat (exam 3, s03-B T2: sourcing); an apology is never dropped with it (exam 3, c05-stress T13-T15).
   const answersTopic = (sentence: string) => SALES_TOPICS.some((topic) => topic.test(sentence) && (!replies.some((reply) => topic.test(reply)) || topic.test(earlier.currentText)));
@@ -627,7 +630,8 @@ export function reviewAnswer(
   const usable = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip));
   // A chip dropped for a number takes the rest of its set along: a lone 'with silicone grip' under an either/or question
   // reads as the only answer (exam 3: 43 of 80 single-chip turns). Drops for length or 'add/confirm' leave the rest.
-  const chips = answer.chips.some((chip) => !chipAllowed(chip) && chip.length <= 40) ? [] : usable.slice(0, 3);
+  // A chip past the third never shows, so it can't make the set lopsided.
+  const chips = answer.chips.slice(0, 3).some((chip) => !chipAllowed(chip) && chip.length <= 40) ? [] : usable.slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $. That includes an amount the customer typed ('the 2 dollar one'): name the product instead.`);
   const links = unknownStoreLinks(answer.message, seen, earlier);

@@ -85,6 +85,8 @@ test("chips with numbers or amounts, long chips and chips past the third are dro
   assert.deepEqual(review(["A chip that is far too long to fit on one button"]).chips, []);
   assert.deepEqual(review(["A chip that is far too long to fit on 1 button", "Cooking"]).chips, ["Cooking"]);
   assert.deepEqual(review(["Cooking", "Desserts", "Grilling", "Bar"]).chips, ["Cooking", "Desserts", "Grilling"]);
+  // A chip past the third never shows, so its number doesn't clear the three that do.
+  assert.deepEqual(review(["Cooking", "Desserts", "Grilling", "2 pcs"]).chips, ["Cooking", "Desserts", "Grilling"]);
 });
 
 test("reply-style problems are style issues, not safety issues", () => {
@@ -256,14 +258,26 @@ test("a sales pointer that apologises, or says for the first time or on request 
   // exam 3, c05-stress: an apology is never dropped with the pointer it carries.
   const sorry = "Sorry about the mix-ups earlier - you can reach Sia Huat sales directly if you'd like a person. The prices shown are ex-GST.";
   assert.equal(dropRepeatedPitch(sorry, earlier("no sorry also ah"), true), sorry);
+  for (const opening of ["My apologies", "Apologies for the trouble"]) {
+    const apology = `${opening} - you can reach Sia Huat sales directly if you'd like a person. The prices shown are ex-GST.`;
+    assert.equal(dropRepeatedPitch(apology, earlier("wah so slow"), true), apology, opening);
+  }
+  // Asked if she's a bot, the real people to reach are half the answer (V15 prompt bullet; exam 3, c02-stress T14).
+  const bot = "I'm Claire, Sia Huat's automated assistant (an AI), not a person. You can reach Sia Huat sales directly - they're real people.";
+  for (const text of ["are you a bot?", "wah still never answer me. bot or human??", "u AI ah"]) assert.equal(dropRepeatedPitch(bot, earlier(text), true), bot, text);
   // exam 3, s03-B T2: the first sourcing pointer was dropped, leaving "send them a photo" with no one to send it to.
   const t1 = "Could you describe or send a photo of the unit you mean? That'll help me search further, or you can check with Sia Huat sales directly.";
   const t2 = "I searched again but we don't list an automatic rice portioning machine. You can check with Sia Huat sales directly - they can advise if it's something we can source. You could also send them a photo of the exact unit you mean.";
   assert.equal(dropRepeatedPitch(t2, earlier("The one that portion out cooked rice, can choose half, full, extra", [t1]), true), t2);
-  // Asked about a topic, the pointer on it is the answer, even when an earlier reply named it (s03-B T3).
+  // A lone pointer is never emptied out, whatever the rule.
   const leadTime = "You can check with Sia Huat sales directly on lead time.";
   assert.equal(dropRepeatedPitch(leadTime, earlier("Can check for me price and lead time?", [t1, t2]), true), leadTime);
   assert.equal(dropRepeatedPitch(leadTime, earlier("Can check for me price and lead time?", [t1, `${t2} Sia Huat sales can also tell you the lead time.`]), true), leadTime);
+  // Asked about a topic, the pointer on it is the answer, even when an earlier reply named it (s03-B T3); unasked, it's a repeat.
+  const named = [t1, `${t2} You can check with Sia Huat sales on lead time.`];
+  const leadAgain = `It's not in our catalogue. ${leadTime}`;
+  assert.equal(dropRepeatedPitch(leadAgain, earlier("Can check for me price and lead time?", named), true), leadAgain);
+  assert.equal(dropRepeatedPitch(leadAgain, earlier("hmm ok", named), true), "It's not in our catalogue.");
   // Said again unasked, it is still a repeat; an apology in another sentence doesn't keep it.
   const again = "Sorry, it's not in our catalogue. You can check with Sia Huat sales directly - they can advise if it's something we can source.";
   assert.equal(dropRepeatedPitch(again, earlier("hmm ok", [t1, t2]), true), "Sorry, it's not in our catalogue.");
