@@ -6,7 +6,7 @@ import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { applyEnquiryAction, enquiryTotals } from "./enquiry";
 import { liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
-import { customerChose, pickedCodes, type PickEvidence } from "./picks";
+import { codePattern, customerChose, pickedCodes, type PickEvidence } from "./picks";
 
 /** One change update_enquiry made to the enquiry. */
 export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null };
@@ -133,11 +133,14 @@ const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((w
 // "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size.
 const sizeText = (text: string) => text.toLowerCase().replace(/(\d)\.0(?!\d)/g, "$1");
 const SIZE_WORD = /^\d+(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)$/;
+// A size word is a whole number: "6oz" is not inside "16oz" or "1/2oz", and "1.5L" gives no "5l" (exam 3: s01-A T0 asked for 6oz,
+// c12-stress for 7cm and 7.5cm).
+const sizeIn = (text: string, word: string) => new RegExp(String.raw`(?<![\d./])${word}`).test(text);
 // Colour words don't make a different product (exam 3, c01-A T9: one range's red and blue handles filled the top 10).
 const COLOUR_WORDS = /\b(?:black|white|red|blue|green|yellow|brown|violet|purple|orange|pink|gr[ae]y|cream|beige|ivory|handle|hdle)\b/g;
 const variantKey = (item: Product) => `${item.name.toLowerCase().replace(COLOUR_WORDS, " ").replace(/[^\p{L}\p{N}.]+/gu, " ").trim()}|${item.size ?? item.dimensions ?? ""}|${item.list_price}`;
 const BRAND_SHARE = 4;
-const houseCode = (brand: string) => /^UB-\d+$/i.test(brand); // house codes are not brands
+const houseCode = (brand: string) => /^UB-?\d/i.test(brand); // house codes (UB-0231, UB-06MS, UB1201) are not brands
 
 /**
  * Rank order, but on a first pass one colour variant per product and at most BRAND_SHARE per brand the queries don't name. Once
@@ -147,7 +150,8 @@ const houseCode = (brand: string) => /^UB-\d+$/i.test(brand); // house codes are
 function varied(items: Product[], limit: number, queries: string[], phrases: string[][]) {
   const words = [...new Set(phrases.flat())];
   const hits = (item: Product) => words.filter((word) => sizeText(item.name).includes(word)).length;
-  const named = (brand: string) => queries.some((query) => query.toLowerCase().includes(brand));
+  // Whole words only: short brands (AG, IR, AKI) sit inside "bag", "stir" and "baking".
+  const named = (brand: string) => queries.some((query) => codePattern(brand).test(query));
   const first: Product[] = [];
   const keys = new Set<string>();
   const perBrand = new Map<string, number>();
@@ -251,8 +255,8 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
     const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => sizeText(item.name).includes(word))).size;
     const scopeByHits = [...scope.products].sort((a, b) => nameHits(b) - nameHits(a));
-    const sizedPhrases = phrases.filter((words) => words.some((word) => SIZE_WORD.test(word)));
-    const sizedLiteral = (item: Product) => sizedPhrases.some((words) => words.every((word) => sizeText(item.name).includes(word)));
+    const sizedPhrases = phrases.filter((words, index) => words.some((word) => SIZE_WORD.test(word) && sizeIn(sizeText(input.queries[index]), word)));
+    const sizedLiteral = (item: Product) => sizedPhrases.some((words) => words.every((word) => (SIZE_WORD.test(word) ? sizeIn(sizeText(item.name), word) : sizeText(item.name).includes(word))));
     if (sizedPhrases.length) {
       // 0. rows naming the customer's exact size with every word of its query ("ladle 8oz" showed the 8oz ladle 10th or not at all)
       scopeByHits.filter(sizedLiteral).forEach(add);
@@ -270,7 +274,9 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   // out still exists, so exclude_brands doesn't count as covered: "that's all" would be false.
   const complete = scope.exists && scope.total <= CATEGORY_ROWS
     && scope.products.every((item) => excluded.has(item.stock_id.toLowerCase()) || topIds.has(item.stock_id));
-  const totalFound = scope.exists ? scope.total + merged.filter((item) => !inScope(item)).length : merged.length;
+  // The ruled-out brand's rows aren't matches, so more_available doesn't count them.
+  const ruledOut = scope.products.filter((item) => excludedBrands.has((item.brand ?? "").toLowerCase())).length;
+  const totalFound = scope.exists ? scope.total - ruledOut + merged.filter((item) => !inScope(item)).length : merged.length;
   // A search that returned its full row limit may have more matches than it could return.
   const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
   ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });

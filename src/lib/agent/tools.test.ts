@@ -270,6 +270,9 @@ test("house codes are not brands: not capped and not listed", async () => {
   const body = await searchBody({ queries: ["wok"], category: "woks" }, fakeDeps(woks));
   assert.deepEqual(idsOf(body), ["UB0", "UB1", "UB2", "UB3", "UB4", "UB5", "YM1"]);
   assert.deepEqual(body.brands, ["YAMADA"]);
+  // The catalogue's other house-code spellings.
+  const gloves = ["UB-06MS", "UB1201", "YAMADA"].map((brand, index) => product({ stock_id: `GL${index}`, name: `COTTON GLOVES ${index}`, brand, third_category: "Gloves" }));
+  assert.deepEqual((await searchBody({ queries: ["gloves"], category: "gloves" }, fakeDeps(gloves))).brands, ["YAMADA"]);
 });
 
 test("brands are listed only with a category", async () => {
@@ -289,6 +292,8 @@ test("exclude_brands leaves a brand out and doesn't make the list complete", asy
   assert.deepEqual(idsOf(body).sort(), ["T3", "T4"]);
   // A brand the customer ruled out still exists, so "that's all" would be false.
   assert.equal(body.complete, false);
+  // But its rows aren't matches: once the other brand is listed, nothing more is available.
+  assert.deepEqual([body.total_found, body.more_available], [2, false]);
   const search = agentTools.find((tool) => tool.name === "search_catalogue")!;
   assert.ok("exclude_brands" in (search.input_schema.properties as Record<string, unknown>));
 });
@@ -323,6 +328,52 @@ test("a number without its unit is not a size: other rows keep today's order", a
   const blenderDeps = fakeDeps([stick, hand]);
   blenderDeps.searchDirect = async () => [stick];
   assert.deepEqual(idsOf(await searchBody({ queries: ["2 in 1 hand blender"], category: "blenders" }, blenderDeps)), ["STICK", "HAND"]);
+});
+
+test("a size inside a longer number is not the customer's size: 6oz is not 16oz, 2oz is not 1/2oz, 2L is not 17.2L", async () => {
+  // Exam 3 customers asked for 2oz, 4oz, 6oz and 8oz ladles (s01-A T0, s06); the real "Ladle 16oz" and "LADLE 1/2oz" jumped the query hits.
+  const sixteen = product({ stock_id: "OZ16", name: "S/S LADLE 16oz", third_category: "Kitchen ladles", available_quantity: 900 });
+  const half = product({ stock_id: "OZHALF", name: "S/S LADLE 1/2oz/14.8ml", third_category: "Kitchen ladles", available_quantity: 800 });
+  const hits = ladles().slice(0, 3);
+  const six = product({ stock_id: "OZ6", name: "S/S LADLE 6.0oz", third_category: "Kitchen ladles" });
+  const two = product({ stock_id: "OZ2", name: "S/S LADLE 2.0oz", third_category: "Kitchen ladles" });
+  const deps = fakeDeps([sixteen, half, ...hits, six, two]);
+  deps.searchDirect = async () => hits;
+  const hitIds = hits.map((item) => item.stock_id);
+  assert.deepEqual(idsOf(await searchBody({ queries: ["ladle 6oz"], category: "kitchen ladles" }, deps)).slice(0, 4), ["OZ6", ...hitIds]);
+  assert.deepEqual(idsOf(await searchBody({ queries: ["ladle 2oz"], category: "kitchen ladles" }, deps)).slice(0, 4), ["OZ2", ...hitIds]);
+  const pots = [
+    product({ stock_id: "P172", name: "STOCK POT 17.2L", third_category: "Stock pots", available_quantity: 900 }),
+    product({ stock_id: "P2", name: "STOCK POT 2L", third_category: "Stock pots" }),
+    product({ stock_id: "P12", name: "STOCK POT 12L", third_category: "Stock pots" }),
+  ];
+  const potDeps = fakeDeps(pots);
+  potDeps.searchDirect = async () => [];
+  assert.deepEqual(idsOf(await searchBody({ queries: ["stock pot 2L"], category: "stock pots" }, potDeps)), ["P2", "P172", "P12"]);
+});
+
+test("a decimal size in the query is not read as its fraction: 1.5L doesn't put a 5L jug first", async () => {
+  const jugs = [
+    product({ stock_id: "J05", name: "MEASURING JUG 0.5L", third_category: "Measuring jugs" }),
+    product({ stock_id: "J5", name: "MEASURING JUG 5L", third_category: "Measuring jugs" }),
+    product({ stock_id: "J1", name: "MEASURING JUG 1L", third_category: "Measuring jugs" }),
+    product({ stock_id: "J2", name: "MEASURING JUG 2L", third_category: "Measuring jugs" }),
+  ];
+  const deps = fakeDeps(jugs);
+  deps.searchDirect = async () => [jugs[0], jugs[2], jugs[3]];
+  // No exact-size tier: the query hits first, then the category row naming the query's words, as before V11.
+  assert.deepEqual(idsOf(await searchBody({ queries: ["measuring jug 1.5L"], category: "measuring jugs" }, deps)), ["J05", "J1", "J2", "J5"]);
+});
+
+test("a short brand inside a query word is not named by the customer, so it is still capped", async () => {
+  // Real brands AG, IR and AKI sit inside "bag", "stir" and "baking".
+  const bags = [
+    ...Array.from({ length: 6 }, (_, index) => product({
+      stock_id: `AG${index}`, name: `AG STORAGE BAG ${20 + index}cm`, brand: "AG", list_price: 5 + index, third_category: "Storage bags",
+    })),
+    product({ stock_id: "ZIP", name: "ZIP STORAGE BAG 30cm", brand: "OTHER", third_category: "Storage bags" }),
+  ];
+  assert.deepEqual(idsOf(await searchBody({ queries: ["storage bag"], category: "storage bags" }, fakeDeps(bags))), ["AG0", "AG1", "AG2", "AG3", "ZIP", "AG4", "AG5"]);
 });
 
 test("a category that matches nothing is reported with the categories of the results", async () => {
@@ -569,7 +620,24 @@ test("a failed series search still returns the catalogue's alternatives", async 
   assert.deepEqual(await altIds(deps, "A1", 1), ["B1"]);
 });
 
-test("a series-search hit of another kind is not an alternative", async () => {
+test("series siblings must be in the same unit, have the quantity and not be the item itself", async () => {
+  const plate = (stockId: string, cm: number, overrides: Partial<Product> = {}) => product({
+    stock_id: stockId, name: `Patra Rim Plate ${cm}cm`, list_price: cm, category: "Dinnerware", ...overrides,
+  });
+  const deps = fakeDeps([
+    plate("PATRA18", 18, { available_quantity: 100 }),
+    plate("PATRA16", 16, { available_quantity: 237 }),
+    plate("PATRA25", 25, { uom_id: "SET", available_quantity: 106 }),
+    plate("PATRA28", 28, { available_quantity: 3 }),
+  ]);
+  deps.findAlternatives = async () => [];
+  // The code typed in lower case is not in the exclude list: only the check against the item itself keeps it out.
+  assert.deepEqual(await altIds(deps, "patra18", 4), ["PATRA16"]);
+  // A sibling without the quantity doesn't use up a live check.
+  assert.ok(!deps.calls.includes("live:PATRA28"), deps.calls.join(","));
+});
+
+test("a series-search hit from another series is not an alternative", async () => {
   // Exam 3 check on the real catalogue: a name search offered refuse bins for a step stool.
   const catalogue = [
     product({ stock_id: "MSS", name: "Vicando Mobile Step Stool with Wheels Ø40.6X34.3cm", brand: "VICANDO", list_price: 56.15, third_category: "Step stools and ladders" }),
