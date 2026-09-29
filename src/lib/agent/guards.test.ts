@@ -864,6 +864,9 @@ test("a range summary needs a complete search this turn (exam 3)", () => {
     "All our other jug blenders (Severin, Mika, Santos) are corded.",
     "Our in-stock chef knives in the size you'd want are the Atlantic Chef range.",
     "The only chef knives we have to offer are the Atlantic Chef range.",
+    "The only sizes we have to choose from are 24cm and 28cm.",
+    // A decimal size is not a stock count (c01 chef knives).
+    "We only have 27.5cm and 17.5cm chef knives.",
   ]) {
     assert.equal(claimsOf(message).length, 1, message);
     assert.equal(claimsOf(message, [search({ complete: false })]).length, 1, message);
