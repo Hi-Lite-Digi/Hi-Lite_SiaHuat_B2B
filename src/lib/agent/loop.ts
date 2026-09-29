@@ -9,7 +9,7 @@ import { enquiryTotals, listItemCount, sameQuantityText, statesAnyQuantity, veri
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksConfirmStep, customerMessage, dropRepeatedPitch,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, customerMessage, dropRepeatedPitch,
   enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards,
   withoutEnquiryClaims, withoutKeptLineClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
@@ -412,7 +412,9 @@ export async function runAgentTurn(input: {
     let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
-    const withoutClaims = (message: string) => withoutEnquiryClaims(message, { ...turnFacts(), seen: ctx.seen });
+    // The fixed line answers only a change the customer may have asked for (exam 3: it answered "Recommend").
+    const changeAsked = askedForChange(earlier.currentText, request.event.type === "select_product");
+    const withoutClaims = (message: string) => withoutEnquiryClaims(message, { ...turnFacts(), seen: ctx.seen }, changeAsked);
     const fixers: Fixer[] = [
       { prefix: CLAIM_ISSUE_PREFIX, fix: (message) => removeClaims(message, ctx.searches, ctx.seen) },
       // Before the enquiry-claim fixer, so a "removed" line the browser still holds gets its own sentence, not NOT_ON_ENQUIRY's.

@@ -5,7 +5,7 @@ import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode, keptLineClaims,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode, keptLineClaims,
   noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
@@ -488,6 +488,79 @@ test("a false claim is replaced by one plain line where the first one was", () =
   // The torch is on the enquiry at 2, so the line must not say it isn't there at all.
   assert.equal(withoutEnquiryClaims("Updated: 5 Safico torches now.", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That change isn't on your enquiry yet.");
   assert.equal(withoutEnquiryClaims("Here you go.", facts), "Here you go.");
+});
+
+const toasterShop = new Map([checked("HET-4", "S/S 4-SLOTS TOASTER", 196.36), checked("BTS-8026D", "Safico Blow Torch", 12.5)]);
+const het6Line = { item: "S/S 6-SLOTS TOASTER", code: "HET-6", pricePerItem: 250, quantity: 2, total: 500, uom: "PC" };
+const toasterClaims = (message: string) => enquiryClaimIssues(message, { lines: [het6Line], changes: [], seen: toasterShop });
+
+test("sums, GST, questions about what the customer wants and promises that wait are not enquiry claims", () => {
+  for (const message of [
+    // exam 3, c12-persona T11 (replayed): the repair's GST sum became "That change isn't on your enquiry yet."
+    "Adding 9% to $119.09 gets you the GST-inclusive total, but I can't confirm that exact final figure here - Sia Huat sales will confirm it at checkout.",
+    "Add 9% GST and it comes to about $101.81.",
+    "Adding GST, that's about $101.81.",
+    // exam 3, c11-stress T9 (replayed): a question split from its "?" by the comma.
+    "Sorry, just to be sure - is it the S/S 4-Slot Toaster (HET-4, $196.36) for the other outlet you want added, qty 1?",
+    // Promises that wait for the customer (c06-persona T8, c05-persona T11 replayed), and an honest hiccup (c05-persona T10).
+    "Tap it or let me know and I'll get 2 added.",
+    "Let me know how you'd like to proceed with the plate, and I'll get everything added.",
+    "Having a hiccup adding these on my end.",
+    // A condition on stock arriving still waits: "once more stock" is not a closing "confirmed once more".
+    "Once more stock arrives I'll add the blow torch for you.",
+    "I'll add the torch once more stock is confirmed.",
+  ]) assert.deepEqual(toasterClaims(message), [], message);
+});
+
+test("real claims and unconditional promises are still caught", () => {
+  for (const message of [
+    "Confirm and I'll get 2 added.",
+    "Adding it now to your enquiry along with the 2x HET-6.",
+    // exam 3, c11-stress T9 (replayed): a closing "once more" is not a condition.
+    "Got it, adding 1 S/S 4-Slot Toaster for your other outlet now - noting it here since our system needs it confirmed once more: it's the HET-4.",
+    "Got it: 2 torches. Anything else?",
+    // An apology or a "you want" phrase never excuses a claim or a promise.
+    "Sorry for the hiccup, I'll add 2 Safico blow torches now.",
+    "Added 2 Safico blow torches without a hiccup.",
+    "The 2 torches you need are added.",
+    "The torch you want added is on your enquiry now.",
+    "Got the 2 you need added.",
+    // A GST sum next to an add doesn't excuse the add.
+    "Added 2 Safico torches - adding 9% GST, the total is about $153.72.",
+    "Adding 2 Safico torches, and adding GST that's about $153.72.",
+  ]) assert.equal(toasterClaims(message).length, 1, message);
+  // exam 3, c02-A T12 echoed "That change hasn't been made yet" after "what the fk": the repair says so only for an asked change.
+  assert.match(toasterClaims("Confirm and I'll get 2 added.")[0], /If the customer asked for that change, say it hasn't been made yet .*; if they didn't ask for one, just leave that sentence out and answer what they said\.$/);
+});
+
+test("only a pure advice or comparison question asks for no enquiry change", () => {
+  // exam 3: the fixed line answered "Recommend" (c03-persona T5), "i said recomend…" (c03-stress T4) and "which one more versatile?" (c04-persona T3).
+  for (const text of ["Recommend", "i said recomend. u tell me which one better la", "which one more versatile? i bake sometimes, and use for cooking"]) {
+    assert.equal(askedForChange(text), false, text);
+  }
+  for (const text of [
+    "huh which card?? got no card leh. so added or not", "why need tap again. just put in for me la", "added alr? then how, i pay where", "no la knife only. wok keep",
+    "glove no need, here still have", "cannot just add 9%?", "yes!! just add la why keep asking", "Yes that one", "which one better, i need 2",
+  ]) assert.equal(askedForChange(text), true, text);
+  // A tapped card picks a product, and a turn with no typed words may ask for anything.
+  assert.equal(askedForChange("Recommend", true), true);
+  assert.equal(askedForChange(null), true);
+});
+
+test("the fixed line answers only a change the customer asked for, and only once", () => {
+  const facts = { lines: [], changes: [], seen: shop };
+  // exam 3, c04-persona T3 ("which one more versatile?"): no change was asked, so the claim just goes.
+  assert.equal(withoutEnquiryClaims("Sure — the Kenwood Lite Hand Mixer suits your baking and cooking needs at home. I'll add 1 to your enquiry.", facts, false),
+    "Sure — the Kenwood Lite Hand Mixer suits your baking and cooking needs at home.");
+  // exam 3, c06-persona T8: the reply already says the add didn't go through, so no second line.
+  assert.equal(withoutEnquiryClaims("Sorry, that skimmer add didn't go through on my end. You said 2 - noted, adding 2 now.", facts, true), "Sorry, that skimmer add didn't go through on my end.");
+  // A change was asked and nothing says it failed: the line stays, where the claim was.
+  assert.equal(withoutEnquiryClaims("Got it: 2 torches added. Anything else?", facts, true), "That change isn't on your enquiry yet. Anything else?");
+  // "not made in Japan" doesn't say the change failed.
+  assert.equal(withoutEnquiryClaims("Added 1 Kenwood Hand Mixer. Kenwood is a UK brand, though it's not made in Japan.", facts, true),
+    "That change isn't on your enquiry yet. Kenwood is a UK brand, though it's not made in Japan.");
+  // A claim that was the whole reply to an advice question leaves nothing; the loop sends its cards-only or backup line instead.
+  assert.equal(withoutEnquiryClaims("I'll add 3 pcs of the 21cm for you.", facts, false), "");
 });
 
 test("asking permission to add is a style issue", () => {

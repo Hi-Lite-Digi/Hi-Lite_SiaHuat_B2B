@@ -939,6 +939,19 @@ test("a 'Noted: 2 torches' claim with no update is replaced after the repair", a
   assert.equal(reply.message, "That change isn't on your enquiry yet.");
 });
 
+test("a false promise answering a recommendation request is dropped without the fixed line", async () => {
+  // exam 3, c03-persona T5: "Recommend" got "That change isn't on your enquiry yet.", though the customer asked for no change.
+  const claim = answer({ message: "The Safico runs on a gas cassette. I'll add 1 for you now." });
+  const { client, bodies } = fakeClient([claim, claim, claim]);
+  const shown = `Two options.\n[cards shown: 970S KITCHEN BLOW TORCH 970S ($31.31) <${blowtorch.source_url}>; BTS-8026D CASSETTE GAS TORCH BURNER SAFICO PRO ($23.36) <${safico.source_url}>]`;
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "Recommend" }, history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: shown }], shownProductIds: ["970S", "BTS-8026D"] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 3);
+  assert.equal(reply.message, "The Safico runs on a gas cassette.");
+});
+
 test("a reply about what is already on the enquiry is sent without a nudge", async () => {
   const cases: Array<[string, string, AgentRequest["enquiry"]]> = [
     ["added alr?", "Yes, it's already added. Anything else?", [{ stockId: "970S", quantity: 2 }]],
