@@ -13,7 +13,7 @@ import {
   issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, sentences, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
-import { codePattern, pickEvidence } from "./picks";
+import { codePattern, customerChose, pickEvidence } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, errorCode, keepBest, lookupDetails, runTool, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -297,7 +297,10 @@ export async function runAgentTurn(input: {
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
-    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [] });
+    const typedNumbers = [...new Set(ctx.customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => n > 0 && n <= 100_000);
+    // A product the customer picked, with or without one of the numbers they typed: a permission question about it is the ruled-out confirm step.
+    const picked = (code: string) => [null, ...typedNumbers].some((quantity) => customerChose(code, quantity, ctx.picks, ctx.lines.map((line) => line.code)));
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked });
     let nudged = false;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       // The first call may always use tools; after a tool round, a nearly spent budget means answer now.

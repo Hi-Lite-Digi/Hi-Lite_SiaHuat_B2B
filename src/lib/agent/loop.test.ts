@@ -864,6 +864,28 @@ test("a permission question with no tool round left is repaired without asking f
   assert.doesNotMatch(repair, /update_enquiry/);
 });
 
+test("a permission question with no tool round left is repaired and asked to keep the rest", async () => {
+  // exam 3, s06-A T1: the repair threw away "Sorry to hear that" and sent only "How many?".
+  const searchedTwice = (message: string) => fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["torch"] }),
+    toolCall("t2", "search_catalogue", { queries: ["gas torch"] }),
+    answer({ message }),
+    answer({ message: "The Safico runs on gas. How many do you need?" }),
+  ]);
+  const picked = searchedTwice("The Safico runs on gas. Want me to add it?");
+  await runAgentTurn({ request: request({ event: { type: "text", text: "the safico one" }, history: [{ role: "user", content: "torch" }, saficoShown] }), deps: deps(), client: picked.client, model: "claude-sonnet-5" });
+  assert.equal(picked.bodies.length, 4);
+  assert.match(JSON.stringify(picked.bodies.at(-1)!.messages.at(-1)), /Keep the rest of your answer/);
+  // exam 3, c09-stress T1: offering the product they asked about lets them pick it; it is not the confirm step.
+  const recommended = searchedTwice("For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?");
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "which one is better for cooking?" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: deps(), client: recommended.client, model: "claude-sonnet-5",
+  });
+  assert.equal(recommended.bodies.length, 3);
+  assert.equal(reply.message, "For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?");
+});
+
 test("a false add claim that survives the nudge and the repair is replaced", async () => {
   const claim = answer({ message: "Added: 2 torches. Anything else?" });
   const { client, bodies } = fakeClient([claim, claim, claim]);

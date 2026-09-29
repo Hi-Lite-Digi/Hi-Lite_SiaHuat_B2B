@@ -68,6 +68,15 @@ test("after a PRODUCT_NOT_CHOSEN refusal Claire stops retrying and asks one ques
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say the system needs a tap"));
 });
 
+test("Claire asks how many only after a pick, and answers a which-one question before letting them pick", () => {
+  // exam 3: replies ending in a how-many question went from 40 to 73, 49 of them before any pick (c09-stress T1, c04-stress T3).
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("If they picked it but haven't typed how many"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("attach only the card you recommend"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("never answer a question with only a how-many question"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Don't ask them to confirm first"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Never take a quantity from an option number"));
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });

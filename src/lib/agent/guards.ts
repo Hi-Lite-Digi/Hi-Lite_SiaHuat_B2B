@@ -250,8 +250,11 @@ export const noCardFixer: Fixer = {
   fix: (message) => removeSentences(message, (s) => asksForTap(s) || promisesToShow(s)) || "Tell me which one by its name or code.",
 };
 
-/** What this turn's tools did, for checks on the reply; refused: the codes update_enquiry refused as not picked. */
-export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[]; refused?: string[] };
+/**
+ * What this turn's tools did, for checks on the reply; refused: the codes update_enquiry refused as not picked; picked: whether
+ * the customer picked a product (a permission question about one is the confirm step).
+ */
+export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[]; refused?: string[]; picked?: (code: string) => boolean };
 /** The enquiry facts plus the products looked up this turn, which the reply's words can point at. */
 type ClaimFacts = Pick<TurnFacts, "lines" | "changes"> & { seen: ReadonlyMap<string, CheckedProduct> };
 
@@ -452,13 +455,35 @@ export function stockIssues(message: string, cards: Product[]) {
 // isn't about adding, NO_SHOW_PERMISSION_ISSUE) instead.
 const CHOOSE_FIRST = "The customer must choose a product card first";
 // Only sent in the tool-less repair: the loop nudges a permission question back with tools while a tool round is left.
-export const NO_PERMISSION_ISSUE = "Don't ask permission to add it. Tools are off for this fix, so don't say it was added: if the quantity is missing, ask how many.";
+export const NO_PERMISSION_ISSUE = "Don't ask permission to add it: the customer already chose this product. Tools are off for this fix, so don't say it was added or that you will add it. Keep the rest of your answer and change only that question: if they haven't typed how many, ask how many.";
 export const NO_SHOW_PERMISSION_ISSUE = "Don't ask permission to show a product or check its stock: the cards already show it with the stock the tools found. Just say what you found.";
 // "Want me to add it?", "Once you confirm I'll add it"; not "Want me to add 5, or check alternatives?" nor "How many, so I can add it?".
 const asksToConfirmAdd = /\b(?:shall|should|can|may|want|would you like)\b(?![^?？\n]*\bor\b)[^?？\n]*(?<!\bso I can )\badd\b[^?？\n]*[?？]|\bonce you confirm\b[^.!?\n]*\badd\b|\bconfirming:?[^.?!\n]*\?/i;
 // Judged per sentence, so "you can download the PDF. Anything else to add?" isn't one question. "How many would you like to
 // add?" and "What else can I add?" ask what the prompt wants asked; "Want me to add it, and how many?" still asks permission.
 export const asksPermissionToAdd = (sentence: string) => asksToConfirmAdd.test(sentence) && !/\b(?:how many|else)\b[^?？]*\badd\b|\badd\s+(?:anything|more|another)\b/i.test(sentence);
+/**
+ * The permission questions that are the confirm step the owner ruled out: about a product the customer already chose (the cards
+ * the question names, else the reply's cards, else the products the reply names), or naming no product at all. "Want me to add the
+ * Safico one?" after "which one is more suitable?" asks them to choose (exam 3, c09-stress T1: the nudge turned the recommendation
+ * into "How many Safico tongs do you need?"). Without `picked`, every permission question counts, as before.
+ */
+export function confirmStepAsks(message: string, replyCards: readonly ShownCard[], knownCards: readonly ShownCard[], picked?: (code: string) => boolean) {
+  return sentences(message).filter(asksPermissionToAdd).filter((sentence) => {
+    if (!picked) return true;
+    const named = pointedBy(sentence, [...replyCards, ...knownCards]);
+    const about = named.length ? named : replyCards.length ? replyCards : pointedBy(message, [...knownCards]);
+    return !about.length || about.some((card) => picked(card.code));
+  });
+}
+/** The same for an answer, with its cards and the products looked up this turn. */
+export function asksConfirmStep(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, picked?: (code: string) => boolean) {
+  const replyCards = answer.card_ids.flatMap((id) => {
+    const found = seen.get(id);
+    return found ? [{ code: found.product.stock_id, name: found.product.name, price: null, link: null }] : [];
+  });
+  return confirmStepAsks(answer.message, replyCards, seenCards(seen), picked).length > 0;
+}
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";
 const UNKNOWN_CARD_ISSUE_PREFIX = "card_ids must come from a tool result";
@@ -496,9 +521,11 @@ export function reviewAnswer(
     if (said.some(asksForTap)) safety.push(NO_CARD_TAP_ISSUE);
     if (said.some(promisesToShow)) safety.push(NO_CARD_SHOW_ISSUE);
   }
-  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null })
-    .map((issue) => (!issue.startsWith(CHOOSE_FIRST) ? issue : /\badd\b/i.test(answer.message) ? NO_PERMISSION_ISSUE : NO_SHOW_PERMISSION_ISSUE)));
-  if (said.some(asksPermissionToAdd) && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
+  // A permission question about a product the customer hasn't picked yet lets them pick it: it is not the confirm step.
+  const confirmStep = asksConfirmStep(answer, seen, turn.picked);
+  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }).flatMap((issue) => (!issue.startsWith(CHOOSE_FIRST) ? [issue]
+    : !/\badd\b/i.test(answer.message) ? [NO_SHOW_PERMISSION_ISSUE] : confirmStep ? [NO_PERMISSION_ISSUE] : [])));
+  if (confirmStep && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
   if (promiseLater.test(answer.message)) style.push(PROMISE_LATER_ISSUE);
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);

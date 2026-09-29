@@ -513,6 +513,24 @@ test("asking permission to add is a style issue", () => {
   assert.ok(checkStock.includes(NO_SHOW_PERMISSION_ISSUE) && !checkStock.includes(NO_PERMISSION_ISSUE));
 });
 
+test("a permission question about a product the customer hasn't picked is a pick question", () => {
+  // exam 3, c09-stress T1: "Want me to add the Safico one?" after "which one is more suitable?" was repaired into "How many Safico tongs do you need?".
+  const tongs = new Map<string, CheckedProduct>([
+    checked("02-00864", "Safico Stainless Steel Tong With Silicone Grip L32cm, BPA Free, Heat Resistant To 220°C", 11.83),
+    checked("UT09L", "Stainless Steel Utility Tong 9in", 2.02),
+  ]);
+  const styleWith = (message: string, card_ids: string[], picked: (code: string) => boolean) => reviewAnswer(
+    { message, card_ids, chips: [], show_contact: false }, tongs, allowed, undefined, { picked },
+  ).style;
+  const recommend = "For cooking I'd go with the Safico. Want me to add the Safico one?";
+  assert.ok(!styleWith(recommend, ["02-00864", "UT09L"], () => false).includes(NO_PERMISSION_ISSUE));
+  assert.ok(!styleWith(recommend, ["02-00864", "UT09L"], () => false).some((issue) => issue.startsWith("The customer must choose a product card first")));
+  assert.ok(styleWith(recommend, ["02-00864", "UT09L"], (code) => code === "02-00864").includes(NO_PERMISSION_ISSUE));
+  // A question naming no product is still the confirm step.
+  assert.ok(styleWith("Shall I add 2 to your enquiry?", [], () => false).includes(NO_PERMISSION_ISSUE));
+  assert.match(NO_PERMISSION_ISSUE, /Keep the rest of your answer/);
+});
+
 test("a confirm-add chip is dropped", () => {
   const review = reviewAnswer({ message: "Which one would you like?", card_ids: [], chips: ["Yes, add it", "Show others"], show_contact: false }, seen, allowed);
   assert.deepEqual(review.chips, ["Show others"]);
