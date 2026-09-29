@@ -255,9 +255,11 @@ const askedHowMany = /\bhow many\b|\b(?:quantity|qty)\b|\b(?:want|shall|should|c
 const switchWord = /\b(?:change|switch|instead|rather|actually|other one)\b|换/i;
 // "change the 20.5cm to the 21cm one" is a switch too.
 const switchTo = /\b(?:change|switch|swap)\b(?:[^.!?]|(?<=\d)\.(?=\d))*\bto\b/i;
-// "i said 50 already lah" repeats the quantity: a yes when the text asks nothing (exam 3, c12-stress T6). Nothing but filler
-// may follow the number, so "i told u 5 is too many" is no yes to 5.
-const insist = /\bi\s+(?:said|say|told)\b.*\d\s*(?:pcs?|units?)?(?:\s*(?:already|alr|liao|la|lah|mah|leh|lor|wat|what|ah))*[\s.!,]*$/i;
+// "i said 50 already lah" repeats the quantity: a yes when the text asks nothing (exam 3, c12-stress T6). The number may
+// come first ("3 lah i told u already", runs-new c10-persona T13), but nothing except filler may follow it, so
+// "i told u 5 is too many" is no yes to 5.
+const INSIST_FILLER = "(?:\\s*(?:already|alr|liao|la|lah|mah|leh|lor|wat|what|ah|only|ok|okay|pls|please|u|you))*";
+const insist = new RegExp(`\\bi\\s+(?:said|say|told)\\b.*\\d\\s*(?:pcs?|units?|sets?)?${INSIST_FILLER}[\\s.!,]*$|^\\s*\\d+\\s*(?:pcs?|units?|sets?)?${INSIST_FILLER}\\s*i\\s+(?:said|say|told)\\b${INSIST_FILLER}[\\s.!,]*$`, "i");
 // "why every time must ask again" complains; it doesn't ask (exam 3, c08-stress T9). "why keep changing price" asks.
 const complaint = /^why\b[^?？]*\b(?:ask|asking|again)\b/i;
 // A question asking the customer to take a product ("Want to go with 2 of the Mika instead?"), never "Want me to check …?"

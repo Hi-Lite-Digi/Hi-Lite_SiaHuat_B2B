@@ -650,6 +650,8 @@ test("'i said 50' and a complaint starting with 'why' still say yes to the only 
   const insisted = { texts: [said("i said 50 already lah", 4, 0), said("wait i measure again is 7cm leh. change to the 7cm one, same 50", 3, 1)], replies: moulds };
   assert.equal(chose("158-12", 50, insisted), true);
   assert.equal(chose("158-19", 50, insisted), false);
+  // The number may come first (runs-new c10-persona T13 "3 lah i told u already") or end in "only" or "ok".
+  for (const text of ["50 lah i told u already", "i said 50 only", "i told u 50 ok"]) assert.equal(chose("158-12", 50, { texts: [said(text, 4)], replies: moulds }), true, text);
   // c08-stress T9: "detachable" also fits the older Atlantic card, so the text before it picks nothing.
   const scissorSets = [greeting, reply([card("ST-26", "-TS- S/S KITCHEN SCISSOR 20cm, JPN", 15.5), atlantic]), reply([shibazi, shibaziDetachable, zebra]), reply([shibazi], "Got it: 3 added. Anything else?"),
     reply([shibaziDetachable], "Just to confirm - this is the SB3027 Shibazi Detachable Household Kitchen Scissors, 20.5cm, at $10.00. Is this the one you mean?")];
