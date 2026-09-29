@@ -341,10 +341,13 @@ const NOT_CHOSEN_NOTE = "The customer's words don't show they picked this produc
  * (exam 3, c08-persona T8: the refused product wasn't looked up, so the question's price and card were lost).
  */
 function refusedProduct(code: string, ctx: TurnContext) {
+  const until = performance.now() + REFUSED_LOOKUP_MS;
   return withTimeout((async () => {
     const found = await ctx.deps.findByCode(code).catch(() => null);
     if (!found) return null;
-    const [checked, details] = await Promise.all([liveCheck(found, ctx.deps, REFUSED_LOOKUP_MS), lookupDetails(ctx, [found.stock_id])]);
+    // Only the time left in the cap, so the live check doesn't run on after the tool has answered.
+    const left = until - performance.now();
+    const [checked, details] = await Promise.all([liveCheck(found, ctx.deps, left), lookupDetails(ctx, [found.stock_id], left)]);
     return remember(ctx, withDetails(checked, details));
   })(), REFUSED_LOOKUP_MS, null);
 }

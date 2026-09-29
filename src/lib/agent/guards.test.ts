@@ -159,7 +159,10 @@ test("a card update_enquiry refused, or the one card a question names, is not a 
   assert.equal(repeats("This one is stainless steel.", ["E910076"]), true);
   assert.equal(repeats("This one is stainless steel.", ["E910076"], { refused: ["e910076"] }), false);
   assert.equal(repeats("Is it the Zyliss E910076?", ["E910076"]), false);
+  assert.equal(repeats("You mean the Zyliss scissors? How many do you need?", ["E910076"]), false);
   assert.equal(repeats("Here are the Zyliss scissors again.", ["E910076"]), true);
+  // Only a question that names the card needs it: a generic closer doesn't.
+  assert.equal(repeats("Here are the Zyliss scissors again. Need anything else?", ["E910076"]), true);
   assert.equal(repeats("Which one would you like?", ["E910076", "E910077", "BTS-8026D"]), true);
 });
 
@@ -508,9 +511,12 @@ test("asking permission to add is a style issue", () => {
   ]) {
     assert.ok(!styleWith(message).includes(NO_PERMISSION_ISSUE), message);
   }
-  // Asking to check stock or show a card is not about adding.
+  // Asking to check stock or show a card is not about adding, even when the reply says "add" elsewhere.
   const checkStock = styleWith("The Safico fits. Want me to check stock on it?", ["BTS-8026D"]);
   assert.ok(checkStock.includes(NO_SHOW_PERMISSION_ISSUE) && !checkStock.includes(NO_PERMISSION_ISSUE));
+  for (const message of ["Here's the Safico. Want me to check stock on it? Tap it to add.", "The Safico fits. Would you like me to show it? You can add it after."]) {
+    assert.ok(styleWith(message, ["BTS-8026D"]).includes(NO_SHOW_PERMISSION_ISSUE), message);
+  }
 });
 
 test("a permission question about a product the customer hasn't picked is a pick question", () => {
@@ -528,6 +534,11 @@ test("a permission question about a product the customer hasn't picked is a pick
   assert.ok(styleWith(recommend, ["02-00864", "UT09L"], (code) => code === "02-00864").includes(NO_PERMISSION_ISSUE));
   // A question naming no product is still the confirm step.
   assert.ok(styleWith("Shall I add 2 to your enquiry?", [], () => false).includes(NO_PERMISSION_ISSUE));
+  // A show or check-stock question is still flagged when "add" is elsewhere in the reply, picked or not.
+  const checkStock = "The Safico has a silicone grip. Want me to check stock on the 9in one too? You can add either to your enquiry anytime.";
+  for (const picked of [() => false, () => true]) assert.ok(styleWith(checkStock, ["02-00864", "UT09L"], picked).includes(NO_SHOW_PERMISSION_ISSUE));
+  // An "or" question lets them choose.
+  assert.deepEqual(styleWith("The Safico fits. Want me to add it to your enquiry, or see other options?", ["02-00864"], () => false), []);
   assert.match(NO_PERMISSION_ISSUE, /Keep the rest of your answer/);
 });
 

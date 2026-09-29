@@ -297,7 +297,8 @@ export async function runAgentTurn(input: {
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
-    const typedNumbers = [...new Set(ctx.customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => n > 0 && n <= 100_000);
+    // At most 8, the newest text's first: each one is a full pick check, run in every review (real turns had at most 10).
+    const typedNumbers = [...new Set(ctx.customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => n > 0 && n <= 100_000).slice(0, 8);
     // A product the customer picked, with or without one of the numbers they typed: a permission question about it is the ruled-out confirm step.
     const picked = (code: string) => [null, ...typedNumbers].some((quantity) => customerChose(code, quantity, ctx.picks, ctx.lines.map((line) => line.code)));
     const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked });

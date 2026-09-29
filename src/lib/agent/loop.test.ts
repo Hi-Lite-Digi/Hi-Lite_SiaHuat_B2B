@@ -886,6 +886,25 @@ test("a permission question with no tool round left is repaired and asked to kee
   assert.equal(reply.message, "For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?");
 });
 
+test("a permission question after two long messages full of numbers is reviewed quickly", async () => {
+  // Review of V5: the pick check tried every number the customer typed, and two 500-character lists of numbers took seconds per review.
+  const names = ["Porcelain Round Plate", "Deep Bowl", "Utility Tong", "Chef Knife", "Gas Torch", "Rice Bowl", "Dinner Fork", "Soup Spoon", "Stock Pot", "Mesh Strainer"];
+  const cardsFor = (r: number) => Array.from({ length: 5 }, (_, i) => product({ stock_id: `P${r}${i}-${10 + i}`, name: `${names[(r + i) % names.length]} ${10 + r + i}cm Series ${r}`, list_price: 3 + r + i }));
+  const shown = (r: number) => ({ role: "assistant" as const, content: `Some options.\n[cards shown: ${cardsFor(r).map((card) => `${card.stock_id} ${card.name} ($${card.list_price.toFixed(2)})`).join("; ")}]` });
+  const numbers = (from: number) => Array.from({ length: 200 }, (_, i) => i + from).join(" ").slice(0, 500);
+  const history = Array.from({ length: 12 }, (_, r) => [{ role: "user" as const, content: `need ${names[r % names.length].toLowerCase()}` }, shown(r)]).flat();
+  const plates = cardsFor(11);
+  const message = "Here are the ones that fit. Want me to add them to your enquiry?";
+  const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["series 11"] }), answer({ message, card_ids: plates.map((card) => card.stock_id) }), answer({ message, card_ids: plates.map((card) => card.stock_id) })]);
+  const started = performance.now();
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: numbers(150) }, history: [...history, { role: "user", content: numbers(1) }, shown(3)] }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.message, message);
+  assert.ok(performance.now() - started < 1_500, `took ${Math.round(performance.now() - started)} ms`);
+});
+
 test("a false add claim that survives the nudge and the repair is replaced", async () => {
   const claim = answer({ message: "Added: 2 torches. Anything else?" });
   const { client, bodies } = fakeClient([claim, claim, claim]);

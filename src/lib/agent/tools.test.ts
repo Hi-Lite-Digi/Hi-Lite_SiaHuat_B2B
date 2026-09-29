@@ -587,6 +587,15 @@ test("a refused add whose lookup fails or stalls returns product null within abo
   assert.ok(performance.now() - started < 2_300, `${performance.now() - started} ms`);
   assert.equal(slow.error, "PRODUCT_NOT_CHOSEN");
   assert.equal(slow.product, null);
+  // The live check gets only what is left of the 2 s, so it can't run on after the tool has answered.
+  const lateFind = fakeDeps([blowtorch, mastrad, safico]);
+  const findByCode = lateFind.findByCode;
+  lateFind.findByCode = async (code) => { await new Promise((resolve) => setTimeout(resolve, 300)); return findByCode(code); };
+  const given: number[] = [];
+  const liveAfterFind = lateFind.fetchLive;
+  lateFind.fetchLive = (url, ms) => { given.push(ms ?? Infinity); return liveAfterFind(url, ms); };
+  await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, context(lateFind, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") }));
+  assert.ok(given.length === 1 && given[0] <= 1_700, `${given}`);
 });
 
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {

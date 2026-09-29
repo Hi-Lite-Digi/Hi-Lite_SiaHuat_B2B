@@ -451,9 +451,13 @@ export function stockIssues(message: string, cards: Product[]) {
   return [`${ALL_IN_STOCK_ISSUE_PREFIX}, but ${which} ${notIn.length > 1 ? "aren't" : "isn't"}. Describe each product's stock as its tool result says.`];
 }
 
-// Old Claire's reply-style text for a permission question; the new Claire gets NO_PERMISSION_ISSUE (or, when the question
-// isn't about adding, NO_SHOW_PERMISSION_ISSUE) instead.
+// Old Claire's reply-style text for a permission question. The new Claire gets NO_SHOW_PERMISSION_ISSUE when a question asks to
+// show a product or check its stock (or the reply never says "add"), else NO_PERMISSION_ISSUE when the add question is the
+// confirm step; an add question before a pick is let through.
 const CHOOSE_FIRST = "The customer must choose a product card first";
+// The show and check-stock half of old Claire's rule, per question: "Want me to check stock on it? Tap it to add." still asks to
+// check stock although the reply says "add" (review of V5).
+const asksToShow = /\b(?:want|shall|would|can|should|may)\b[^?？\n]*\b(?:check (?:the )?(?:live )?stock|pull (?:it|this|that|them) up|show (?:it|this|that|them))\b[^?？\n]*[?？]$/i;
 // Only sent in the tool-less repair: the loop nudges a permission question back with tools while a tool round is left.
 export const NO_PERMISSION_ISSUE = "Don't ask permission to add it: the customer already chose this product. Tools are off for this fix, so don't say it was added or that you will add it. Keep the rest of your answer and change only that question: if they haven't typed how many, ask how many.";
 export const NO_SHOW_PERMISSION_ISSUE = "Don't ask permission to show a product or check its stock: the cards already show it with the stock the tools found. Just say what you found.";
@@ -524,7 +528,7 @@ export function reviewAnswer(
   // A permission question about a product the customer hasn't picked yet lets them pick it: it is not the confirm step.
   const confirmStep = asksConfirmStep(answer, seen, turn.picked);
   style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }).flatMap((issue) => (!issue.startsWith(CHOOSE_FIRST) ? [issue]
-    : !/\badd\b/i.test(answer.message) ? [NO_SHOW_PERMISSION_ISSUE] : confirmStep ? [NO_PERMISSION_ISSUE] : [])));
+    : !/\badd\b/i.test(answer.message) || said.some((s) => asksToShow.test(s)) ? [NO_SHOW_PERMISSION_ISSUE] : confirmStep ? [NO_PERMISSION_ISSUE] : [])));
   if (confirmStep && !style.includes(NO_PERMISSION_ISSUE)) style.push(NO_PERMISSION_ISSUE);
   if (promiseLater.test(answer.message)) style.push(PROMISE_LATER_ISSUE);
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
@@ -532,11 +536,10 @@ export function reviewAnswer(
   if (said.some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
   // A card the reply needs is not a loop: one update_enquiry refused as not picked, or the one card a question names ("Is it the
   // Zyliss E910076?", "How many of the HET-4?"); the customer's yes or number picks it only while it is shown (exam 3: c08-persona T8,
-  // c11-stress T7-T8, c02-B T13).
+  // c11-stress T7-T8, c02-B T13). A generic "Anything else?" doesn't name it, so it doesn't need the card a third time.
   const refused = turn.refused ?? [];
   const needed = cards.some((card) => refused.some((code) => same(code, card.stock_id)))
-    || (cards.length === 1 && lastQuestion(answer.message) !== null
-      && pointedBy(answer.message, [{ code: cards[0].stock_id, name: cards[0].name, price: null, link: null }]).length > 0);
+    || (cards.length === 1 && said.some((s) => /[?？]$/.test(s) && pointedBy(s, [{ code: cards[0].stock_id, name: cards[0].name, price: null, link: null }]).length > 0));
   style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length), needed));
   style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
