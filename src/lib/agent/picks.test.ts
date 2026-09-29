@@ -53,6 +53,33 @@ const wok = card("P-16HD", "IRON WOK 16\" w/HANDLE", 13.03);
 const siliconeTong = card("02-00864", "Safico Stainless Steel Tong With Silicone Grip L32cm, BPA Free", 11.83);
 const stool = card("FSS", "Vicando Two-Step Folding Stepstool W49xH58cm, Grey", 53.67);
 const steakTong = card("ST-15", "Stainless Steel Steak Tong 15\"", 12.48);
+const zylissBasic = card("E910077", "Zyliss Polypropylene Basic Household Scissors Basic, Gray", 22.84);
+const shibazi = card("SB3038", "Stainless Steel Household Kitchen Scissors L21cm, Shibazi", 7.25);
+const shibaziDetachable = card("SB3027", "Stainless Steel Detachable Household Kitchen Scissors L20.5cm, Shibazi", 10);
+const zebra = card("993-003-RD", "Zebra Multi-Purpose Scissors 22.5cm,Red, Together", 19.17);
+const atlantic = card("9300T01", "Atlantic Chef Detachable Scissors", 27.43);
+const skimmer165 = card("13128-0402", "S/S FINE MESH SKIMMER Ø16.5cm", 2.75);
+const skimmer19 = card("13128-0403", "S/S FINE MESH SKIMMER Ø19cm", 3.21);
+const skimmer24 = card("13128-0405", "S/S FINE MESH SKIMMER Ø24cm", 5.05);
+const wireMesh26 = card("00600500104", "Stainless Steel Wire Mesh Strainer With Wooden Handle 26cm", 7.25);
+const tong9 = card("UT09L", "Stainless Steel Utility Tong 9\"", 2.02);
+const plainTong16 = card("2564L", "Stainless Steel Utility Tong 16\"", 3.85);
+const scallopTong = card("JQ-OT113", "STAINLESS STEEL SCALLOP TONG with PLASTIC HANDLE", 3.85);
+const edlund16 = card("36670", "Edlund Stainless Steel Heavy Duty Grip Tong 16\"", 34.86);
+const edlundLock = card("34471", "S/S HD SCALLOP TONG WITH LOCK 12\", EDLUND", 27.52);
+const santos = card("FHA24-33GE", "Santos Bar Blender With Polycarbonate Container L18xW18xH42cm, 1.25L, 220-240V/50/60/1, 600W, Uk Plug, Painted Grey, Santos ==1 Year Warranty==", 614.68);
+const waringQuiet = card("MX1500XTXSEE", "Waring Programmeable Electronic Blender With Sound Enclosure And Bpa-Free Container, 2L, 45000Rpm", 1822.94);
+const waringVariable = card("MX1200XTXEE", "Waring Commercial Blender With Bpa-Free Stackable Container, Variable-Speed, 2L", 1535.78);
+const santos66 = card("66", "Santos Compact Brushless Blender 1.4L", 1759.63);
+const patraPlate = card("3500-0018", "Patra Rim Plate 18cm, Porcelain White", 7.8);
+const patraBowl = card("3500-3011", "Patra Rice Bowl 11.5cm, Porcelain White", 7.52);
+const rocaBowl = card("02002-11", "Roca by Cerabon Rice Bowl Ø109xH50mm", 7.25);
+const cutlery = card("R-52568-81", "Sambonet 18/10 Stainless Steel Cutlery Set, 24 Pieces, Mirror Finish, Bloom", 266.97);
+const mould60 = card("158-19", "CCK Round Fluted Alum Tart Mould #19,Dia 60Mm", 0.64);
+const mould70 = card("158-12", "CCK Round Fluted Aluminium Tart Mould #12,Ø70mm", 0.64);
+const plate24 = card("P-24", "Porcelain Dinner Plate 24cm", 5);
+const plate27 = card("P-27", "Porcelain Dinner Plate 27cm", 8);
+const plate30 = card("P-30", "Porcelain Dinner Plate 30cm", 12);
 
 test("a card tapped earlier is still the pick after a How many? reply with no card", () => {
   const picks = { taps: [tap("UT16HR", 2, 1)], texts: [said("4 can", 3)], replies: [greeting, reply([tong12, tong16]), reply([], "How many do you need?")] };
@@ -417,6 +444,190 @@ test("a later card that shares only a material word with a tapped card doesn't v
   const bowl = card("BWL-30", "Stainless Steel Mixing Bowl 30cm", 8);
   const picks = { taps: [tap("UT16HR", 2, 1)], texts: [said("4", 3, 0)], replies: [greeting, reply([tong16]), reply([bowl], "Here's a bowl. How many tongs do you need?")] };
   assert.equal(chose("UT16HR", 4, picks), true);
+});
+
+test("a price picks with the card's own name words before 'one' or right after it, but not as a budget (exam 3)", () => {
+  // c08-stress T6: "shibazi" alone fits both Shibazi scissors; the price tells them apart.
+  const scissorSets = [greeting, reply([shibazi, shibaziDetachable, zebra]), reply([scissors, zylissBasic]), reply([scissors, { ...zylissBasic, price: null }])];
+  const t6 = { texts: [said("forget it la zyliss too ex anyway. i take the 7 dollar shibazi one, 3 pcs", 4)], replies: scissorSets };
+  assert.equal(chose("SB3038", 3, t6), true);
+  assert.equal(chose("SB3027", 3, t6), false);
+  // c08-persona T12.
+  const t12 = { texts: [said("Also add 1 of the 7 dollar Shibazi one", 3)], replies: [greeting, reply([shibazi, scissors]), reply([shibaziDetachable]), reply([], "Your enquiry has 1 item line.")] };
+  assert.equal(chose("SB3038", 1, t12), true);
+  assert.equal(chose("SB3027", 1, t12), false);
+  // c06-persona T8: "the 2 dollar skimmer", after the skimmer was re-shown without a price.
+  const skimmers = [greeting, reply([skimmer, skimmer19, skimmer24]), reply([meshStrainer]), reply([{ ...skimmer, price: null }, { ...wireMesh26, price: null }]), reply([wireMesh26], "Got it: 1 added.")];
+  const t8 = { texts: [said("The 2 dollar skimmer also take 2 lah, for scoop the egg", 5)], replies: skimmers };
+  assert.equal(chose("13128-0401", 2, t8), true);
+  assert.equal(chose("13128-0403", 2, t8), false);
+  // c10-stress T5: "the 16 inch cheap one" is the $3.85 tong; "the 3 dollar plus one" alone fits two $3.85 tongs.
+  const tongSets = [greeting, reply([tong9, steakTong, siliconeTong]), reply([plainTong16, tong16]), reply([scallopTong, edlund16]), reply([steakTong], "How many would you like?"), reply([steakTong, edlundLock], "Only 3 left.")];
+  const t5 = { texts: [said("27 bucks too ex la. ok take the 3 steak tong, then 3 more of the 16 inch cheap one, the 3 dollar plus one", 6)], replies: tongSets };
+  assert.equal(chose("2564L", 3, t5), true);
+  for (const code of ["UT16HR", "JQ-OT113", "36670", "34471"]) assert.equal(chose(code, 3, t5), false, code);
+  assert.equal(chose("P-24", 2, { texts: [said("i pay 5 dollar for one also can, 2 pcs", 1)], replies: [reply([plate24, plate27, plate30])] }), false);
+});
+
+test("when several cards fit a typed price, only those whose price rounds to it keep it, and a tie picks none (exam 3, c06-stress T4)", () => {
+  const skimmers = { texts: [said("ok the 2 dollar one lah, take 2", 3)], replies: [greeting, reply([wireMesh26]), reply([skimmer, skimmer165, skimmer19], "Smallest at $2.29.")] };
+  assert.equal(chose("13128-0401", 2, skimmers), true);
+  for (const code of ["13128-0402", "13128-0403"]) assert.equal(chose(code, 2, skimmers), false, code);
+  const close = { texts: [said("the 5 dollar one, 10", 1)], replies: [reply([card("A-510", "Dinner Plate A", 5.1), card("A-545", "Dinner Plate B", 5.45)])] };
+  for (const code of ["A-510", "A-545"]) assert.equal(chose(code, 10, close), false, code);
+  const tied = { texts: [said("the 3 dollar plus one", 1)], replies: [reply([plainTong16, scallopTong])] };
+  for (const code of ["2564L", "JQ-OT113"]) assert.equal(chose(code, null, tied), false, code);
+});
+
+test("a card re-shown as Price to be confirmed keeps the price shown earlier (exam 3, c10-persona T8)", () => {
+  const tbc = (item: ShownCard) => ({ ...item, price: null });
+  const replies = [greeting, reply([steakTong, siliconeTong, tong9]), reply([plainTong16, scallopTong]),
+    reply([tbc(steakTong), tbc(siliconeTong), tbc(tong9), tbc(plainTong16)], "Here's what I've shown so far."), reply([plainTong16, scallopTong, tong16]), reply([steakTong, tong16], "Got it: 3 of each added.")];
+  const picks = { texts: [said("the 2 dollar one also, 10", 6)], replies };
+  assert.equal(chose("UT09L", 10, picks, ["ST-15", "UT16HR"]), true);
+  assert.equal(chose("2564L", 10, picks, ["ST-15", "UT16HR"]), false);
+});
+
+test("'the cheap 4 slot', 'the cheapest waring' or 'the bigger one' picks the one card code knows is cheapest or biggest (exam 3)", () => {
+  // c11-persona T7, from this text alone (in the chat the 6-slot is on the enquiry).
+  const toasters = [greeting, reply([waringToaster, toaster6, toaster4]), reply([waringToaster, toaster6], "Got it: 1 Waring added."), reply([], "Your enquiry totals $923.96.")];
+  const switched = { texts: [said("actually change the 6 slot to the cheap 4 slot. same 2", 4)], replies: toasters };
+  assert.equal(chose("HET-4", 2, switched), true);
+  assert.equal(chose("WCT708K", 2, switched), false);
+  // c02-stress T8: the 2L Waring was last shown without a price; its earlier price still counts.
+  const blenders = [greeting, reply([mika, santos66, waringQuiet]), reply([waring2l, waringVariable, santos66]), reply([waring64, waringVariable, waringGallon]),
+    reply([waringQuiet, santos66]), reply([mika, { ...waring2l, price: null }]), reply([mika], "Got it: 2 added.")];
+  const cheapest = { texts: [said("hmm nvm la mika sure spoil one. change to the cheapest waring, same 2 unit", 7)], replies: blenders };
+  assert.equal(chose("MX1000XTXEE", 2, cheapest), true);
+  assert.equal(chose("MX1100XTXEE", 2, cheapest), false);
+  // c11-stress T7, from this text alone: "4 or 6 slots" names both sizes.
+  const outlet = {
+    texts: [said("oh our other outlet also need 1. no conveyor. 4 or 6 slots toaster wichever cheapest can liao", 6)],
+    replies: [greeting, reply([waringToaster, toaster6]), reply([toaster4], "Want this one?"), reply([], "Got it: 2 added."), reply([toaster6], "To confirm - you want the 6-slot, qty 2?"), reply([], "Your enquiry has 2 HET-6.")],
+  };
+  assert.equal(chose("HET-4", 1, outlet), true);
+  assert.equal(chose("HET-6", 1, outlet), false);
+  const plates = [greeting, reply([plate24, plate27, plate30])];
+  assert.equal(chose("P-30", 2, { texts: [said("i want the bigger one, 2", 2)], replies: plates }), true);
+  assert.equal(chose("P-24", 2, { texts: [said("change to the cheapest one, same 2", 2)], replies: plates }), true);
+});
+
+test("a cheap or bigger word that doesn't send the customer to one card picks nothing", () => {
+  const plates = [greeting, reply([plate24, plate27, plate30])];
+  for (const code of ["P-24", "P-30"]) assert.equal(chose(code, null, { texts: [said("want bigger dinner plate la cheap cheap", 2)], replies: plates }), false, code);
+  for (const text of ["the bigger one I take later, now take the small one 2", "the bigger one cannot fit my shelf, i take 2 of the 24cm"]) {
+    assert.equal(chose("P-30", 2, { texts: [said(text, 2)], replies: plates }), false, text);
+  }
+  const blenders = [greeting, reply([mika, santos, waring2l])];
+  for (const text of ["nah cheap one sure spoil fast", "the cheap one sure spoil fast, take the waring 2", "ok the price is cheap take 2"]) {
+    assert.equal(chose("MK-768L", 2, { texts: [said(text, 2)], replies: blenders }), false, text);
+  }
+  const conveyor = card("CONV-4", "Conveyor 4-Slots Toaster", 150);
+  assert.equal(chose("CONV-4", 1, { texts: [said("no conveyor. 4 or 6 slots toaster wichever cheapest, need 1", 2)], replies: [greeting, reply([conveyor, toaster4, toaster6])] }), false);
+  // A Waring with no known price may be the cheapest.
+  const unpriced = card("TBC-1", "Waring Bar Blender Basic", null);
+  assert.equal(chose("MX1000XTXEE", 2, { texts: [said("take the cheapest waring, 2", 2)], replies: [greeting, reply([unpriced, waring64, waring2l])] }), false);
+});
+
+test("a switch names the new card after its first 'to', and 'instead' there is no hedge (exam 3, c11-stress T4)", () => {
+  const toasters = [greeting, reply([waringToaster, toaster6]), reply([toaster4], "Yes, there's a cheaper 4-slot option. Want this one?"), reply([], "Got it: 2 HET-4 added. Anything else?")];
+  const instead = { texts: [said("wait ah boss say 6 slot better. change to 6 slot instead, same qty", 4)], replies: toasters };
+  assert.equal(chose("HET-6", 2, instead), true);
+  assert.equal(chose("HET-4", 2, instead), false);
+  const two = [greeting, reply([toaster4, toaster6], "Two toasters.")];
+  assert.equal(chose("HET-4", 2, { texts: [said("change to the 4 slot want to try 2", 2)], replies: two }), true);
+  // Nothing named after "to": a quantity change of the card before it.
+  assert.equal(chose("HET-4", 3, { texts: [said("change the 4 slot to 3 pcs", 2)], replies: two }), true);
+  assert.equal(chose("HET-6", 3, { texts: [said("change the 4 slot to 3 pcs", 2)], replies: two }), false);
+  assert.equal(chose("HET-4", 2, { texts: [said("swap the kettle to the 6 slot one la. same 2", 2)], replies: two }), false);
+});
+
+test("a clause naming two cards picks both (exam 3, c05-persona T9)", () => {
+  const replies = [greeting, reply([carrara, rocaBowl, cutlery]), reply([patraPlate, patraBowl, cutlery], "For 4 pax, how many plates and bowls do you need?")];
+  const picks = { texts: [said("ok this ok. the white plate and bowl 4 each, the spoon fork set 1", 3)], replies };
+  assert.equal(chose("3500-0018", 4, picks), true);
+  assert.equal(chose("3500-3011", 4, picks), true);
+});
+
+test("a name or size that fits two cards evenly picks neither, however recently one was shown", () => {
+  const gn11 = card("GN11-65", "GN 1/1 Pan 65mm", 20);
+  const gn23 = card("GN23-65", "GN 2/3 Pan 65mm", 15);
+  for (const code of ["GN11-65", "GN23-65"]) assert.equal(chose(code, 2, { texts: [said("ok i want 2 pan", 1)], replies: [reply([gn11, gn23])] }), false, code);
+  // The newer 10in chef knife doesn't win over the 8in cook's knife the customer sized.
+  const cook8 = card("K-8", "Cook's Knife 8in", 20);
+  const chef10 = card("K-10", "Chef Knife 10in", 25);
+  assert.equal(chose("K-10", 2, { texts: [said("add the 8 inch chef knife, 2", 3)], replies: [reply([cook8]), reply([chef10]), reply([tong12])] }), false);
+  // runs-new2 c05-stress T15: three bowls, each shown in a different reply.
+  const bowls = [greeting, reply([card("N3600", "Luminarc Diwali Opal Glass Rice Bowl Ø12cm", 4.5)]), reply([card("N3601", "Luminarc Noodle Bowl 18cm, Generic Opal Glass", 8.17)]),
+    reply([card("RS-J1004-5", "Rooster Series Deep Bowl 5\"", 3.46)]), reply([card("RS-J1037", "Rooster Series Soup Spoon", 2.8)]), reply([], "Soup spoon x4 added. The bowl still isn't going through on my side.")];
+  for (const code of ["N3600", "N3601", "RS-J1004-5"]) assert.equal(chose(code, null, { texts: [said("ok bowl i call ur sales la. so troublesome", 6)], replies: bowls }), false, code);
+});
+
+test("a yes to the one product Claire's question asked about picks it, even when that reply showed no card or several (exam 3)", () => {
+  // c08-persona T9: the confirm question carried no card.
+  const zyliss = [greeting, reply([scissors, zylissBasic], "Main difference: E910076 is L22.8cm (larger). Which size suits you?"),
+    reply([], "Just to confirm - you'd like the bigger Zyliss household scissors, E910076 (L22.8cm)? That hasn't been added yet - please confirm this is the one and I'll add 2 pcs for you.")];
+  const yes = { texts: [said("Yes that one", 3, 0), said("Ok the bigger one. 2 pcs", 2, 1)], replies: zyliss };
+  assert.equal(chose("E910076", 2, yes), true);
+  assert.equal(chose("E910077", 2, yes), false);
+  // c02-B T18: the question under two cards names only the Mika.
+  const blenders = [greeting, reply([santos], "Want to go with this at 2 units?"),
+    reply([santos, mika], "Sorry, price on the Santos Bar Blender is $614.68, within your budget. But only 1 unit is in stock, so it can't cover your 2. A cheaper option that has plenty in stock is the Mika Bar Blender (2L, $273.83) — well within budget too. Want to go with 2 of the Mika instead?")];
+  const sure = { texts: [said("ok sure. i want 2 units. let me know which one has at least 2 units in stock and when i can collect it.", 3, 0), said("im taking about price not code", 2, 1)], replies: blenders };
+  assert.equal(chose("MK-768L", 2, sure), true);
+  assert.equal(chose("FHA24-33GE", 2, sure), false);
+});
+
+test("a yes to an either/or question, a check, a question about use, or questions naming two products picks nothing", () => {
+  const zyliss = [greeting, reply([scissors, zylissBasic])];
+  const after = (question: string, text: string) => ({ texts: [said(text, 3)], replies: [...zyliss, reply([], question)] });
+  for (const code of ["E910076", "E910077"]) assert.equal(chose(code, 2, after("Is it the E910076 (22.8cm)? Or is it the E910077 you'd like?", "yes, 2")), false, code);
+  assert.equal(chose("E910076", 2, after("Sure. Is this for cutting fabric, like the E910076 is made for?", "yes 2 pcs")), false);
+  const blenders = [greeting, reply([waring64, waring2l]), reply([mika], "Cheaper.")];
+  for (const question of ["Is it the Waring you had in mind, or the Mika?", "Is it the Waring MX1100XTXEE, or the Mika?"]) {
+    for (const code of ["MK-768L", "MX1100XTXEE", "MX1000XTXEE"]) {
+      assert.equal(chose(code, 2, { texts: [said("yes 2", 4)], replies: [...blenders, reply([], question)] }), false, `${question} ${code}`);
+    }
+  }
+  assert.equal(chose("UT12HR", 5, { texts: [said("yes 5", 3)], replies: [greeting, reply([tong9, tong12]), reply([], "Do you want the 12in or a longer one?")] }), false);
+  // s05-B T1: a yes to "Want me to check ...?" under two trolleys.
+  const trolleys = [greeting, reply([
+    card("JW-RK16-2N", "Jiwins Stainless Steel Double Column Trolley For GN 1/1 Inserts With Reinforcement Bar W74xD55xH170cm, 5 Swivel Castors With 2 Brakes, Max Load: 15Kg/Shelf Or 200Kgs/Trolley", 380.73),
+    card("113003", "S/S SINGLE COLUMN TROLLEY FOR GN 2/1 INSERTS W59xD67xH173.5cm, MAX LOAD: 60kg", 253.21),
+  ], "A GN 1/1-size shelf takes two 1/2 GN pans side by side. If you want exactly 2x1/2 per level, the single column GN 1/1 trolley (JW-RK16) fits that but is out of stock. Want me to check single-column GN 1/1 alternatives that are in stock?")];
+  for (const code of ["JW-RK16-2N", "113003"]) assert.equal(chose(code, 2, { texts: [said("Yes per level 2 pans side by side", 2)], replies: trolleys }), false, code);
+});
+
+test("'i said 50' and a complaint starting with 'why' still say yes to the only card Claire just showed (exam 3)", () => {
+  // c12-stress T6: "7cm" is not the 70mm card's size, so only the insisted quantity is the yes.
+  const moulds = [greeting, reply([mould60], "The closest is the CCK #19 (Ø60mm), $0.64 each."), reply([mould60], "Got it: added 50 pcs."),
+    reply([mould70], "Removed the 60mm one. For 7cm, this is the CCK #12, Ø70mm, same $0.64 each. How many do you need?")];
+  const insisted = { texts: [said("i said 50 already lah", 4, 0), said("wait i measure again is 7cm leh. change to the 7cm one, same 50", 3, 1)], replies: moulds };
+  assert.equal(chose("158-12", 50, insisted), true);
+  assert.equal(chose("158-19", 50, insisted), false);
+  // c08-stress T9: "detachable" also fits the older Atlantic card, so the text before it picks nothing.
+  const scissorSets = [greeting, reply([card("ST-26", "-TS- S/S KITCHEN SCISSOR 20cm, JPN", 15.5), atlantic]), reply([shibazi, shibaziDetachable, zebra]), reply([shibazi], "Got it: 3 added. Anything else?"),
+    reply([shibaziDetachable], "Just to confirm - this is the SB3027 Shibazi Detachable Household Kitchen Scissors, 20.5cm, at $10.00. Is this the one you mean?")];
+  const complaint = { texts: [said("yes!! why every time must ask again. n i ask total u never answer", 5, 0), said("ok add the detachable one also, 2. total how much", 4, 1)], replies: scissorSets };
+  assert.equal(chose("SB3027", 2, complaint, ["SB3038"]), true);
+  // A real question still needs the number in the yes.
+  assert.equal(chose("SB3027", 2, { texts: [said("ok, why is it $10?", 5)], replies: scissorSets }, ["SB3038"]), false);
+});
+
+test("15 long replies of long-named cards and long questions are read quickly", () => {
+  // Card names, replies and texts come from the client; the price, superlative, switch and question rules read them all.
+  const name = (n: number) => `Stainless Steel Utility Tong With Locking Ring ${n} inch Heavy Duty Porcelain Plate Bowl Cup Scissors Knife ${n}cm ${"Word".repeat(3)} `.repeat(3).slice(0, 190);
+  const replies = Array.from({ length: 15 }, (_, r) => reply(
+    Array.from({ length: 5 }, (_, i) => card(`C-${r * 5 + i}`, name(r * 5 + i), 3 + ((r * 5 + i + 1) % 7))),
+    Array.from({ length: 60 }, (_, i) => `Is it the C-${r * 5 + (i % 5)} tong you want, the ${i} inch one?`).join(" ").slice(0, 1900),
+  ));
+  const texts = Array.from({ length: 6 }, (_, i) => said(`ok the cheap 4 slot and the ${i} dollar tong plus the bigger bowl n plate, take 2, change the knife to the 7 dollar scissors one `.repeat(4).slice(0, 480), 15 - i, i));
+  const picks: PickEvidence = { taps: [], texts, replies };
+  const start = performance.now();
+  pickedCodes(picks, []);
+  for (let i = 0; i < 20; i += 1) customerChose(`C-${i}`, 2, picks, []);
+  const took = performance.now() - start;
+  assert.ok(took < 2_000, `took ${Math.round(took)} ms`);
 });
 
 test("a long run of spaces is read quickly", () => {
