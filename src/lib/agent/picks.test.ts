@@ -527,6 +527,22 @@ test("a cheap or bigger word that doesn't send the customer to one card picks no
   // A Waring with no known price may be the cheapest.
   const unpriced = card("TBC-1", "Waring Bar Blender Basic", null);
   assert.equal(chose("MX1000XTXEE", 2, { texts: [said("take the cheapest waring, 2", 2)], replies: [greeting, reply([unpriced, waring64, waring2l])] }), false);
+  // "the price cheap" says the price is cheap.
+  assert.equal(chose("MK-768L", 2, { texts: [said("ok the price cheap take 2", 2)], replies: blenders }), false);
+});
+
+test("a cheap or bigger word naming a kind no card name word matches picks nothing, and shared material words don't pool other kinds", () => {
+  // "pan", "mug" and "wok" are too short to be name words: "the bigger pan" is not the biggest of everything shown.
+  const pans = [greeting, reply([card("PAN-20", "Aluminium Sauce Pan 20cm", 18), card("PAN-24", "Aluminium Sauce Pan 24cm", 24), card("POT-30", "Aluminium Stock Pot 30cm", 60)])];
+  assert.deepEqual(pickedCodes({ taps: [], texts: [said("i want the bigger pan, 2", 2)], replies: pans }, []), []);
+  const mugs = [greeting, reply([card("MUG-1", "Porcelain Coffee Mug 300ml", 4.2), card("CUP-1", "Porcelain Coffee Cup 200ml", 3.5), card("MUG-2", "Porcelain Coffee Mug 350ml", 5.1)])];
+  assert.equal(chose("CUP-1", 10, { texts: [said("take the cheapest mug, 10", 2)], replies: mugs }), false);
+  const woks = [greeting, reply([card("WOK-14", "Iron Wok 14\"", 13), card("FRY-12", "Iron Fry Pan 12\"", 11), card("FRY-16", "Iron Fry Pan 16\"", 15)])];
+  assert.equal(chose("FRY-16", 1, { texts: [said("the bigger wok 1", 2)], replies: woks }), false);
+  assert.equal(chose("FRY-12", 1, { texts: [said("the cheapest wok 1", 2)], replies: woks }), false);
+  // Only "stainless steel" fits the knife shown earlier and the tongs just shown.
+  const tongs = [greeting, reply([knife]), reply([card("T-A", "Stainless Steel Serving Tong 9\"", 3.2), card("T-B", "Stainless Steel Serving Tong 12\"", 4.1)], "Two serving tongs.")];
+  assert.deepEqual(pickedCodes({ taps: [], texts: [said("take the cheapest stainless steel one, 2", 3)], replies: tongs }, []), []);
 });
 
 test("a switch names the new card after its first 'to', and 'instead' there is no hedge (exam 3, c11-stress T4)", () => {
@@ -542,11 +558,39 @@ test("a switch names the new card after its first 'to', and 'instead' there is n
   assert.equal(chose("HET-4", 2, { texts: [said("swap the kettle to the 6 slot one la. same 2", 2)], replies: two }), false);
 });
 
+test("a switch never picks the card it replaces", () => {
+  // "instead of" and "rather than" name the card being dropped.
+  const newest = { texts: [said("change to 6 slot instead of 4 slot, same 2", 3)], replies: [greeting, reply([toaster6]), reply([toaster4], "Want this one?")] };
+  assert.equal(chose("HET-6", 2, newest), true);
+  assert.equal(chose("HET-4", 2, newest), false);
+  const blenders = [greeting, reply([mika]), reply([waring2l], "Want this one?")];
+  for (const text of ["switch to the mika instead of the waring, same 2", "change to the mika rather than the waring, 2", "change to this one instead of the waring, 2"]) {
+    const picks = { taps: [], texts: [said(text, 3)], replies: blenders };
+    assert.equal(chose("MX1100XTXEE", 2, picks), false, text);
+    assert.ok(!pickedCodes(picks, []).includes("MX1100XTXEE"), text);
+  }
+  // The new side names two cards evenly: the card before "to" is not the pick.
+  const toasters = { texts: [said("change the 6 slot to the 4 slot, 2", 3)], replies: [greeting, reply([toaster4, waringToaster]), reply([toaster6], "Want this one?")] };
+  assert.equal(chose("HET-6", 2, toasters), false);
+  // A decimal size before "to" is still the old side.
+  const decimal = { texts: [said("change the 20.5cm to the 21cm one, 3", 2)], replies: [greeting, reply([card("SK-205", "Fine Mesh Skimmer 20.5cm", 4), card("SK-21", "Fine Mesh Skimmer 21cm", 5)])] };
+  assert.equal(chose("SK-21", 3, decimal), true);
+  assert.equal(chose("SK-205", 3, decimal), false);
+  // "should i change …" asks.
+  assert.equal(chose("HET-4", 2, { texts: [said("should i change the 6 slot to the 4 slot 2", 2)], replies: [greeting, reply([toaster4, toaster6])] }), false);
+});
+
 test("a clause naming two cards picks both (exam 3, c05-persona T9)", () => {
   const replies = [greeting, reply([carrara, rocaBowl, cutlery]), reply([patraPlate, patraBowl, cutlery], "For 4 pax, how many plates and bowls do you need?")];
   const picks = { texts: [said("ok this ok. the white plate and bowl 4 each, the spoon fork set 1", 3)], replies };
   assert.equal(chose("3500-0018", 4, picks), true);
   assert.equal(chose("3500-3011", 4, picks), true);
+  // A part put off for later is no pick.
+  const tongs = [greeting, reply([tong9, tong12, tong16])];
+  for (const text of ["take the 12 inch tong 2 and ask ur boss the 16 inch price", "12 inch tong 2 and 16 inch maybe later"]) {
+    assert.equal(chose("UT12HR", 2, { texts: [said(text, 2)], replies: tongs }), true, text);
+    assert.equal(chose("UT16HR", 2, { texts: [said(text, 2)], replies: tongs }), false, text);
+  }
 });
 
 test("a name or size that fits two cards evenly picks neither, however recently one was shown", () => {
@@ -590,6 +634,7 @@ test("a yes to an either/or question, a check, a question about use, or question
     }
   }
   assert.equal(chose("UT12HR", 5, { texts: [said("yes 5", 3)], replies: [greeting, reply([tong9, tong12]), reply([], "Do you want the 12in or a longer one?")] }), false);
+  assert.equal(chose("UT16HR", 2, { texts: [said("yes 2", 3)], replies: [greeting, reply([tong9, tong12, tong16]), reply([], "Noted. Is it for your 16\" tong grill station?")] }), false);
   // s05-B T1: a yes to "Want me to check ...?" under two trolleys.
   const trolleys = [greeting, reply([
     card("JW-RK16-2N", "Jiwins Stainless Steel Double Column Trolley For GN 1/1 Inserts With Reinforcement Bar W74xD55xH170cm, 5 Swivel Castors With 2 Brakes, Max Load: 15Kg/Shelf Or 200Kgs/Trolley", 380.73),
@@ -612,6 +657,10 @@ test("'i said 50' and a complaint starting with 'why' still say yes to the only 
   assert.equal(chose("SB3027", 2, complaint, ["SB3038"]), true);
   // A real question still needs the number in the yes.
   assert.equal(chose("SB3027", 2, { texts: [said("ok, why is it $10?", 5)], replies: scissorSets }, ["SB3038"]), false);
+  const plate = [greeting, reply([plate24], "How many do you need?")];
+  assert.equal(chose("P-24", null, { texts: [said("ok why keep changing price", 2)], replies: plate }), false);
+  // A number the customer objects to is no quantity.
+  assert.equal(chose("P-24", 5, { texts: [said("i told u 5 is too many", 2)], replies: plate }), false);
 });
 
 test("15 long replies of long-named cards and long questions are read quickly", () => {
@@ -628,6 +677,32 @@ test("15 long replies of long-named cards and long questions are read quickly", 
   for (let i = 0; i < 20; i += 1) customerChose(`C-${i}`, 2, picks, []);
   const took = performance.now() - start;
   assert.ok(took < 2_000, `took ${Math.round(took)} ms`);
+});
+
+test("distinct refusal clauses between distinct cheap or numbered picks in long texts are read quickly", () => {
+  // Every clause is new, so the per-clause cache can't hide the refusals being read again for each one.
+  const name = (n: number) => `Stainless Steel Utility Tong With Locking Ring ${n} inch Heavy Duty Porcelain Plate Bowl Cup Scissors Knife ${n}cm ${"Word".repeat(3)} `.repeat(3).slice(0, 190);
+  const replies = Array.from({ length: 15 }, (_, r) => reply(Array.from({ length: 5 }, (_, i) => card(`C-${r * 5 + i}`, name(r * 5 + i), 3 + ((r * 5 + i + 1) % 7))), "How many do you need?"));
+  const long = (seed: number, max: number) => {
+    let out = "";
+    for (let i = 0; out.length < max; i += 1) out += i % 2 ? `take the cheapest tong ${seed * 1000 + i}, ` : `no spoon ${seed * 1000 + i}, take ${i % 9 + 1} z${seed}${i}, no q${seed}${i}, `;
+    return out.slice(0, max);
+  };
+  const picks: PickEvidence = { taps: [], texts: Array.from({ length: 6 }, (_, i) => said(long(i, i ? 2000 : 500), 15 - i, i)), replies };
+  const start = performance.now();
+  pickedCodes(picks, []);
+  customerChose("C-3", 2, picks, []);
+  const took = performance.now() - start;
+  assert.ok(took < 2_000, `took ${Math.round(took)} ms`);
+});
+
+test("'2 or 3 in total' is no 2in size; '4 or 6 inch' and '4 or 6 slots' still are", () => {
+  const pan2 = card("SP-2", "Steam Table Pan 2\" Deep", 20);
+  const pan4 = card("SP-4", "Steam Table Pan 4\" Deep", 25);
+  assert.deepEqual([...hits(pan2, "need 2 or 3 in total for the steam table pan")].sort(), ["steam", "table"]);
+  assert.ok(hits(pan4, "the 4 or 6 inch pan").has("4in"));
+  assert.ok(hits(toaster4, "4 or 6 slots toaster").has("4slot"));
+  assert.equal(chose("SP-2", 2, { texts: [said("the steam pan, need 2 or 3 in total", 2)], replies: [greeting, reply([pan2, pan4])] }), false);
 });
 
 test("a long run of spaces is read quickly", () => {

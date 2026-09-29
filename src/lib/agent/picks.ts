@@ -68,9 +68,9 @@ function unitKey(unit: string, spaced: boolean) {
 /** Sizes and part counts written next to a number: 16" / 16 inch, 6-Slots / 6 slot, Ø25cm / 25cm, 5L / 5 litre. */
 function measures(text: string) {
   const found = new Set<string>();
-  // "4 or 6 slots" names both sizes (exam 3, c11-stress T7); "GN 2/3" is never a size of 2.
-  for (const match of text.matchAll(/(?<![\w.])(\d+)\s*or\s*(\d+)\s*(?:-\s*)?([a-z]+)/gi)) {
-    if (!COUNT_UNITS.test(match[3].toLowerCase())) found.add(`${Number(match[1])}${unitKey(match[3], false)}`);
+  // "4 or 6 slots" names both sizes (exam 3, c11-stress T7); "GN 2/3" is never a size of 2, nor "2 or 3 in total" of 2in.
+  for (const match of text.matchAll(/(?<![\w.])(\d+)\s*or\s*(\d+)(\s*(?:-\s*)?)([a-z]+)/gi)) {
+    if (!COUNT_UNITS.test(match[4].toLowerCase())) found.add(`${Number(match[1])}${unitKey(match[4], /\s/.test(match[3]))}`);
   }
   // Card names come from the client, so the spaces-hyphen-spaces group must not backtrack on long runs of spaces.
   for (const match of text.matchAll(/(?<![\w.])(\d+(?:\.\d+)?)(\s*(?:-\s*)?)("|″|”|''|[a-z]+)/gi)) {
@@ -94,7 +94,8 @@ function priceFits(price: number, text: string) {
 }
 
 // A price with the card's own name words before "one" ("the 7 dollar shibazi one", exam 3 c08-stress T6) or right before a
-// word of its name ("the 2 dollar skimmer", c06-persona T8). "3 plus", "3+" and "3 something" mean $3.00-$3.99 (c10-stress T5).
+// word of its name ("the 2 dollar skimmer", c06-persona T8). "3 dollar plus", "$3+" and "3 dollar something" mean $3.00-$3.99
+// (c10-stress T5); a bare "the 3 plus one" may be a count, so it needs the $ or dollar word.
 const priceWord = /(?:S?\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(k)?|(?<![\w.])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:(k)|\s?(?:dollars?|bucks|sgd)))(\s*(?:\+|plus\b|something\b))?((?:\s+\p{L}+){0,3})/giu;
 const budgetBefore = /\b(?:below|under|within|budget|less than|max|maximum|around|about|cheaper than|than|over|above)\s*$/i;
 const priceFiller = /^(?:la|lah|lor|the|that|tat|one|ones|de)$/;
@@ -159,11 +160,17 @@ export function hits(card: ShownCard, text: string) {
   return found;
 }
 
-// A definite "the cheap 4 slot", "that bigger one", "whichever cheapest"; never "want bigger plate la cheap cheap" or "the price is cheap".
-const definite = (words: string) => new RegExp(`\\b(?:the|that|tat|dat|whichever|wichever)\\s+(?:(?!(?:is|are|was|were|so|very|quite|too|not|abit|damn)\\b)\\S+\\s+){0,2}?(?:${words})\\b`, "i");
-const cheapWord = definite("cheap|cheapest|lowest[- ]priced?|least expensive|most affordable");
-const bigWord = definite("bigger|biggest|larger|largest|longer|longest");
-const smallWord = definite("smaller|smallest|shorter|shortest");
+// A definite "the cheap 4 slot", "that bigger one", "whichever cheapest"; never "want bigger plate la cheap cheap",
+// "the price is cheap" or "the price cheap".
+const definite = (words: string) => new RegExp(`\\b(?:the|that|tat|dat|whichever|wichever)\\s+(?:(?!(?:is|are|was|were|so|very|quite|too|not|abit|damn|price|prices|pricing|cost)\\b)\\S+\\s+){0,2}?(?:${words})\\b`, "i");
+const CHEAP = "cheap|cheapest|lowest[- ]priced?|least expensive|most affordable";
+const BIG = "bigger|biggest|larger|largest|longer|longest";
+const SMALL = "smaller|smallest|shorter|shortest";
+const cheapWord = definite(CHEAP);
+const bigWord = definite(BIG);
+const smallWord = definite(SMALL);
+// "the bigger pan" names a kind, often by a word too short to be a name word; only a bare "the bigger one" means the cards just shown.
+const kindNamed = new RegExp(`\\b(?:${CHEAP}|${BIG}|${SMALL})\\s+(?!(?:one|ones|de|la|lah|lor|also|can|pls|please|same|take|want|and|n)\\b)\\p{L}{3,}`, "iu");
 
 /** The one card with the lowest or highest value, when every card has one and no two tie for it. */
 function extreme(cards: ShownCard[], key: (card: ShownCard) => number | null, pick: "min" | "max") {
@@ -207,8 +214,10 @@ export function pointedCards(text: string, cards: ShownCard[], newest: ShownCard
     || (other.hits.size === own.hits.size && own.newest && !other.newest))).map(({ card }) => card);
   if (superlative && (cheapWord.test(text) || bigWord.test(text) || smallWord.test(text))) {
     // Exam 3: "the cheap 4 slot" (c11-persona T7), "the cheapest waring" (c02-stress T8). "Cheapest" needs every price known.
-    const most = Math.max(0, ...scored.map((item) => item.hits.size));
-    const pool = (most > 0 ? scored.filter((item) => item.hits.size === most).map((item) => item.card) : fallback)
+    // Material words don't say which kind: "the cheapest stainless steel one" is not the knife shown earlier among tongs.
+    const kindHits = (item: (typeof scored)[number]) => [...item.hits].filter((hit) => !MATERIALS.has(hit)).length;
+    const most = Math.max(0, ...scored.map(kindHits));
+    const pool = (most > 0 ? scored.filter((item) => kindHits(item) === most).map((item) => item.card) : kindNamed.test(text) ? [] : fallback)
       .filter((card) => !superlative.exclude.has(card.code.toLowerCase()));
     const byPrice = cheapWord.test(text) ? extreme(pool, (card) => card.price, "min") : null;
     const units = new Set(pool.map((card) => oneMeasure(card)?.unit ?? "?"));
@@ -227,7 +236,7 @@ const refusal = /\b(?:no|not|dont|don'?t|dun|didn'?t|never|nvm|forget|cancel|wro
 // "got stock or not" asks and "no rush" is polite; neither turns anything down.
 const refuses = (clause: string) => refusal.test(clause.replace(/\bor\s+not\b|\bno\s+(?:rush|hurry|problem|worries)\b/gi, " "));
 const isQuestion = (clause: string) => /[?？]|\b(?:or not|anot|meh|har)[\s.,;!]*$/i.test(clause);
-const questionStart = /^(?:which|what|whats|wat|where|when|who|how|why|is|are|does|do|can|got|any)\b/i;
+const questionStart = /^(?:which|what|whats|wat|where|when|who|how|why|is|are|does|do|can|got|any|(?:should|shall)\s+(?:i|we))\b/i;
 // "can" starts a yes as often as a question ("Can u help me do a 50 pcs qoutation for this").
 const asksFirst = (clause: string) => questionStart.test(clause) && !/^can\b/i.test(clause);
 // "now got 4 inch" asks (exam 2, c12-stress).
@@ -244,13 +253,16 @@ const bareQuantity = /^\s*(?:just|only)?\s*(?:x\s*)?\d+\s*(?:pcs?|pieces?|units?
 // Owner default (Q4): a bare number is a yes only after Claire asked how many or offered to add.
 const askedHowMany = /\bhow many\b|\b(?:quantity|qty)\b|\b(?:want|shall|should|can) (?:me to |i )?add\b|\badd (?:it|this|that|one|the|\d)/i;
 const switchWord = /\b(?:change|switch|instead|rather|actually|other one)\b|换/i;
-const switchTo = /\b(?:change|switch|swap)\b[^.!?]*\bto\b/i;
-// "i said 50 already lah" repeats the quantity: a yes when the text asks nothing (exam 3, c12-stress T6).
-const insist = /\bi\s+(?:said|say|told)\b/i;
-// "why every time must ask again" complains; it doesn't ask (exam 3, c08-stress T9).
-const complaint = /^why\b[^?？]*\b(?:ask|asking|again|every ?time|keep)\b/i;
-// A question asking the customer to take a product ("Want to go with 2 of the Mika instead?"), never "Want me to check …?".
-const takeQuestion = /\b(?:go with|you mean|you'?d like|you want|want (?:this|that|it|the|\d)|is it|confirm|add)\b/i;
+// "change the 20.5cm to the 21cm one" is a switch too.
+const switchTo = /\b(?:change|switch|swap)\b(?:[^.!?]|(?<=\d)\.(?=\d))*\bto\b/i;
+// "i said 50 already lah" repeats the quantity: a yes when the text asks nothing (exam 3, c12-stress T6). Nothing but filler
+// may follow the number, so "i told u 5 is too many" is no yes to 5.
+const insist = /\bi\s+(?:said|say|told)\b.*\d\s*(?:pcs?|units?)?(?:\s*(?:already|alr|liao|la|lah|mah|leh|lor|wat|what|ah))*[\s.!,]*$/i;
+// "why every time must ask again" complains; it doesn't ask (exam 3, c08-stress T9). "why keep changing price" asks.
+const complaint = /^why\b[^?？]*\b(?:ask|asking|again)\b/i;
+// A question asking the customer to take a product ("Want to go with 2 of the Mika instead?"), never "Want me to check …?"
+// or "Is it for your grill station?".
+const takeQuestion = /\b(?:go with|you mean|you'?d like|you want|want (?:this|that|it|the|\d)|is it(?!\s+for\b)|confirm|add)\b/i;
 const lookQuestion = /\b(?:check|show|look|search|find|see|compare)\b/i;
 // "Is it the Waring…, or the Mika?" offers two products; "got stock or not?" doesn't (exam 3 evidence check).
 const eitherOr = (question: string) => /\bor\b/i.test(question.replace(/\bor\s+not\b/gi, " "));
@@ -273,22 +285,28 @@ function focusCards(reply: PickReply, seenCards: ShownCard[]) {
     && !lookQuestion.test(question) && named[index].length === 1) ? all : [];
 }
 
+// "change to the mika instead of the waring": the words after "instead of" or "rather than" name the card being dropped.
+const dropped = /\b(?:instead of|rather than)\b.*$/i;
 /** The words naming the new card in "change/switch/swap X to Y": those after the first "to" (exam 3, c11-persona T7). */
-const newSide = (clause: string) => (switchTo.test(clause) ? clause.replace(/^.*?\b(?:change|switch|swap)\b.*?\bto\b/i, "") : clause);
+const newSide = (clause: string) => (switchTo.test(clause) ? clause.replace(/^.*?\b(?:change|switch|swap)\b.*?\bto\b/i, "").replace(dropped, "") : clause);
+const deferred = /\b(?:maybe|next time|see first|nvm)\b/i;
 
-/** The cards one clause of a customer text points at. */
-function clauseCards(clause: string, all: string[], seenCards: ShownCard[], newest: ShownCard[], shown: ShownCard[]) {
+/** The cards one clause of a customer text points at; `excluded` gives the cards the text turns down, worked out once per text. */
+function clauseCards(clause: string, excluded: () => Set<string>, seenCards: ShownCard[], newest: ShownCard[], shown: ShownCard[]) {
   const words = newSide(clause);
   // "the cheap 4 slot" or "whichever cheapest" only in a clause that picks, switches or gives a number, with no hedge,
   // among the cards the customer didn't turn down ("no conveyor").
   const superlative = (pickVerb.test(clause) || switchTo.test(clause) || /\bwh?ichever\b/i.test(clause) || /\d/.test(words))
-    && !yesHedge.test(words) && !/\b(?:maybe|next time|see first|nvm)\b/i.test(words)
-    ? { exclude: new Set(all.filter(refuses).flatMap((other) => pointedCards(other, seenCards)).map((card) => card.code.toLowerCase())) } : null;
+    && !yesHedge.test(words) && !deferred.test(words) ? { exclude: excluded() } : null;
   let found = pointedCards(words, seenCards, newest, shown.length > 1 ? shown : newest, superlative);
-  // A switch whose new side names nothing ("change the 4 slot to 3 pcs") is a quantity change of the card it names.
-  if (!found.length && words !== clause) found = pointedCards(clause, seenCards, newest);
-  // "the white plate and bowl 4 each" names two cards (exam 3, c05-persona T9).
-  if (!found.length) found = words.split(/\s+(?:and|n|&|\+|plus)\s+/i).flatMap((part) => pointedCards(part, seenCards, newest));
+  // A switch whose new side names nothing ("change the 4 slot to 3 pcs") is a quantity change of the card it names. One
+  // whose new side names two cards evenly picks neither: never the card being switched from.
+  if (!found.length && words !== clause && !seenCards.some((card) => hits(card, words).size)) found = pointedCards(clause.replace(dropped, ""), seenCards, newest);
+  // "the white plate and bowl 4 each" names two cards (exam 3, c05-persona T9); "and ask ur boss the 16 inch price" picks nothing.
+  if (!found.length) {
+    found = words.split(/\s+(?:and|n|&|\+|plus)\s+/i).filter((part) => !yesHedge.test(part) && !deferred.test(part))
+      .flatMap((part) => pointedCards(part, seenCards, newest));
+  }
   return found;
 }
 
@@ -297,7 +315,7 @@ function clauseCards(clause: string, all: string[], seenCards: ShownCard[], newe
  * hit the largest hit count of any card that has it, and the one product the reply before the text asked about
  * (card names and replies come from the client, so nothing may be redone per code).
  */
-type Pointing = Map<PickText, { pointed: Map<string, ShownCard[]>; most: Map<string, Map<string, number>>; focus?: ShownCard[] }>;
+type Pointing = Map<PickText, { pointed: Map<string, ShownCard[]>; most: Map<string, Map<string, number>>; focus?: ShownCard[]; excluded?: Set<string> }>;
 
 /** What one customer text says about this card: it picks it, turns it down, or says nothing about it. */
 function textVerdict(code: string, quantity: number | null, sent: PickText, recent: boolean, replies: PickReply[], pointing: Pointing): "pick" | "refuse" | null {
@@ -310,8 +328,10 @@ function textVerdict(code: string, quantity: number | null, sent: PickText, rece
   const cache = pointing.get(sent) ?? { pointed: new Map<string, ShownCard[]>(), most: new Map<string, Map<string, number>>() };
   pointing.set(sent, cache);
   const before = replies[sent.seen - 1];
+  // The cards the text's refusals turn down, for every superlative clause of it (a crafted text of distinct clauses once took 7 s).
+  const excluded = () => (cache.excluded ??= new Set(all.filter(refuses).flatMap((other) => pointedCards(other, seenCards)).map((card) => card.code.toLowerCase())));
   const points = (target: string, clause: string) => {
-    if (!cache.pointed.has(clause)) cache.pointed.set(clause, clauseCards(clause, all, seenCards, seenSets.findLast((cards) => cards.length) ?? [], before?.cards ?? []));
+    if (!cache.pointed.has(clause)) cache.pointed.set(clause, clauseCards(clause, excluded, seenCards, seenSets.findLast((cards) => cards.length) ?? [], before?.cards ?? []));
     return cache.pointed.get(clause)!.some((card) => same(card.code, target));
   };
   const typedCode = codePattern(code);
