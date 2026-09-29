@@ -35,7 +35,7 @@ export type TurnContext = {
   /** This turn's searches, for the checks on the reply's claims about the range. */
   searches: SearchRecord[];
   /** Codes update_enquiry refused this turn as not picked (PRODUCT_NOT_CHOSEN): the reply's question about them needs their cards. */
-  refused?: string[];
+  refused: string[];
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -326,7 +326,7 @@ const kindWords = (item: Product) => new Set(letterWords(item.name)
 const sharedWords = (a: Set<string>, b: Set<string>) => [...b].filter((word) => [...a].some((own) => own === word
   || (Math.min(own.length, word.length) >= 4 && (own.includes(word) || word.includes(own))))).length;
 /** A product's series: its name before the first comma, bracket, size or number ("Patra Rim Plate 18cm, …" -> "Patra Rim Plate"). */
-export const seriesName = (name: string) => name.split(/[,(]|\s\d|\s[Øø]/)[0].replace(/\s+/g, " ").trim();
+const seriesName = (name: string) => name.split(/[,(]|\s\d|\s[Øø]/)[0].replace(/\s+/g, " ").trim();
 /** How far apart two prices are, as a ratio: a proxy for size and grade. */
 const priceGap = (item: Product, source: Product) => Math.abs(Math.log(Math.max(item.list_price, 0.01) / Math.max(source.list_price, 0.01)));
 // "Cover For #4010 Pot" fits another product; it is no substitute for the pot.
@@ -424,7 +424,7 @@ function enquiryState(ctx: TurnContext) {
 }
 
 const REFUSED_LOOKUP_MS = 2_000; // like an earlier card's check: the question about it shouldn't wait longer
-const NOT_CHOSEN_NOTE = "The customer's words don't show they picked this product. Don't call update_enquiry for this code again this turn; if picked lists a product, that one may be added. Otherwise ask one short question naming this product with its code ('Is it the <name> <code>?') with its card attached, or if two or three fit, attach them and ask which one. A yes or a tap then adds it.";
+const NOT_CHOSEN_NOTE = "The customer's words don't show they picked this product. Don't call update_enquiry for this code again this turn; if picked lists the product they mean, that one may be added. Otherwise ask one short question naming this product with its code ('Is it the <name> <code>?') with its card attached, or if two or three fit, attach them and ask which one. A yes or a tap then adds it.";
 
 /**
  * The refused product's live facts, so the question about it can give its price and carry its card; null when slow or not found
@@ -454,7 +454,7 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   }
   const lineCodes = ctx.lines.map((line) => line.code);
   if ((input.action === "add" || input.action === "set") && input.stock_id && !customerChose(input.stock_id, input.quantity ?? null, ctx.picks, lineCodes)) {
-    (ctx.refused ??= []).push(input.stock_id);
+    ctx.refused.push(input.stock_id);
     return fail("PRODUCT_NOT_CHOSEN", { note: NOT_CHOSEN_NOTE, product: await refusedProduct(input.stock_id, ctx), picked: pickedCodes(ctx.picks, lineCodes) });
   }
   // The typed number lets a second add through (it guards against an earlier message's number); within one turn it would double the line.

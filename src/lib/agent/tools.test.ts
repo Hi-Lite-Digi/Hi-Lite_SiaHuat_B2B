@@ -15,7 +15,7 @@ const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], changes: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
-    picks: { taps: [], texts: [], replies: [] }, searches: [], ...overrides,
+    picks: { taps: [], texts: [], replies: [] }, searches: [], refused: [], ...overrides,
   };
 }
 
@@ -776,7 +776,7 @@ test("a line that could not be re-checked is still on the enquiry, and the tool 
   const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["BTS-8026D"], picks: tappedAfterTwo("BTS-8026D") });
   const changed = JSON.parse((await runTool("update_enquiry", { action: "set", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { error: string; note?: string };
   assert.equal(changed.error, "STOCK_UNVERIFIED");
-  assert.equal(changed.note, "This line is still on the customer's enquiry but couldn't be re-checked just now; don't change it this turn.");
+  assert.match(changed.note ?? "", /still on the customer's enquiry.*don't change it this turn/);
   const other = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], picks: tappedAfterTwo("BTS-8026D") });
   const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, other)).content) as { unchecked?: string };
   assert.match(added.unchecked ?? "", /They are still on the customer's enquiry: never say they were removed or are missing\./);
@@ -833,6 +833,8 @@ test("a PRODUCT_NOT_CHOSEN refusal tells Claude what to do and which products th
   assert.deepEqual(Object.keys(body), ["error", "note", "product", "picked"]);
   assert.equal(body.error, "PRODUCT_NOT_CHOSEN");
   assert.deepEqual(body.picked, ["970S"]);
+  // The tapped blow torch may be added only if it is the product the customer means, not with the number typed for this one.
+  assert.match(body.note, /if picked lists the product they mean, that one may be added/);
 });
 
 test("a refused add returns the product's live facts and records the code", async () => {

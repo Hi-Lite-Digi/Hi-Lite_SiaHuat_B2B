@@ -14,7 +14,7 @@ import {
   withoutEnquiryClaims, withoutKeptLineClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
-import { codePattern, customerChose, pickEvidence, same } from "./picks";
+import { codePattern, pickEvidence, same, turnChooser, type Chooser } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, errorCode, keepBest, lookupDetails, runTool, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -62,7 +62,7 @@ const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty me
 const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
 const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says the enquiry changed (or will change), but no update_enquiry call succeeded for that item in this turn. Call update_enquiry only for exactly what the customer picked and the number they typed; otherwise answer without saying it changed.";
-// Conditional: the typed number may be for another item (review of V6).
+// Conditional: the number the customer typed may be for another item.
 const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add. If the customer typed how many of this product, call update_enquiry now; otherwise ask how many, once.";
 const ASK_NOTE = "[Context from the system, not the customer] update_enquiry needs a number the customer types for this item: ask how many, once. No more tools this turn.";
 const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry refused this product again: the customer's words don't show they picked it. No more tools this turn: ask one short question naming it with its code, with its card attached, or ask which of the likely cards they mean.";
@@ -262,7 +262,7 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
  * 13.4 s). Errors another call can fix (OVER_STOCK, UNIT_MISMATCH, a missing stock_id, a quantity sent in pieces for cartons)
  * leave the tools on, and so does any other tool call in the round.
  */
-function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: ReadonlySet<string>): "which" | "ask" | null {
+function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: ReadonlySet<string>, chooses: Chooser): "which" | "ask" | null {
   if (!done.length || done.some((call) => call.name !== "update_enquiry" || !call.error)) return null;
   const fields = (call: ToolCallDone) => call.input as { action?: unknown; stock_id?: unknown; quantity?: unknown };
   const code = (call: ToolCallDone) => {
@@ -271,7 +271,7 @@ function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: Readonl
   };
   if (done.every((call) => call.error === "PRODUCT_NOT_CHOSEN" && refusedBefore.has(code(call)))) return "which";
   // Quantity 0 fails the input check before the pick check: "how many?" is only asked about a product the customer picked.
-  const chosen = (call: ToolCallDone) => customerChose(code(call), null, ctx.picks, ctx.lines.map((line) => line.code));
+  const chosen = (call: ToolCallDone) => chooses(code(call), null, ctx.lines.map((line) => line.code));
   const needsNumber = (call: ToolCallDone) => {
     const { action, quantity } = fields(call);
     const noNumber = !(Number.isInteger(quantity) && (quantity as number) > 0);
@@ -308,6 +308,8 @@ export async function runAgentTurn(input: {
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const recent = recentCustomerTexts(request);
   const picks = pickEvidence(request.history, request.event);
+  // Every pick check this turn shares one cache: the permission checks try each product with every typed number.
+  const chooses = turnChooser(picks);
   const currentText = request.event.type === "text" && !request.event.chip ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   // "same qty" reuses the one number typed a few messages back, so every quantity check sees it (owner question 4).
   const sameQty = sameQuantityText(currentText, picks.texts.filter((text) => !text.chip).map((text) => text.text));
@@ -325,6 +327,7 @@ export async function runAgentTurn(input: {
     shownIds: new Set(request.shownProductIds),
     picks,
     searches: [],
+    refused: [],
   };
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   const earlier: EarlierTurns = {
@@ -346,14 +349,15 @@ export async function runAgentTurn(input: {
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
-    // At most 8, the newest text's first: each one is a full pick check, run in every review (real turns had at most 10).
+    // At most 8, the newest text's first: each one is a pick check, run in every review (real turns had at most 10).
     const typedNumbers = [...new Set(ctx.customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => n > 0 && n <= 100_000).slice(0, 8);
     // A product the customer picked, with or without one of the numbers they typed: a permission question about it is the ruled-out confirm step.
-    const picked = (code: string) => [null, ...typedNumbers].some((quantity) => customerChose(code, quantity, ctx.picks, ctx.lines.map((line) => line.code)));
-    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked, kept: ctx.uncheckedCodes });
-    // The nudge is decided before attachEarlierCards looks up a re-attached card, so it gets the earlier replies' cards too: an
-    // unknown card would count as the confirm step (exam 3, c09-stress T1, with a number typed).
+    const picked = (code: string) => [null, ...typedNumbers].some((quantity) => chooses(code, quantity, ctx.lines.map((line) => line.code)));
+    // The nudge is decided before attachEarlierCards looks up a re-attached card, and a reply may name an earlier card without
+    // attaching it, so the nudge and the review both get the earlier replies' cards: an unknown card would count as the confirm
+    // step (exam 3, c09-stress T1).
     const earlierCards = picks.replies.flatMap((reply) => reply.cards);
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused, picked, earlierCards, unchecked: ctx.uncheckedCodes });
     let nudged = false;
     // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
     const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
@@ -374,10 +378,10 @@ export async function runAgentTurn(input: {
       rounds += 1;
       const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", deadline);
       if (response.stop_reason === "tool_use") {
-        const refusedBefore = new Set((ctx.refused ?? []).map((code) => code.toLowerCase()));
+        const refusedBefore = new Set(ctx.refused.map((code) => code.toLowerCase()));
         const { results, done } = await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline);
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
-        stopped = stopped ?? stopNote(done, ctx, refusedBefore);
+        stopped = stopped ?? stopNote(done, ctx, refusedBefore, chooses);
         continue;
       }
       const final = readFinal(response);
@@ -385,7 +389,7 @@ export async function runAgentTurn(input: {
       // c08-persona T8) or on a thank-you or a paced list. A permission question is nudged only when it is the confirm step and the
       // customer typed a number: without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer.
       // Safe only because update_enquiry checks the pick and the typed number.
-      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused?.length;
+      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused.length;
       const nudge = !final || !toolsLeft ? null
         : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
         : asksConfirmStep(final, ctx.seen, picked, earlierCards) && statesAnyQuantity(ctx.customerTexts) ? PERMISSION_NUDGE : null;
@@ -471,8 +475,12 @@ export async function runAgentTurn(input: {
       final = finish(final, review);
     }
 
-    // The chat's item codes, so a code that fits the phone pattern isn't taken for a phone number (exam 3, c05-persona T10).
-    const chatCodes = [...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...ctx.shownIds, ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code))];
+    // The chat's item codes, so a code that fits the phone pattern isn't taken for a phone number (exam 3, c05-persona T10); the
+    // customer's enquiry codes too, as a line that couldn't be looked up this turn is named nowhere else.
+    const chatCodes = [
+      ...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...request.enquiry.map((line) => line.stockId), ...ctx.shownIds,
+      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)),
+    ];
     const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact), chatCodes);
     // Codes and counts only, never customer or reply text. The session's tail and the cards' code:status:qty let the exam match
     // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).

@@ -79,23 +79,10 @@ function measures(text: string) {
   return found;
 }
 
-// A price that picks a card: "the $5 one", "the 5 dollar one", "the 1.2k one". Never "budget 5 dollar only" or "below 1k".
-const pricePick = /(?:S?\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(k)?|(?<![\w.])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:(k)|\s?(?:dollars?|bucks|sgd)))\s?(?:la|lah)?\s?(?:one|ones|de)\b/gi;
-
-/** "5 dollar" fits $5.00-$5.99 or what rounds to $5; "5.41" fits only $5.41; "1.2k" fits $1,150-$1,249.99. */
-function priceFits(price: number, text: string) {
-  return [...text.matchAll(pricePick)].some((match) => {
-    const raw = (match[1] ?? match[3]).replace(/,/g, "");
-    const thousands = Boolean(match[2] ?? match[4]);
-    const value = Number(raw) * (thousands ? 1000 : 1);
-    const step = (thousands ? 1000 : 1) / 10 ** (raw.split(".")[1]?.length ?? 0);
-    return (!thousands && step === 1 && Math.floor(price) === value) || Math.abs(price - value) < step / 2;
-  });
-}
-
-// A price with the card's own name words before "one" ("the 7 dollar shibazi one", exam 3 c08-stress T6) or right before a
-// word of its name ("the 2 dollar skimmer", c06-persona T8). "3 dollar plus", "$3+" and "3 dollar something" mean $3.00-$3.99
-// (c10-stress T5); a bare "the 3 plus one" may be a count, so it needs the $ or dollar word.
+// A price that picks a card: "the $5 one", "the 5 dollar one", "the 1.2k one", with the card's own name words before "one" ("the
+// 7 dollar shibazi one", exam 3 c08-stress T6) or right before a word of its name ("the 2 dollar skimmer", c06-persona T8). Never
+// a budget ("budget 5 dollar only", "below 5 dollar one", "below 1k"). "3 dollar plus", "$3+" and "3 dollar something" mean
+// $3.00-$3.99 (c10-stress T5); a bare "the 3 plus one" may be a count, so it needs the $ or dollar word.
 const priceWord = /(?:S?\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(k)?|(?<![\w.])(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:(k)|\s?(?:dollars?|bucks|sgd)))(\s*(?:\+|plus\b|something\b))?((?:\s+\p{L}+){0,3})/giu;
 const budgetBefore = /\b(?:below|under|within|budget|less than|max|maximum|around|about|cheaper than|than|over|above)\s*$/i;
 const priceFiller = /^(?:la|lah|lor|the|that|tat|one|ones|de)$/;
@@ -120,7 +107,7 @@ function priceMentions(text: string, card: ShownCard) {
   return found;
 }
 
-/** Like priceFits, for a price given with the card's name words. */
+/** "5 dollar" fits $5.00-$5.99 or what rounds to $5; "5.41" fits only $5.41; "1.2k" fits $1,150-$1,249.99. */
 function namedPriceFits(price: number, text: string, card: ShownCard) {
   return priceMentions(text, card).some(({ value, step, plus, thousands }) => (plus ? price >= value && price < value + (thousands ? 1000 : 1)
     : (!thousands && step === 1 && Math.floor(price) === value) || Math.abs(price - value) < step / 2));
@@ -156,7 +143,7 @@ export function hits(card: ShownCard, text: string) {
   for (const word of words) if (startsAWord(lower, word)) found.add(word);
   const typed = measures(text);
   for (const size of sizes) if (typed.has(size)) found.add(size);
-  if (card.price !== null && (priceFits(card.price, text) || namedPriceFits(card.price, text, card))) found.add("$price");
+  if (card.price !== null && namedPriceFits(card.price, text, card)) found.add("$price");
   return found;
 }
 
@@ -419,6 +406,17 @@ function tapVoided(tap: PickTap, picks: PickEvidence) {
  */
 export function customerChose(stockId: string, quantity: number | null, picks: PickEvidence, lineCodes: string[]) {
   return chose(stockId, quantity, picks, lineCodes, new Map());
+}
+
+export type Chooser = (stockId: string, quantity: number | null, lineCodes: string[]) => boolean;
+/**
+ * customerChose for one turn's checks, sharing one cache as pickedCodes does: nothing it holds depends on the code or the
+ * quantity. The loop tries each product a permission question names with every typed number, and with a cache per check a
+ * crafted history held one turn for 8 s.
+ */
+export function turnChooser(picks: PickEvidence): Chooser {
+  const pointing: Pointing = new Map();
+  return (stockId: string, quantity: number | null, lineCodes: string[]) => chose(stockId, quantity, picks, lineCodes, pointing);
 }
 
 function chose(stockId: string, quantity: number | null, picks: PickEvidence, lineCodes: string[], pointing: Pointing) {

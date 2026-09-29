@@ -929,6 +929,27 @@ test("a permission question after two long messages full of numbers is reviewed 
   assert.ok(performance.now() - started < 1_500, `took ${Math.round(performance.now() - started)} ms`);
 });
 
+test("a permission question after a crafted history of long refusal texts is reviewed quickly", async () => {
+  // Card names and texts come from the client: each product the question is about was checked with every typed number, each
+  // check reading every text's clauses again, and one turn held the server for 8 s.
+  const name = (n: number) => `Stainless Steel Utility Tong With Locking Ring ${n} inch Heavy Duty Porcelain Plate Bowl Cup Scissors Knife ${n}cm ${"Word".repeat(3)} `.repeat(3).slice(0, 190);
+  const long = (seed: number, max: number) => {
+    let out = "";
+    for (let i = 0; out.length < max; i += 1) out += i % 2 ? `take the cheapest tong ${seed * 1000 + i}, ` : `no spoon ${seed * 1000 + i}, take ${i % 9 + 1} z${seed}${i}, no q${seed}${i}, `;
+    return out.slice(0, max);
+  };
+  const history = Array.from({ length: 15 }, (_, r) => {
+    const cards = Array.from({ length: 5 }, (_, i) => product({ stock_id: `C-${r * 5 + i}`, name: name(r * 5 + i), list_price: 3 + ((r * 5 + i + 1) % 7) }));
+    return [{ role: "user" as const, content: long(r, 1990) }, { role: "assistant" as const, content: `How many do you need?${cardsNote(cards)}`.slice(0, 2000) }];
+  }).flat();
+  const message = "Both are gas torches. Shall I add 2 of these?";
+  const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), ...Array.from({ length: 3 }, () => answer({ message, card_ids: ["970S", "BTS-8026D"] }))]);
+  const started = performance.now();
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: long(99, 1990) }, history }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.ok(performance.now() - started < 2_000, `took ${Math.round(performance.now() - started)} ms`);
+});
+
 test("a false add claim that survives the nudge and the repair is replaced", async () => {
   const claim = answer({ message: "Added: 2 torches. Anything else?" });
   const { client, bodies } = fakeClient([claim, claim, claim]);
@@ -1189,10 +1210,10 @@ test("a link from a tool result or already in the chat is sent as it is", async 
 
 const choice = (body: Anthropic.MessageCreateParamsNonStreaming) => (body.tool_choice as { type: string }).type;
 const lastMessage = (body: Anthropic.MessageCreateParamsNonStreaming) => JSON.stringify(body.messages.at(-1));
-const ASK_NOTE = /update_enquiry needs a number the customer types for this item: ask how many, once\. No more tools this turn\./;
+const ASK_NOTE = /update_enquiry needs a number the customer types for this item/;
 const WHICH_NOTE = /update_enquiry refused this product again/;
 const LIST_NOTE = /That's all the lookups for this list this turn/;
-const PERMISSION_NUDGE = /If the customer typed how many of this product, call update_enquiry now; otherwise ask how many, once\./;
+const PERMISSION_NUDGE = /If the customer typed how many of this product/;
 
 /** One update_enquiry call after the torch card, then Claude's answer: the second call's tool choice and whether it asks for a number. */
 async function afterUpdate(text: string, input: unknown, live: Parameters<typeof fakeDeps>[1] = {}) {
@@ -1340,15 +1361,20 @@ test("a recommendation that offers to add a product the customer hasn't picked i
   // exam 3, c09-stress T1: the permission nudge turned "which one is better?" into "How many Safico tongs do you need?".
   const message = "For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?";
   // Also with a number typed: the nudge is decided before the earlier card is looked up again, so it must know that card too.
-  for (const text of ["which one is better for cooking?", "which one better for cooking? need 10", "need 2 pcs. which one more suitable for cooking"]) {
-    const { client, bodies } = fakeClient([answer({ message, card_ids: ["BTS-8026D"] })]);
-    const reply = await runAgentTurn({
-      request: request({ event: { type: "text", text }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
-      deps: deps(), client, model: "claude-sonnet-5",
-    });
-    assert.equal(bodies.length, 1, text);
-    assert.equal(reply.message, message, text);
-    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["BTS-8026D"], text);
+  // With no card attached and nothing looked up, the nudge and the review both judge it by the earlier cards: an unknown product
+  // counted as the confirm step, and the repair turned it into "How many do you need?".
+  for (const cardIds of [["BTS-8026D"], []]) {
+    for (const text of ["which one is better for cooking?", "which one better for cooking? need 10", "need 2 pcs. which one more suitable for cooking"]) {
+      const { client, bodies } = fakeClient([answer({ message, card_ids: cardIds }), answer({ message: "How many do you need?" })]);
+      const reply = await runAgentTurn({
+        request: request({ event: { type: "text", text }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+        deps: deps(), client, model: "claude-sonnet-5",
+      });
+      const label = `${text} ${cardIds.length}`;
+      assert.equal(bodies.length, 1, label);
+      assert.equal(reply.message, message, label);
+      assert.deepEqual(reply.cards.map((card) => card.stock_id), cardIds, label);
+    }
   }
 });
 
@@ -1421,4 +1447,16 @@ test("a reply saying an unchecked line was removed is repaired, then fixed with 
     assert.equal(reply.message, "SB3027 is still on your enquiry. Yes, each product's store page has Add to Cart.", failing);
     assert.deepEqual(reply.enquiry.unchecked, ["SB3027"]);
   }
+});
+
+test("a code on the customer's enquiry that fits the phone pattern is never taken for a phone number", async () => {
+  // A Patra code (3500-xxxx) fits the phone pattern; its line couldn't be looked up this turn, so only the enquiry names it.
+  const plate = product({ stock_id: "3500-0018", name: "Patra Rim Plate 18cm", list_price: 4 });
+  const deps = fakeDeps([plate, blowtorch]);
+  deps.findByCode = (code) => (code === "3500-0018" ? Promise.reject(new Error("SUPABASE_PRODUCT_500")) : Promise.resolve(blowtorch));
+  const claim = answer({ message: "Sorry, an earlier step removed your 3500-0018 line. Yes, each product's store page has Add to Cart." });
+  const { client } = fakeClient([claim, claim]);
+  const reply = await runAgentTurn({ request: { ...scissorsUnchecked, enquiry: [{ stockId: "3500-0018", quantity: 2 }, { stockId: "970S", quantity: 3 }] }, deps, client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.enquiry.unchecked, ["3500-0018"]);
+  assert.equal(reply.message, "3500-0018 is still on your enquiry. Yes, each product's store page has Add to Cart.");
 });

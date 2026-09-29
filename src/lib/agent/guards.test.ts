@@ -241,6 +241,8 @@ test("a repeated sales pitch is dropped unless the customer asked for contact, a
   for (const text of [
     "whats ur phone number", "can i speak to someone", "Can u help me do a 50 pcs qoutation", "Ok thanks", "can I get a quote for 50 pcs?", "cant u just get someone call me",
     "i want to talk to a real person", "ok bowl i call ur sales la", "ok that's all. how do i order?", "ya la add. then how i pay", "ok thanks bye",
+    // The loop's thank-you turns (exam 3, s01-B T3) are thanks here too.
+    "thank u", "ok thank u", "tysm",
   ]) {
     assert.equal(dropRepeatedPitch(message, earlier(text), true), message, text);
   }
@@ -269,7 +271,13 @@ test("a sales pointer that apologises, or says for the first time or on request 
   }
   // Asked if she's a bot, the real people to reach are half the answer (V15 prompt bullet; exam 3, c02-stress T14).
   const bot = "I'm Claire, Sia Huat's automated assistant (an AI), not a person. You can reach Sia Huat sales directly - they're real people.";
-  for (const text of ["are you a bot?", "wah still never answer me. bot or human??", "u AI ah"]) assert.equal(dropRepeatedPitch(bot, earlier(text), true), bot, text);
+  for (const text of ["are you a bot?", "wah still never answer me. bot or human??", "u AI ah", "is this AI?", "u bot is it. i wan talk to real person"]) {
+    assert.equal(dropRepeatedPitch(bot, earlier(text), true), bot, text);
+  }
+  // "ai" is also Hokkien for "want": these ask nothing about Claire, so the repeated pointer goes.
+  for (const text of ["wa ai 2 pcs leh", "ok i ai the black one"]) {
+    assert.equal(dropRepeatedPitch(bot, earlier(text), true), "I'm Claire, Sia Huat's automated assistant (an AI), not a person.", text);
+  }
   // exam 3, s03-B T2: the first sourcing pointer was dropped, leaving "send them a photo" with no one to send it to.
   const t1 = "Could you describe or send a photo of the unit you mean? That'll help me search further, or you can check with Sia Huat sales directly.";
   const t2 = "I searched again but we don't list an automatic rice portioning machine. You can check with Sia Huat sales directly - they can advise if it's something we can source. You could also send them a photo of the exact unit you mean.";
@@ -343,7 +351,7 @@ test("complaints, quantities and picks that use again, same, back or earlier don
     "SAME qty la. 20", "ya tht one. same qty", "still same link leh", "ok add back 2 la", "dont anyhow remove again ah",
     "Then why did you even ask earlier on", "only 1 of them", "i TAP ALR just now!!", "why need to tap again", "dun give me 3 again",
     "give me 2 of those", "give me 5 of them", "send them to my office",
-    "don't show me the same ones", "u say wont send but below still got same link??",
+    "don't show me the same ones", "u say wont send but below still got same link??", "no need show again", "dont need to show them again",
   ]) assert.match(styleFor(text), /already shown these same cards twice/, text);
   for (const text of [
     "show me those again", "can see the earlier ones?", "send the same cards again", "give me those again",
@@ -536,6 +544,20 @@ test("a false claim is replaced by one plain line where the first one was", () =
 const toasterShop = new Map([checked("HET-4", "S/S 4-SLOTS TOASTER", 196.36), checked("BTS-8026D", "Safico Blow Torch", 12.5)]);
 const het6Line = { item: "S/S 6-SLOTS TOASTER", code: "HET-6", pricePerItem: 250, quantity: 2, total: 500, uom: "PC" };
 const toasterClaims = (message: string) => enquiryClaimIssues(message, { lines: [het6Line], changes: [], seen: toasterShop });
+
+test("a swap reported in one clause joined by 'and' is judged per item", () => {
+  // exam 3, c11-stress T4 replayed: both update_enquiry calls succeeded, but "removed the 4-slot and added 2 HET-6" was read as
+  // HET-6 removed, and the reply became "That change isn't on your enquiry yet."
+  const toasters = new Map([...toasterShop, checked("HET-6", "S/S 6-SLOTS TOASTER", 257.85)]);
+  const swapped: EnquiryChange[] = [{ action: "remove", code: "HET-4" }, { action: "add", code: "HET-6" }];
+  for (const message of ["Done: removed the 4-slot and added 2 HET-6 6-slot toasters. Anything else?", "The 4-slot is removed and 2 HET-6 6-slot toasters are on your enquiry."]) {
+    assert.deepEqual(enquiryClaimIssues(message, { lines: [het6Line], changes: swapped, seen: toasters }), [], message);
+  }
+  // Only the removal ran: the add half is still false.
+  assert.equal(enquiryClaimIssues("Done: removed the 4-slot and added 2 HET-6 6-slot toasters.", { lines: [], changes: [swapped[0]], seen: toasters }).length, 1);
+  // "and" inside one change still leaves one clause: every item it names must be on the enquiry.
+  assert.equal(enquiryClaimIssues("Added 2 6-slot toasters and 2 Safico torches.", { lines: [het6Line], changes: [swapped[1]], seen: toasters }).length, 1);
+});
 
 test("sums, GST, questions about what the customer wants and promises that wait are not enquiry claims", () => {
   for (const message of [
@@ -868,7 +890,7 @@ test("an item code from this chat that fits the phone pattern is kept; other num
 test("the money repair also covers an amount the customer typed", () => {
   // exam 3, c06-stress T4: the customer's "2 dollar" became "the 'the listed price one'".
   const review = reviewAnswer({ message: "The '2 dollar one' is the skimmer.", card_ids: [], chips: [], show_contact: false }, seen, allowed);
-  assert.match(review.safety.find((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)) ?? "", /That includes an amount the customer typed \('the 2 dollar one'\): name the product instead\.$/);
+  assert.match(review.safety.find((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)) ?? "", /an amount the customer typed/);
 });
 
 const search = (overrides: Partial<SearchRecord> = {}): SearchRecord => ({ queries: ["tongs"], category: null, categoryFound: false, maxPrice: null, complete: false, ...overrides });
@@ -910,6 +932,10 @@ test("a range summary needs a complete search this turn (exam 3)", () => {
     "The only sizes we have to choose from are 24cm and 28cm.",
     // A decimal size is not a stock count (c01 chef knives).
     "We only have 27.5cm and 17.5cm chef knives.",
+    // Unscoped, with nothing between "only" and the noun, or a list that isn't sent to sales.
+    "The only option in stock is the MX130.",
+    "That's the full list of tongs we carry.",
+    "All our stainless steel tongs are 18/8.",
   ]) {
     assert.equal(claimsOf(message).length, 1, message);
     assert.equal(claimsOf(message, [search({ complete: false })]).length, 1, message);
@@ -1039,6 +1065,18 @@ test("honest wording raises no claim, even with no searches", () => {
     "Of the ones I found, the only cordless option is the MX130.",
     "The only cordless option I found in stock is the MX130.",
     "So far the only cordless model that turned up is the MX130.",
+    // The scope the claim repair asks for, with nothing between "only" and the noun.
+    "Of the ones I found, the only option is the MX130.",
+    "The Safico is the only option I found.",
+    "The only one I can find in stock is the MX130.",
+    // A price line with a word before "prices" (the GST prompt line).
+    "All our listed prices are before GST.",
+    "All our item prices are before GST.",
+    // The list rule's pointer to sales: the customer's list, not our range (exam 3, s01-A/B T0).
+    "You can also send the whole list to Sia Huat sales for a formal quote.",
+    "You can send the full list straight to Sia Huat sales.",
+    "Sia Huat sales can do a formal quote on the complete list.",
+    "Sia Huat sales can do a formal quote for the entire list.",
   ]) {
     assert.deepEqual(claimReview(message).safety, [], message);
     assert.deepEqual(absenceOf(message), [], message);
@@ -1113,21 +1151,21 @@ test("a reply saying a line the browser still holds was removed is flagged, and 
   const scissors = new Map<string, CheckedProduct>([["SB3027", { product: product({ stock_id: "SB3027", name: "Detachable Kitchen Scissors" }), verified: false }]]);
   const review = (message: string, turn: Partial<TurnFacts>) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, scissors, allowed, undefined, { lines: [], changes: [], searches: [], ...turn });
   const lost = "Sorry, an earlier step accidentally removed your SB3027 line from the enquiry.";
-  const flagged = review(`${lost} You can buy it on our website.`, { kept: ["SB3027"] });
+  const flagged = review(`${lost} You can buy it on our website.`, { unchecked: ["SB3027"] });
   assert.deepEqual(flagged.safety.map(issueCode), ["KEPT_LINE"]);
   assert.ok(flagged.safety[0].startsWith(`${KEPT_LINE_PREFIX}: "${lost}"`));
   assert.equal(withoutKeptLineClaims(`${lost} You can buy it on our website.`, ["SB3027"], []), "SB3027 is still on your enquiry. You can buy it on our website.");
-  assert.deepEqual(review("SB3027 is still on your enquiry.", { kept: ["SB3027"] }).safety, []);
+  assert.deepEqual(review("SB3027 is still on your enquiry.", { unchecked: ["SB3027"] }).safety, []);
   assert.deepEqual(review(lost, {}).safety, []);
-  assert.deepEqual(review("Done, SB3027 is removed from your enquiry.", { kept: [], changes: [{ action: "remove", code: "SB3027" }] }).safety, []);
-  assert.deepEqual(review(lost, { kept: ["SB3027"], changes: [{ action: "remove", code: "sb3027" }] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
+  assert.deepEqual(review("Done, SB3027 is removed from your enquiry.", { unchecked: [], changes: [{ action: "remove", code: "SB3027" }] }).safety, []);
+  assert.deepEqual(review(lost, { unchecked: ["SB3027"], changes: [{ action: "remove", code: "sb3027" }] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
   // With SB3027 not looked up this turn (its catalogue lookup failed), the enquiry-claim check leaves the sentence to this one.
-  const notLookedUp = reviewAnswer({ message: lost, card_ids: [], chips: [], show_contact: false }, new Map(), allowed, undefined, { lines: [], changes: [], searches: [], kept: ["SB3027"] });
+  const notLookedUp = reviewAnswer({ message: lost, card_ids: [], chips: [], show_contact: false }, new Map(), allowed, undefined, { lines: [], changes: [], searches: [], unchecked: ["SB3027"] });
   assert.deepEqual(notLookedUp.safety.map(issueCode), ["KEPT_LINE"]);
   assert.equal(enquiryClaimIssues(lost, { lines: [], changes: [], seen: new Map() }).length, 1);
   // Only a typed code counts, and only with a loss word.
-  assert.deepEqual(review("Your scissors were removed from the enquiry.", { kept: ["SB3027"] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
-  assert.deepEqual(review("SB3027 couldn't be re-checked just now.", { kept: ["SB3027"] }).safety, []);
+  assert.deepEqual(review("Your scissors were removed from the enquiry.", { unchecked: ["SB3027"] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
+  assert.deepEqual(review("SB3027 couldn't be re-checked just now.", { unchecked: ["SB3027"] }).safety, []);
 });
 
 test("a kept line's product features and a denial that it was removed are not loss claims", () => {

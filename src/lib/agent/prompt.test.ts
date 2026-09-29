@@ -19,7 +19,8 @@ test("Claire summarises the enquiry in one line instead of listing it", () => {
 test("Claire quotes the enquiry totals from the context, says they are before GST and never works out a GST amount", () => {
   // exam 3, c09-persona T9-T12 and c10-stress T8-T10: the total with GST was refused again and again. Until the owner approves
   // a computed estimate, Claire says the checkout shows it, once.
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("that a tool did not return in this turn; the totals in the Current enquiry context count, so quote them without a tool call."));
+  // Not while it lists unchecked lines: those totals leave them out (the unchecked note says not to quote a total).
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("that a tool did not return in this turn; the totals in the Current enquiry context count, so quote them without a tool call, unless it lists unchecked lines."));
   const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- GST:")) ?? "";
   assert.ok(line.startsWith("- GST: prices, line totals and the enquiry total are before GST; 9% GST is added at checkout."));
   assert.ok(line.includes("Don't work out an amount with GST yourself"));
@@ -92,6 +93,8 @@ test("after a PRODUCT_NOT_CHOSEN refusal Claire stops retrying and asks one ques
   assert.ok(CLAIRE_AGENT_PROMPT.includes("(\"Is it the <name> <code>?\")"));
   assert.ok(!CLAIRE_AGENT_PROMPT.includes("show the likely cards and ask which one"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say the system needs a tap"));
+  // Only the product they mean: another card they tapped earlier would take the number typed for this one.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("if its picked list names the product they mean, that one may be added"));
 });
 
 test("Claire asks how many only after a pick, and answers a which-one question before letting them pick", () => {

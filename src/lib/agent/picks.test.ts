@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ShownCard } from "./contract";
-import { customerChose, hits, pickEvidence, pickedCodes, pointedCards, type PickEvidence, type PickReply, type PickTap, type PickText } from "./picks";
+import { customerChose, hits, pickEvidence, pickedCodes, pointedCards, turnChooser, type PickEvidence, type PickReply, type PickTap, type PickText } from "./picks";
 
 const card = (code: string, name: string, price: number | null = 10): ShownCard => ({ code, name, price, link: null });
 const reply = (cards: ShownCard[], text = "Here you go."): PickReply => ({ cards, text });
@@ -467,6 +467,10 @@ test("a price picks with the card's own name words before 'one' or right after i
   assert.equal(chose("2564L", 3, t5), true);
   for (const code of ["UT16HR", "JQ-OT113", "36670", "34471"]) assert.equal(chose(code, 3, t5), false, code);
   assert.equal(chose("P-24", 2, { texts: [said("i pay 5 dollar for one also can, 2 pcs", 1)], replies: [reply([plate24, plate27, plate30])] }), false);
+  // A budget before "the 5 dollar one" form is no pick of the $5.29 card either.
+  const twoSkimmers = [reply([card("A1", "Round Skimmer 10cm", 5.29), card("B2", "Square Skimmer 12cm", 3.1)])];
+  for (const text of ["i want below 5 dollar one, 2 pcs", "budget 5 dollar one, 2 pcs"]) assert.equal(chose("A1", 2, { texts: [said(text, 1)], replies: twoSkimmers }), false, text);
+  assert.equal(chose("A1", 2, { texts: [said("i want the 5 dollar one, 2 pcs", 1)], replies: twoSkimmers }), true);
 });
 
 test("when several cards fit a typed price, only those whose price rounds to it keep it, and a tie picks none (exam 3, c06-stress T4)", () => {
@@ -696,6 +700,24 @@ test("distinct refusal clauses between distinct cheap or numbered picks in long 
   customerChose("C-3", 2, picks, []);
   const took = performance.now() - start;
   assert.ok(took < 2_000, `took ${Math.round(took)} ms`);
+  // A turn tries each product a permission question names with every number typed: 3 codes x 9 quantities once took 5.7 s.
+  const chooses = turnChooser(picks);
+  const began = performance.now();
+  for (const code of ["C-3", "C-41", "C-72"]) for (const quantity of [null, 1, 2, 3, 4, 5, 6, 7, 8]) chooses(code, quantity, []);
+  const tookTurn = performance.now() - began;
+  assert.ok(tookTurn < 2_000, `took ${Math.round(tookTurn)} ms`);
+});
+
+test("a turn's shared pick check gives the same answers as customerChose", () => {
+  const scissorSets = [greeting, reply([card("ST-26", "-TS- S/S KITCHEN SCISSOR 20cm, JPN", 15.5), atlantic]), reply([shibazi, shibaziDetachable, zebra]), reply([shibazi], "Got it: 3 added. Anything else?"),
+    reply([shibaziDetachable], "Just to confirm - this is the SB3027 Shibazi Detachable Household Kitchen Scissors, 20.5cm, at $10.00. Is this the one you mean?")];
+  const picks: PickEvidence = { taps: [tap("9300T01", 2, 3)], texts: [said("ok add the detachable one also, 2. no zebra", 5, 0), said("the cheapest one la, 3 pcs", 3, 1), said("scissors", 1, 2)], replies: scissorSets };
+  const chooses = turnChooser(picks);
+  for (const code of ["ST-26", "9300T01", "SB3038", "SB3027", "993-003-RD"]) {
+    for (const quantity of [null, 2, 3]) {
+      for (const lines of [[], ["SB3038"]]) assert.equal(chooses(code, quantity, lines), customerChose(code, quantity, picks, lines), `${code} ${quantity} ${lines}`);
+    }
+  }
 });
 
 test("'2 or 3 in total' is no 2in size; '4 or 6 inch' and '4 or 6 slots' still are", () => {
