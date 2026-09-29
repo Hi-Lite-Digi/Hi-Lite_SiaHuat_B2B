@@ -536,10 +536,12 @@ export function reviewAnswer(
   if (said.some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
   // A card the reply needs is not a loop: one update_enquiry refused as not picked, or the one card a question names ("Is it the
   // Zyliss E910076?", "How many of the HET-4?"); the customer's yes or number picks it only while it is shown (exam 3: c08-persona T8,
-  // c11-stress T7-T8, c02-B T13). A generic "Anything else?" doesn't name it, so it doesn't need the card a third time.
+  // c11-stress T7-T8, c02-B T13). The card may be named in the sentence before ("The HET-4 is in stock. How many do you need?", c04-B
+  // T5), but a generic "Anything else?" doesn't ask about it, so it doesn't need the card a third time.
   const refused = turn.refused ?? [];
   const needed = cards.some((card) => refused.some((code) => same(code, card.stock_id)))
-    || (cards.length === 1 && said.some((s) => /[?？]$/.test(s) && pointedBy(s, [{ code: cards[0].stock_id, name: cards[0].name, price: null, link: null }]).length > 0));
+    || (cards.length === 1 && pointedBy(answer.message, [{ code: cards[0].stock_id, name: cards[0].name, price: null, link: null }]).length > 0
+      && said.some((s) => /[?？]$/.test(s) && !genericAsk.test(s)));
   style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length), needed));
   style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };

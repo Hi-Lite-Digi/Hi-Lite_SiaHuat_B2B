@@ -160,8 +160,10 @@ test("a card update_enquiry refused, or the one card a question names, is not a 
   assert.equal(repeats("This one is stainless steel.", ["E910076"], { refused: ["e910076"] }), false);
   assert.equal(repeats("Is it the Zyliss E910076?", ["E910076"]), false);
   assert.equal(repeats("You mean the Zyliss scissors? How many do you need?", ["E910076"]), false);
+  // The card named in the sentence before a how-many question (exam 3: c11-stress T7, c04-B T5).
+  assert.equal(repeats("The Zyliss scissors are in stock. How many do you need?", ["E910076"]), false);
   assert.equal(repeats("Here are the Zyliss scissors again.", ["E910076"]), true);
-  // Only a question that names the card needs it: a generic closer doesn't.
+  // A generic closer doesn't need the card.
   assert.equal(repeats("Here are the Zyliss scissors again. Need anything else?", ["E910076"]), true);
   assert.equal(repeats("Which one would you like?", ["E910076", "E910077", "BTS-8026D"]), true);
 });
