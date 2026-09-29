@@ -357,7 +357,9 @@ export function withoutEnquiryClaims(message: string, facts: ClaimFacts) {
 }
 
 export const KEPT_LINE_PREFIX = "This line is still on the enquiry";
-const lostWording = /\b(?:removed|dropped|lost|missing|deleted|no longer (?:on|in)|not (?:on|in) (?:your|the) enquiry)\b/i;
+const lostWording = /\b(?:removed|dropped|lost|missing|deleted|no longer (?:on|in)|(?:not|isn['’]?t) (?:on|in) (?:your|the) enquiry)\b/i;
+// "wasn't removed", "has not been removed", "nothing was removed": a denial is already true.
+const deniedLoss = /\b(?:not|never|nothing|wasn['’]?t|isn['’]?t|hasn['’]?t|haven['’]?t|weren['’]?t|aren['’]?t)\s+(?:(?:been|was|were|got)\s+)?(?:removed|dropped|lost|missing|deleted)\b/gi;
 /**
  * Sentences saying a line the browser still holds (not re-checked this turn) was removed or is missing, when no remove ran for
  * it (exam 3, c08-stress T12: "an earlier step accidentally removed your SB3027 line"). Only a typed code counts.
@@ -366,7 +368,10 @@ export function keptLineClaims(message: string, kept: string[], changes: Enquiry
   const removed = (code: string) => changes.some((change) => change.action === "remove" && change.code !== null && same(change.code, code));
   return sentences(message).flatMap((sentence) => {
     const code = kept.find((item) => codePattern(item).test(sentence) && !removed(item));
-    return code && lostWording.test(sentence) && !/\bstill\b/i.test(sentence) ? [{ sentence, code }] : [];
+    // Judged without product features ("the SB3027 blades can be removed") and denials; only "still on/in" excuses a loss word,
+    // so "SB3027 is still missing" counts (review of V7).
+    const said = sentence.replace(featureWording, " ").replace(deniedLoss, " ");
+    return code && lostWording.test(said) && !/\bstill\s+(?:on|in)\b/i.test(said) ? [{ sentence, code }] : [];
   });
 }
 /** The message with each such sentence replaced by one whole sentence saying the line is still there. */
@@ -504,13 +509,19 @@ export function confirmStepAsks(message: string, replyCards: readonly ShownCard[
     return !about.length || about.some((card) => picked(card.code));
   });
 }
-/** The same for an answer, with its cards and the products looked up this turn. */
-export function asksConfirmStep(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, picked?: (code: string) => boolean) {
+/**
+ * The same for an answer, with its cards and the products looked up this turn, plus cards shown earlier that aren't looked up
+ * yet (the loop's nudge runs before a re-attached card is: unknown, it counted as the confirm step, review of V6).
+ */
+export function asksConfirmStep(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, picked?: (code: string) => boolean, earlierCards: readonly ShownCard[] = []) {
+  const looked = seenCards(seen);
+  const known = [...looked, ...earlierCards.filter((card) => !looked.some((item) => same(item.code, card.code)))];
   const replyCards = answer.card_ids.flatMap((id) => {
     const found = seen.get(id);
-    return found ? [{ code: found.product.stock_id, name: found.product.name, price: null, link: null }] : [];
+    if (found) return [{ code: found.product.stock_id, name: found.product.name, price: null, link: null }];
+    return earlierCards.filter((card) => same(card.code, id)).slice(0, 1);
   });
-  return confirmStepAsks(answer.message, replyCards, seenCards(seen), picked).length > 0;
+  return confirmStepAsks(answer.message, replyCards, known, picked).length > 0;
 }
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";

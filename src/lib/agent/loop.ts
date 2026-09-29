@@ -37,8 +37,8 @@ const EARLIER_CARD_CHECK_MS = 2_000;
 const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
 // A pasted list longer than this gets one round of lookups (exam 3, s01-B T0: 8 items ran 2-3 tool rounds and got a stand-in).
 const LIST_ITEMS_PER_TURN = 3;
-// A plain thank-you needs no lookups (exam 3, s01-B T3: 3-4 tool rounds, then a stand-in).
-const THANKS_ONLY = /^\s*(?:ok(?:ay)?[\s,]+)?(?:thanks?|thank you|thx|ty|tq)(?:\s+(?:so much|a lot|lah?|you))?[\s.!]*$/i;
+// A plain thank-you needs no lookups (exam 3, s01-B T3: 3-4 tool rounds, then a stand-in); "thank u", "tysm" and a trailing emoji too.
+const THANKS_ONLY = /^\s*(?:ok(?:ay)?[\s,.]+)?(?:thanks?|thank (?:you|u)|thx|ty|tq|tysm)(?:\s+(?:so much|a lot|lah?|you))?[\s.!\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}]*$/iu;
 
 const finalSchema: Record<string, unknown> = {
   type: "object",
@@ -62,7 +62,8 @@ const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty me
 const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
 const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says the enquiry changed (or will change), but no update_enquiry call succeeded for that item in this turn. Call update_enquiry only for exactly what the customer picked and the number they typed; otherwise answer without saying it changed.";
-const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add: the customer already picked that product and typed how many. Call update_enquiry now.";
+// Conditional: the typed number may be for another item (review of V6).
+const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add. If the customer typed how many of this product, call update_enquiry now; otherwise ask how many, once.";
 const ASK_NOTE = "[Context from the system, not the customer] update_enquiry needs a number the customer types for this item: ask how many, once. No more tools this turn.";
 const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry refused this product again: the customer's words don't show they picked it. No more tools this turn: ask one short question naming it with its code, with its card attached, or ask which of the likely cards they mean.";
 const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
@@ -269,11 +270,13 @@ function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: Readonl
     return typeof stockId === "string" ? stockId.trim().toLowerCase() : "";
   };
   if (done.every((call) => call.error === "PRODUCT_NOT_CHOSEN" && refusedBefore.has(code(call)))) return "which";
+  // Quantity 0 fails the input check before the pick check: "how many?" is only asked about a product the customer picked.
+  const chosen = (call: ToolCallDone) => customerChose(code(call), null, ctx.picks, ctx.lines.map((line) => line.code));
   const needsNumber = (call: ToolCallDone) => {
     const { action, quantity } = fields(call);
     const noNumber = !(Number.isInteger(quantity) && (quantity as number) > 0);
     return (action === "add" || action === "set") && code(call) !== ""
-      && (call.error === "QTY_NOT_STATED" || ((call.error === "MISSING_FIELDS" || call.error === "INVALID_INPUT") && noNumber));
+      && (call.error === "QTY_NOT_STATED" || ((call.error === "MISSING_FIELDS" || call.error === "INVALID_INPUT") && noNumber && chosen(call)));
   };
   return done.every(needsNumber) && !statesAnyQuantity(ctx.customerTexts) ? "ask" : null;
 }
@@ -348,6 +351,9 @@ export async function runAgentTurn(input: {
     // A product the customer picked, with or without one of the numbers they typed: a permission question about it is the ruled-out confirm step.
     const picked = (code: string) => [null, ...typedNumbers].some((quantity) => customerChose(code, quantity, ctx.picks, ctx.lines.map((line) => line.code)));
     const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked, kept: ctx.uncheckedCodes });
+    // The nudge is decided before attachEarlierCards looks up a re-attached card, so it gets the earlier replies' cards too: an
+    // unknown card would count as the confirm step (exam 3, c09-stress T1, with a number typed).
+    const earlierCards = picks.replies.flatMap((reply) => reply.cards);
     let nudged = false;
     // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
     const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
@@ -382,7 +388,7 @@ export async function runAgentTurn(input: {
       const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused?.length;
       const nudge = !final || !toolsLeft ? null
         : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
-        : asksConfirmStep(final, ctx.seen, picked) && statesAnyQuantity(ctx.customerTexts) ? PERMISSION_NUDGE : null;
+        : asksConfirmStep(final, ctx.seen, picked, earlierCards) && statesAnyQuantity(ctx.customerTexts) ? PERMISSION_NUDGE : null;
       if (nudge) {
         nudged = true;
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: nudge }] });

@@ -1162,7 +1162,7 @@ const lastMessage = (body: Anthropic.MessageCreateParamsNonStreaming) => JSON.st
 const ASK_NOTE = /update_enquiry needs a number the customer types for this item: ask how many, once\. No more tools this turn\./;
 const WHICH_NOTE = /update_enquiry refused this product again/;
 const LIST_NOTE = /That's all the lookups for this list this turn/;
-const PERMISSION_NUDGE = /typed how many\. Call update_enquiry now/;
+const PERMISSION_NUDGE = /If the customer typed how many of this product, call update_enquiry now; otherwise ask how many, once\./;
 
 /** One update_enquiry call after the torch card, then Claude's answer: the second call's tool choice and whether it asks for a number. */
 async function afterUpdate(text: string, input: unknown, live: Parameters<typeof fakeDeps>[1] = {}) {
@@ -1192,9 +1192,16 @@ test("a failed add keeps its tools when the customer typed a number or another c
   const overStock = await afterUpdate("970S 20 pcs", { action: "add", stock_id: "970S", quantity: 20 }, { "970S": { available_quantity: 5 } });
   assert.match(lastMessage(overStock.bodies[1]), /OVER_STOCK/);
   assert.equal(overStock.second, "auto");
-  const noCode = await afterUpdate("the 970S one, 2", { action: "add", quantity: 2 });
-  assert.match(lastMessage(noCode.bodies[1]), /MISSING_FIELDS/);
-  assert.equal(noCode.second, "auto");
+  // No number typed: only the missing stock_id keeps the tools on, with or without a quantity.
+  for (const input of [{ action: "add", quantity: 2 }, { action: "add" }]) {
+    const noCode = await afterUpdate("the 970S one", input);
+    assert.match(lastMessage(noCode.bodies[1]), /MISSING_FIELDS/);
+    assert.equal(noCode.second, "auto", JSON.stringify(input));
+  }
+  // Quantity 0 is refused before the pick check: for a product the customer never picked, "how many?" is not the question to ask.
+  const unpicked = await afterUpdate("the 970S one", { action: "add", stock_id: "BTS-8026D", quantity: 0 });
+  assert.match(lastMessage(unpicked.bodies[1]), /INVALID_INPUT/);
+  assert.deepEqual([unpicked.second, unpicked.asked], ["auto", false]);
 });
 
 test("the same product refused twice as not picked ends the tool rounds with one question about it", async () => {
@@ -1261,7 +1268,7 @@ test("'same qty' after switching items adds the number typed a few messages back
 
 test("a plain thank-you is answered without tools", async () => {
   // exam 3, s01-B T3: a plain "Thank you" started 3-4 tool rounds and got a stand-in reply.
-  for (const text of ["Thank you", "ok thanks", "Thanks!", "thx"]) {
+  for (const text of ["Thank you", "ok thanks", "Thanks!", "thx", "thank u", "ok. thanks", "tysm", "Thanks 😊", "thank you 🙏🏻"]) {
     const { client, bodies } = fakeClient([answer({ message: "You're welcome." })]);
     await runAgentTurn({ request: request({ event: { type: "text", text }, history: [{ role: "user", content: "torch" }, twoCardsShown] }), deps: deps(), client, model: "claude-sonnet-5" });
     assert.deepEqual(bodies.map(choice), ["none"], text);
@@ -1302,14 +1309,17 @@ test("a long list gets one round of lookups, then an answer", async () => {
 test("a recommendation that offers to add a product the customer hasn't picked is sent as it is", async () => {
   // exam 3, c09-stress T1: the permission nudge turned "which one is better?" into "How many Safico tongs do you need?".
   const message = "For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?";
-  const { client, bodies } = fakeClient([answer({ message, card_ids: ["BTS-8026D"] })]);
-  const reply = await runAgentTurn({
-    request: request({ event: { type: "text", text: "which one is better for cooking?" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
-    deps: deps(), client, model: "claude-sonnet-5",
-  });
-  assert.equal(bodies.length, 1);
-  assert.equal(reply.message, message);
-  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["BTS-8026D"]);
+  // Also with a number typed: the nudge is decided before the earlier card is looked up again, so it must know that card too.
+  for (const text of ["which one is better for cooking?", "which one better for cooking? need 10", "need 2 pcs. which one more suitable for cooking"]) {
+    const { client, bodies } = fakeClient([answer({ message, card_ids: ["BTS-8026D"] })]);
+    const reply = await runAgentTurn({
+      request: request({ event: { type: "text", text }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+      deps: deps(), client, model: "claude-sonnet-5",
+    });
+    assert.equal(bodies.length, 1, text);
+    assert.equal(reply.message, message, text);
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["BTS-8026D"], text);
+  }
 });
 
 test("a permission question after the customer picked and typed a number is nudged, then added", async () => {

@@ -313,6 +313,9 @@ test("'same qty' reuses the one number the customer typed in their newest four t
   assert.equal(sameQuantityText(typed[0], [typed[0], "2 of the other one", ...typed.slice(1)]), null);
   const notSame = "not same qty ah, i tell u later";
   assert.equal(sameQuantityText(notSame, [notSame, ...typed.slice(1)]), null);
+  assert.equal(sameQuantityText("don’t same qty la", ["don’t same qty la", ...typed.slice(1)]), null);
+  // Owner question 4 covers "same qty" only: "same as before" often means the product, not the number.
+  assert.equal(sameQuantityText("same as before, the red one", ["same as before, the red one", ...typed.slice(1)]), null);
   assert.equal(sameQuantityText("ya tht one", ["ya tht one", ...typed.slice(1)]), null);
   assert.equal(sameQuantityText(null, typed), null);
   // Older than the newest four texts, the number no longer counts.
@@ -351,11 +354,19 @@ test("a live page that shows no quantity leaves the line with the browser instea
 test("clearing needs a real request to clear, not a negated or describing 'clear'", async () => {
   const deps = fakeDeps([torch]);
   const lines = [{ item: torch.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];
-  for (const text of ["clear everything", "pls clear", "can clear all?", "clear the enquiry", "Clear enquiry", "reset", "清空"]) {
+  for (const text of [
+    "clear everything", "pls clear", "can clear all?", "clear the enquiry", "Clear enquiry", "reset", "清空",
+    "clear the whole list", "clear this enquiry", "can you clear this list", "clear out everything", "ok clear lor", "can u clear?",
+  ]) {
     const cleared = await applyEnquiryAction(lines, { action: "clear" }, [text], deps);
     assert.deepEqual(cleared.ok && cleared.lines, [], text);
   }
-  for (const text of ["not clear leh", "don't clear it", "no need clear", "clear glass jar 2 pcs", "Thank you"]) {
+  // A phone keyboard types the curly apostrophe; "no need to" and "don't want to" put words between the negation and the verb.
+  for (const text of [
+    "not clear leh", "don't clear it", "no need clear", "clear glass jar 2 pcs", "Thank you", "don’t clear it", "no need to clear",
+    "i don't want to clear it", "no need to reset", "no don’t reset", "is the picture clear", "all clear", "is it clear?", "crystal clear",
+    "the instructions are clear, thanks", "are you clear?",
+  ]) {
     const refused = await applyEnquiryAction(lines, { action: "clear" }, [text], deps);
     assert.equal(refused.ok ? null : refused.error, "CLEAR_NOT_REQUESTED", text);
   }

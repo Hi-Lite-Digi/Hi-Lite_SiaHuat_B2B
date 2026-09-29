@@ -54,3 +54,9 @@ test("a pasted list's backup reply searches its first item", async () => {
   assert.equal(deps.calls[0], "search:kitchen blow torch");
   assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
 });
+
+test("labels with nothing between them don't make the backup reply search for nothing", async () => {
+  const deps = fakeDeps([torch]);
+  await buildFallbackReply({ searchText: "1) 2) kitchen blow torch", lines: [], deps });
+  assert.equal(deps.calls[0], "search:1) 2) kitchen blow torch");
+});

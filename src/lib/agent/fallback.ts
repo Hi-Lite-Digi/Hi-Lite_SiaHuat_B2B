@@ -19,7 +19,7 @@ export async function buildFallbackReply(input: { searchText: string | null; lin
   const search = input.searchText?.trim() ?? "";
   if (search.length >= 3 && !declines.test(search)) {
     // A pasted list searches its first item (exam 3, s01-B T0: its first 80 characters found a can opener and pot lids).
-    const query = (firstListItem(search) ?? search).slice(0, 80);
+    const query = (firstListItem(search) || search).slice(0, 80); // "1) 2) pot" has an empty first item
     try {
       const found = await withTimeout(retryOnce(() => input.deps.searchDirect(query, 10)), timeoutMs, null);
       const left = Math.floor(timeoutMs - (performance.now() - started));

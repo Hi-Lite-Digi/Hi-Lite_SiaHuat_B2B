@@ -5,7 +5,7 @@ import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode, keptLineClaims,
   noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
@@ -922,4 +922,17 @@ test("a reply saying a line the browser still holds was removed is flagged, and 
   // Only a typed code counts, and only with a loss word.
   assert.deepEqual(review("Your scissors were removed from the enquiry.", { kept: ["SB3027"] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
   assert.deepEqual(review("SB3027 couldn't be re-checked just now.", { kept: ["SB3027"] }).safety, []);
+});
+
+test("a kept line's product features and a denial that it was removed are not loss claims", () => {
+  const claims = (message: string) => keptLineClaims(message, ["SB3027"], []).map((claim) => claim.sentence);
+  // A fixed product fact would be lost ("SB3027 is still on your enquiry."), and a denial is already true.
+  for (const message of [
+    "The SB3027 blades can be removed for easy washing.", "SB3027 wasn't removed, it's in your enquiry bar.", "SB3027 has not been removed.",
+    "SB3027 is still on your enquiry, nothing was removed.",
+  ]) assert.deepEqual(claims(message), [], message);
+  // "still" excuses only "still on/in"; "isn't on your enquiry" is a loss claim too.
+  for (const message of ["SB3027 is still missing from your enquiry.", "SB3027 isn't on your enquiry anymore.", "SB3027 isn’t in the enquiry now."]) {
+    assert.deepEqual(claims(message), [message], message);
+  }
 });

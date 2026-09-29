@@ -97,7 +97,9 @@ export function statesAnyQuantity(customerTexts: string[]) {
   return [...numbers].some((n) => quantityStated(n, customerTexts));
 }
 
-const sameQuantity = /(?<!\b(?:not|no|dun|don'?t|diff\w*)\s+(?:the\s+)?)\bsame\s+(?:qty|quantity|amount|number|no\.?|pcs|units?)\b|\bsame\s+as\s+(?:before|just now)\b/i;
+// "same qty" only (owner question 4): "same as before" often means the product, not the number. Either apostrophe: phone
+// keyboards type "don’t".
+const sameQuantity = /(?<!\b(?:not|no|dun|don['’]?t|diff\w*)\s+(?:the\s+)?)\bsame\s+(?:qty|quantity|amount|number|no\.?|pcs|units?)\b/i;
 
 /**
  * "same qty" while switching items (owner question 4): the earlier text holding the only quantity the customer typed in their
@@ -143,9 +145,10 @@ export function unitStated(quantity: number, unit: "uom" | "carton" | "packet", 
   return quantityStated(quantity, loose);
 }
 
-// A request to clear, not "not clear leh", "don't clear it" or "clear glass jar": no negation before it, and "clear" only at the
-// end or before all/everything/it/them/my/the enquiry/a softener.
-const clearRequest = /(?<!\b(?:not|don'?t|dont|dun|no|never)\s+(?:\w+\s+)?)(?:\bclear\b(?=\s*(?:$|[.!?,]|(?:all|everything|it|them|my|the\s+(?:enquiry|list|cart|lot)|enquiry|list|cart|la|lah|pls|please)\b))|\b(?:start over|reset|remove all|delete all|cancel all|cancel everything)\b)|清空|全部取消|重新开始/i;
+// A request to clear, not "not clear leh", "don’t clear it", "no need to clear", "is the picture clear" or "clear glass jar": no
+// negation up to "no need to" before it (either apostrophe: phone keyboards type ’), and "clear" before what it clears ("all",
+// "this", "the whole list", "out everything"), or bare only at the start or after pls/can (u)/just/ok/help/to.
+const clearRequest = /(?<!\b(?:not|don['’]?t|dont|dun|no|never)\s+(?:\w+\s+)?(?:to\s+)?)(?:\bclear\s+(?:(?:out|up|off)\s+)?(?:all|everything|it|them|this|that|these|those|my|the\s+(?:(?:whole|entire)\s+)?(?:enquiry|list|cart|lot|order|quote|items?|basket|thing)|enquiry|list|cart|order|quote)\b|(?:^\s*|\b(?:pls|please|can|just|ok|okay|help|to)\s+(?:(?:u|you)\s+)?)clear\b(?=\s*(?:$|[.!?,]|(?:la|lah|lor|pls|please)\b))|\b(?:start over|reset|remove all|delete all|cancel all|cancel everything)\b)|清空|全部取消|重新开始/i;
 
 export async function applyEnquiryAction(
   lines: EnquiryReceiptLine[],
