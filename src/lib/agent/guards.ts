@@ -445,6 +445,22 @@ const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+
 // nor are a product's parts and materials ("everything else is stainless steel", "no other assembly", "needs no other attachments") or charges.
 const MATERIAL = String.raw`(?:stainless|plastic|glass|porcelain|ceramic|alumin(?:i)?um|metal|wood(?:en)?|silicone|pom|pp|nylon|melamine|copper|brass|iron)`;
 const COMPLETE = new RegExp(String.raw`\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b(?!\s+(?:looks?|is\s+(?:fine|good|ok|okay|set)|(?:is|are)\s+(?:made\s+(?:of|from)\s+)?${MATERIAL})\b)|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b(?!\s+(?:\w+\s+)?is\s+to\b)|(?<!\b(?:needs?|requires?)\s+)\bno\s+other\b(?!\s+(?:questions?|changes?|parts?|assembly|setup|tools?|charges?|fees?|costs?|way)\b)|(?<!\bif\b[^.!?]*)\bnothing\s+else\b(?!\s+(?:to\s+add|needed)\b)|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b`, "i");
+// Summaries of the whole range beyond COMPLETE's "the only one": "all our chef knives are ...", "what we carry are ...", "the only
+// other cordless option we carry" (exam 3: c01-A T9-T11, c03-stress T7/T9, c07-stress T3, c04-stress T8). Prices, stock counts,
+// facts ("the only thing I can't confirm") and a series match ("our Patra plates are the same series") are not.
+const W = String.raw`[\w'’/-]+`;
+const RANGE_SUMMARY = new RegExp([
+  String.raw`\ball\s+(?:of\s+)?our\s+(?!(?:prices?|cards?|links?|totals?|figures?|stock|orders?|deliver\w*|enquir\w*|products?\s+(?:are\s+)?priced)\b)(?:${W}\s+){0,4}?(?:\([^)]*\)\s+)?(?:are|is)\b(?!\s+(?:priced|sold|ex|live|checked|quoted)\b)`,
+  String.raw`\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:${W}\s+){1,3}(?:range|list|line[- ]?up|selection|catalogue)\b`,
+  String.raw`\bthe\s+only\s+(?:other\s+)?(?:${W}\s+){0,3}?(?:ones?|options?|models?|choices?|kinds?|types?|versions?|brands?)\b(?!\s+(?:\w+\s+)?is\s+to\b)`,
+  String.raw`\bthe\s+only\s+(?!(?:thing|things|question|way|difference|info\w*|details?|specs?|photos?|pictures?|images?|data|figures?|note|link|record)\b)(?:${W}\s+){1,4}?(?:we|I|sia\s+huat)\s+(?:have|carry|stock|sell)\b`,
+  String.raw`\bwhat\s+we\s+(?:carry|stock|have|sell)\s+(?:are|is)\b`,
+  String.raw`\bwe\s+only\s+(?:carry|stock|have|sell)\b(?!\s+(?:\d|one|two|three|four|five|a\s+few|a\s+couple)\b)(?![^.!?]{0,30}\b(?:units?|pcs?|pieces|left|in\s+stock)\b)`,
+  String.raw`\bour\s+(?:${W}\s+){1,8}?are\s+(?:all\s+|only\s+|just\s+)?the\s+(?!same\b)(?:${W}\s+){1,3}(?:range|line|series)\b`,
+].join("|"), "i");
+// "the only cordless option I found", "of the ones I found" is the honest scope the repair itself asks for.
+const SCOPED = /\b(?:I|we)\s+(?:found|could\s+find|can\s+find|saw|see)\b|\bturned\s+up\b|\bso\s+far\b|\bof\s+the\s+ones\s+I\b|\b(?:in|among)\s+(?:these|the\s+results|my\s+search(?:es)?)\b/i;
+const rangeSummary = (sentence: string) => RANGE_SUMMARY.test(sentence) && !SCOPED.test(sentence);
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that" or "couldn't find the photo" is not about a product.
@@ -507,7 +523,7 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     const talk = ENQUIRY_TALK.test(sentence);
     // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it".
     const range = BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
-      : COMPLETE.test(sentence) && !talk && !RELATIVE.test(sentence) && !OPEN_ENDED.test(sentence) ? (complete ? null : "complete" as const)
+      : (COMPLETE.test(sentence) || rangeSummary(sentence)) && !talk && !RELATIVE.test(sentence) && !OPEN_ENDED.test(sentence) ? (complete ? null : "complete" as const)
       : ABSENT.test(sentence) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence) ? (absenceBacked ? null : "absence" as const)
       : null;
     // An unbacked stock claim is removed if it survives the repair, so it outranks a "we don't have it", which is only reworded.

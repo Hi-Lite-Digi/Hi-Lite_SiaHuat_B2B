@@ -854,6 +854,23 @@ test("a claim that the range is complete needs a complete search this turn", () 
   assert.equal(issueCode(claimsOf("That covers our tong range.")[0]), "CLAIM");
 });
 
+test("a range summary needs a complete search this turn (exam 3)", () => {
+  for (const message of [
+    "all our chef knives are Atlantic Chef (Taiwan) or Global (Japan).",
+    "I've checked our full chef knives range again.",
+    "What we carry are Atlantic Chef and Global.",
+    "Right now the only chef knives we have in stock for 3pcs are the Atlantic Chef range.",
+    "MX130 is actually the only other cordless option we carry.",
+    "All our other jug blenders (Severin, Mika, Santos) are corded.",
+    "Our in-stock chef knives in the size you'd want are the Atlantic Chef range.",
+  ]) {
+    assert.equal(claimsOf(message).length, 1, message);
+    assert.equal(claimsOf(message, [search({ complete: false })]).length, 1, message);
+    assert.deepEqual(claimsOf(message, [search({ complete: true })]), [], message);
+    assert.equal(issueCode(claimsOf(message)[0]), "CLAIM", message);
+  }
+});
+
 test("a claim that nothing fits the budget needs a complete priced search this turn", () => {
   for (const message of ["Nothing cheaper in that longer length.", "I don't have a commercial blender in that lower budget range."]) {
     assert.equal(claimsOf(message, [search({ categoryFound: true, maxPrice: 20, complete: false })]).length, 1, message);
@@ -950,6 +967,21 @@ test("honest wording raises no claim, even with no searches", () => {
     "There's no other charge.",
     "No other fees apply at this stage.",
     "Let me know if there's nothing else you need.",
+    // Not range summaries: prices, facts, stock counts, a series match, and a summary that says its own scope (V12).
+    "All our prices are ex GST.",
+    "All our products are priced ex GST.",
+    "All our stock figures are live-checked.",
+    "The only difference is the handle colour.",
+    "The only thing I can't confirm is the weight rating.",
+    "The only thing I have to check is the lid size.",
+    "The only info I have on it is the capacity.",
+    "On the MX1200XTX, we only have 12 units in stock right now.",
+    "We only have 2 of the 30cm, so I've shown the 28cm too.",
+    "In stock, our Atlantic Chef 'Japanese Chef Knife' range is a Taiwan brand.",
+    "Our Patra plates are the same series as your bowl.",
+    "Of the ones I found, the only cordless option is the MX130.",
+    "The only cordless option I found in stock is the MX130.",
+    "So far the only cordless model that turned up is the MX130.",
   ]) {
     assert.deepEqual(claimReview(message).safety, [], message);
     assert.deepEqual(absenceOf(message), [], message);
