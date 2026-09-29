@@ -57,7 +57,9 @@ export function fakeDeps(
       calls.push(`alternatives:${stockId}`);
       return catalogue.filter((item) => item.stock_id !== stockId && !exclude.has(item.stock_id));
     },
-    async fetchLive(url) {
+    async fetchLive(url, timeoutMs) {
+      // AbortSignal.timeout throws on a fraction of a millisecond; the fake must too (exam 3: 101 re-shown cards went out TBC).
+      if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs < 0)) throw new RangeError(`delay must be an integer: ${timeoutMs}`);
       const item = byUrl(url);
       if (!item) throw new Error("NOT_FOUND");
       const override = live[item.stock_id];

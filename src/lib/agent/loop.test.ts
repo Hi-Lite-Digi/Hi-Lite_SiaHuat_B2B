@@ -713,6 +713,19 @@ test("an earlier card's price quoted without a lookup is checked by code, not re
   assert.equal(reply.message, "197-55 is $26.00 now.");
 });
 
+test("a re-attached earlier card whose live price changed still fails the money check when the reply quotes the old history price", async () => {
+  // exam 3: re-attached cards went out unchecked, so this check never had a live price to compare with.
+  const { client, bodies } = fakeClient([
+    answer({ message: "Here it is: $25.50.", card_ids: ["197-55"] }),
+    answer({ message: "Here it is: $26.00 now.", card_ids: ["197-55"] }),
+  ]);
+  const reply = await runAgentTurn({ request: strainerAsked, deps: fakeDeps([strainer], { "197-55": { price_ex_gst: 26 } }), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /\$25\.50/);
+  assert.equal(reply.message, "Here it is: $26.00 now.");
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.list_price, card.stock_status]), [["197-55", 26, "in_stock"]]);
+});
+
 test("an earlier card whose lookup stalls is attached as unconfirmed within about 2 s", async () => {
   const stalled = deps();
   const fetchLive = stalled.fetchLive;

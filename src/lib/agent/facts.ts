@@ -136,7 +136,8 @@ export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LI
   const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
   if (!product.source_url) return unverified;
   try {
-    const live = await deps.fetchLive(product.source_url, timeoutMs);
+    // AbortSignal.timeout throws on a fraction of a millisecond, and a time left from performance.now() always has one.
+    const live = await deps.fetchLive(product.source_url, Math.max(1, Math.floor(timeoutMs)));
     if (live.stock_id.toLowerCase() !== product.stock_id.toLowerCase()) return unverified;
     return {
       verified: true,

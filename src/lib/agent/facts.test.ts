@@ -73,6 +73,18 @@ test("a failed or mismatched live check leaves the product unverified", async ()
   assert.equal(mismatch.verified, false);
 });
 
+test("a live check always hands the store fetch a whole number of milliseconds", async () => {
+  // exam 3: a time left from performance.now() made AbortSignal.timeout throw, so 101 re-shown cards went out TBC.
+  const torch = product({ stock_id: "970S" });
+  const deps = fakeDeps([torch]);
+  const { fetchLive } = deps;
+  const seen: number[] = [];
+  deps.fetchLive = async (url, ms) => { seen.push(ms); return fetchLive(url, ms); };
+  assert.equal((await liveCheck(torch, deps, 1860.86)).verified, true);
+  assert.equal((await liveCheck(torch, deps, 0.2)).verified, true);
+  assert.deepEqual(seen, [1860, 1]);
+});
+
 test("store links are normalised; other text is not a link", () => {
   assert.equal(storeProductUrl("see http://store.siahuat.com/product/10921358890?x=1"), "https://store.siahuat.com/product/10921358890");
   assert.equal(storeProductUrl("store.siahuat.com/product/abc"), null);
