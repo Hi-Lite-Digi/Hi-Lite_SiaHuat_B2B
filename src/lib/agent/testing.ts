@@ -3,6 +3,7 @@ import type { Product } from "@/lib/chat-contract";
 import type { CatalogueImageLookup } from "@/lib/catalogue-image-library";
 import type { ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
 import type { CatalogueProduct, FactDeps } from "./facts";
+import type { PickCheck, PickProposal, PickVerdict } from "./verify";
 
 /** A catalogue row with a unique numeric store URL derived from its code. */
 export function product(overrides: Partial<Product> & { stock_id: string }): CatalogueProduct {
@@ -82,4 +83,17 @@ export function fakeDeps(
       return new Map(codes.filter((code) => details[code]).map((code): [string, Record<string, string>] => [code, details[code]]));
     },
   };
+}
+
+/** A pick check that answers without the API: by default a sure pick with the proposal's number (or Claude's, when untyped). */
+export function fakePickCheck(answer: Partial<PickVerdict> | ((p: PickProposal) => Partial<PickVerdict>) = {}): PickCheck & { calls: PickProposal[] } {
+  const calls: PickProposal[] = [];
+  const check = async (p: PickProposal): Promise<PickVerdict> => {
+    calls.push(p);
+    return {
+      verdict: "picked", sure: true, code: null, candidates: [], quantity: p.quantity ?? p.requested, ms: 0, proposed: p.code, action: p.action,
+      ...(typeof answer === "function" ? answer(p) : answer),
+    };
+  };
+  return Object.assign(check, { calls });
 }
