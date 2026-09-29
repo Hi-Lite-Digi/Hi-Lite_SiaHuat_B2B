@@ -31,6 +31,10 @@ const sizeOrPartWords = String.raw`tiers?|levels?|layers?|decks?|burners?|doors?
 // A number right before one of these is a size, a count of parts or people, a price, a pack size or an ordinal
 // ("3-tier", "4 ppl", "5 dollar", "48pcs/ctn", "2nd", "2号"), or not a count at all ("20+", "1 more time", "3 times", "26 too long", 16", "4 or 6 slot").
 const notQuantityAfter = String.raw`(?![-\s]*(?:${sizeOrPartWords})\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款]|\+|(?:\s+more)?\s+times?\b|\s+too\b|\s*(?:"|″|”|'')(?!\w)|\s*(?:or|to)\s*\d+[-\s]*(?:${sizeOrPartWords})\b)`;
+// A guess or a rate is a need, not an order: "maybe about 200" (exams 2-4, c02, 13 times), "abt 200 cup a day each outlet", "1 unit
+// per outlet opening" (s04, 6 times), GST guesses like "roughly 80". Replayed over 2,043 customer texts: 22 numbers, no right add blocked.
+const guessBefore = String.raw`(?<!\b(?:maybe|about|abt|around|approx(?:imately)?|roughly)\s+)`;
+const notRateAfter = String.raw`(?!(?:\s+[a-z]+){0,2}?\s*(?:a|per|each|every|\/)\s*(?:day|daily|week|month|outlet|branch|shop|opening|person|pax)\b)`;
 // "one" as a quantity: at the start (also after "ok"/"yes"), after a buying word, before a count word, or "one each / one of each";
 // never "that one", "one of them", "one of those" opening the text, or "one more thing / one question / one sec".
 const oneAsQuantity = /^\s*(?:(?:ok(?:ay)?|yes|ya|yah)\b[\s,.!]*(?:(?:la|lah|lor)\b[\s,.!]*)?)?one\b(?!\s+of\b(?!\s+each))(?!(?:\s+more)?\s+(?:thing|question|qn|q|sec|moment)s?\b)|\b(?:just|only|want|need|take|buy|add|order|get|give\s+me|gimme|also|and)\s+one\b(?!\s+of\s+(?:them|it)\b)(?!(?:\s+more)?\s+(?:thing|question|qn|q|sec|moment)s?\b)|\bone\s+(?:each|of\s+each)\b|\bone\s*(?:pcs?|pieces?|units?|sets?|boxe?s?|ctns?|cartons?|pkts?|packets?|packs?)\b/i;
@@ -46,8 +50,31 @@ function listLabels(text: string) {
   return labels;
 }
 
+// "4 dozen", "a dozen", "half a dozen", "两打" (exam 4, c01-persona T11 "4 dozen" and c01-stress T13 "5 dozen": Claude worked out 48 and
+// 60, and both adds were refused). "dozens of" gives no count; 打蛋器 (egg beater) and 打包盒 (takeaway box) are not dozens.
+const DOZEN = /(?<![\w.])(\d{1,4}|a|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:dozens?|doz|dz)\b(?!\s+of\b)/gi;
+const HALF_DOZEN = /\bhalf\s+a\s+dozen\b/gi;
+// Only a whole numeral before 打: 十二打 must not read as 二打.
+const CHINESE_DOZEN = /(?<![\d一二两三四五六七八九十百千万])([一二两三四五六七八九十]|\d{1,3})打(?=\s|$|[,.，。!！?？的])/g;
+const chineseCounts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+
+/**
+ * How a dozen count reads for an item: "both" before its unit is known ("4 dozen (48 pcs)": 4 and 48 both count), "pieces" for an
+ * item sold by the piece ("48 pcs") and "dozens" for one sold by the dozen ("4 doz"; the catalogue has 31, such as a $9.08/DOZ
+ * spoon, where "4 dozen" read as 48 would have added 48 dozen). Half a dozen is 6 pieces, and no count of an item sold by the dozen.
+ */
+export function inPieces(text: string, mode: "both" | "pieces" | "dozens") {
+  const written = (whole: string, count: string) => {
+    const word = count.toLowerCase();
+    const dozens = /^\d+$/.test(word) ? Number(word) : word === "a" ? 1 : chineseCounts[word] ?? numberWords.indexOf(word);
+    return mode === "pieces" ? `${dozens * 12} pcs` : mode === "dozens" ? `${dozens} doz` : `${whole} (${dozens * 12} pcs)`;
+  };
+  return text.replace(HALF_DOZEN, mode === "dozens" ? " " : "6 pcs").replace(DOZEN, written).replace(CHINESE_DOZEN, written);
+}
+
 /** Numbers that are never quantities: list labels ("1) pot 2) lid", counting up from 1), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
-function withoutNonQuantities(text: string) {
+function withoutNonQuantities(raw: string, mode: "both" | "pieces" | "dozens") {
+  const text = inPieces(raw, mode);
   const labels = listLabels(text);
   // A lone "ok 2." or "2. also 1 of the 6 slot" is a quantity, not a list.
   const unlabelled = labels.length >= 2
@@ -76,18 +103,26 @@ function chineseNumerals(quantity: number) {
  * Numbers joined to a code or a fraction ("218455-20", "BTS-8026", "1/2 GN") do not count either, nor list labels,
  * "3-in-1", prices ("5 dollar"), head counts ("4 ppl"), "20+", "1 more time" and inch sizes (16").
  * The word "one" counts only when said as a quantity ("just one", "one pc"), not as a pronoun ("the blue one").
+ * A guess ("maybe about 200", "roughly 80") or a rate ("200 cup a day", "1 unit per outlet opening") written in digits never counts.
+ * "N dozen" counts as `mode` says (see inPieces).
  */
-export function quantityStated(quantity: number, customerTexts: string[]) {
-  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${quantity}(?![-/]\\d)${notQuantityAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.[^\\s.])`, "i");
+export function quantityStated(quantity: number, customerTexts: string[], mode: "both" | "pieces" | "dozens" = "both") {
+  const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${guessBefore}${quantity}(?![-/]\\d)${notQuantityAfter}${notRateAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.[^\\s.])`, "i");
   const word = numberWords[quantity];
   const wordQuantity = quantity === 1 ? oneAsQuantity : word !== undefined ? new RegExp(`\\b${word}\\b`, "i") : null;
   const chinese = chineseNumerals(quantity);
   const chineseQuantity = chinese.length
     ? new RegExp(`(?<![一二两三四五六七八九十百千万零第]|选项|型号)(?:${chinese.join("|")})(?=[个件只把套箱包盒台支张条打瓶罐双]|\\s*$)`)
     : null;
-  return customerTexts.map(withoutNonQuantities).some((text) => digits.test(text)
+  return customerTexts.map((text) => withoutNonQuantities(text, mode)).some((text) => digits.test(text)
     || (wordQuantity !== null && wordQuantity.test(text))
     || (chineseQuantity !== null && chineseQuantity.test(text)));
+}
+
+/** The distinct numbers the customer typed in digits as quantities, in the order typed. */
+export function typedQuantities(customerTexts: string[]) {
+  const numbers = new Set(customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number).filter((n) => n > 0 && n <= 100_000));
+  return [...numbers].filter((n) => quantityStated(n, customerTexts));
 }
 
 /** True when the customer's texts state any quantity (a digit, a number word or a Chinese numeral used as a count). */
@@ -150,6 +185,9 @@ export function unitStated(quantity: number, unit: "uom" | "carton" | "packet", 
 // "this", "the whole list", "out everything"), or bare only at the start or after pls/can (u)/just/ok/help/to.
 const clearRequest = /(?<!\b(?:not|don['’]?t|dont|dun|no|never)\s+(?:\w+\s+)?(?:to\s+)?)(?:\bclear\s+(?:(?:out|up|off)\s+)?(?:all|everything|it|them|this|that|these|those|my|the\s+(?:(?:whole|entire)\s+)?(?:enquiry|list|cart|lot|order|quote|items?|basket|thing)|enquiry|list|cart|order|quote)\b|(?:^\s*|\b(?:pls|please|can|just|ok|okay|help|to)\s+(?:(?:u|you)\s+)?)clear\b(?=\s*(?:$|[.!?,]|(?:la|lah|lor|pls|please)\b))|\b(?:start over|reset|remove all|delete all|cancel all|cancel everything)\b)|清空|全部取消|重新开始/i;
 
+// exam 4, c09-persona T12: a bare error made Claire say she was "hitting an issue" and ask for a typed code.
+export const QTY_NOTICE = "That number isn't one the customer typed for this item. If they gave cartons or packets, send that count with unit; otherwise ask how many in a few words. Don't say anything failed or ask them to type a code.";
+
 export async function applyEnquiryAction(
   lines: EnquiryReceiptLine[],
   action: EnquiryAction,
@@ -170,7 +208,7 @@ export async function applyEnquiryAction(
     return { ok: true, lines: kept, notice: "" };
   }
   if (!action.quantity) return { ok: false, error: "MISSING_FIELDS" };
-  if (!quantityStated(action.quantity, customerTexts)) return { ok: false, error: "QTY_NOT_STATED" };
+  if (!quantityStated(action.quantity, customerTexts)) return { ok: false, error: "QTY_NOT_STATED", notice: QTY_NOTICE };
   if (!unitStated(action.quantity, action.unit ?? "uom", customerTexts)) return { ok: false, error: "UNIT_MISMATCH" };
   // A number from an earlier message may already have been added; adding it again would double the line.
   const alreadyOnEnquiry = lines.some((line) => line.code.toLowerCase() === code.toLowerCase());
@@ -185,6 +223,11 @@ export async function applyEnquiryAction(
   const resolved = resolveProductQuantity(action.quantity, unit, checked.product);
   if (resolved.quantity === null) return { ok: false, error: "PACK_SIZE_UNKNOWN", notice: resolved.notice, product: checked };
   const { product } = checked;
+  // "4 dozen" is 4 of an item sold by the dozen and 48 of one sold by the piece.
+  const byDozen = /^(?:doz|dz|dozen)s?$/i.test(product.uom_id.trim());
+  if (!quantityStated(action.quantity, customerTexts, byDozen ? "dozens" : "pieces")) {
+    return { ok: false, error: "UNIT_MISMATCH", notice: byDozen ? "This item is sold by the dozen: use the number of dozens the customer typed." : "The customer typed dozens: 1 dozen = 12 pieces.", product: checked };
+  }
   if (product.stock_status === "out_of_stock" || product.available_quantity === 0) return { ok: false, error: "OUT_OF_STOCK", product: checked };
   const available = product.available_quantity;
   if (typeof available !== "number") return { ok: false, error: "STOCK_UNVERIFIED", product: checked };

@@ -1,7 +1,10 @@
 // src/lib/agent/enquiry.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyEnquiryAction, enquiryTotals, firstListItem, listItemCount, quantityStated, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
+import {
+  QTY_NOTICE, applyEnquiryAction, enquiryTotals, firstListItem, inPieces, listItemCount, quantityStated, sameQuantityText, statesAnyQuantity, typedQuantities,
+  verifyEnquiry,
+} from "./enquiry";
 import { allowedCents } from "./guards";
 import { fakeDeps, product } from "./testing";
 
@@ -370,4 +373,83 @@ test("clearing needs a real request to clear, not a negated or describing 'clear
     const refused = await applyEnquiryAction(lines, { action: "clear" }, [text], deps);
     assert.equal(refused.ok ? null : refused.error, "CLEAR_NOT_REQUESTED", text);
   }
+});
+
+// Sold by the dozen, like the 31 active DOZ products in the catalogue.
+const spoon = product({ stock_id: "100-100", name: "Zebra Chinese Spoon", list_price: 9.08, uom_id: "DOZ", available_quantity: 100 });
+const plate = product({ stock_id: "PL-10", name: "Porcelain Plate 10 inch", list_price: 2, available_quantity: 200 });
+
+test("'N dozen' states both N and N x 12 until the item's unit is known", () => {
+  assert.equal(quantityStated(48, ["4 dozen"]), true);
+  assert.equal(quantityStated(4, ["4 dozen"]), true);
+  // exam 4, c01-stress: "5 dozen" worked out as 60 was refused.
+  assert.equal(quantityStated(60, ["5 dozen. then total how much now"]), true);
+  assert.equal(quantityStated(12, ["a dozen please"]), true);
+  assert.equal(quantityStated(6, ["half a dozen"]), true);
+  assert.equal(quantityStated(12, ["half a dozen"]), false);
+  assert.equal(quantityStated(24, ["两打"]), true);
+  assert.equal(quantityStated(144, ["12 dozen"]), true);
+  assert.equal(statesAnyQuantity(["dozens of choices"]), false);
+  assert.equal(inPieces("4 dozen spoons", "both"), "4 dozen (48 pcs) spoons");
+});
+
+test("an item's unit decides whether the dozens or the pieces count", () => {
+  assert.equal(quantityStated(48, ["4 dozen"], "dozens"), false);
+  assert.equal(quantityStated(4, ["4 dozen"], "dozens"), true);
+  assert.equal(quantityStated(4, ["4 dozen"], "pieces"), false);
+  assert.equal(quantityStated(48, ["4 dozen"], "pieces"), true);
+  assert.equal(quantityStated(2, ["两打"], "pieces"), false);
+  assert.equal(quantityStated(2, ["两打"], "dozens"), true);
+  assert.equal(quantityStated(6, ["half a dozen"], "pieces"), true);
+  assert.equal(quantityStated(6, ["half a dozen"], "dozens"), false);
+  assert.equal(quantityStated(1, ["a dozen please"], "dozens"), true);
+  assert.equal(inPieces("4 dozen spoons", "pieces"), "48 pcs spoons");
+  assert.equal(inPieces("4 dozen spoons", "dozens"), "4 doz spoons");
+  // Texts with no dozen word read the same in every mode.
+  for (const mode of ["both", "pieces", "dozens"] as const) assert.equal(inPieces("need 50 pcs", mode), "need 50 pcs");
+});
+
+test("打 in an egg beater or a takeaway box is not a dozen", () => {
+  assert.equal(quantityStated(2, ["要2打蛋器"]), true);
+  assert.equal(quantityStated(2, ["要2打蛋器"], "pieces"), true);
+  assert.equal(quantityStated(600, ["50打包盒"]), false);
+  assert.equal(quantityStated(600, ["50打包盒"], "pieces"), false);
+});
+
+test("an item sold by the dozen takes the dozens typed, one sold by the piece takes the pieces", async () => {
+  const add = (item: typeof spoon, quantity: number, text: string) => applyEnquiryAction([], { action: "add", stock_id: item.stock_id, quantity }, [text], fakeDeps([item]));
+  const dozens = await add(spoon, 5, "5 dozen chinese spoon");
+  assert.equal(dozens.ok && dozens.lines[0].quantity, 5);
+  const sixty = await add(spoon, 60, "5 dozen chinese spoon");
+  assert.deepEqual(sixty.ok ? null : [sixty.error, sixty.notice], ["UNIT_MISMATCH", "This item is sold by the dozen: use the number of dozens the customer typed."]);
+  const pieces = await add(plate, 48, "4 dozen");
+  assert.equal(pieces.ok && pieces.lines[0].quantity, 48);
+  const four = await add(plate, 4, "4 dozen");
+  assert.deepEqual(four.ok ? null : [four.error, four.notice], ["UNIT_MISMATCH", "The customer typed dozens: 1 dozen = 12 pieces."]);
+  const plain = await add(spoon, 2, "2 pls");
+  assert.equal(plain.ok && plain.lines[0].quantity, 2);
+});
+
+test("a guessed number or a rate is never a quantity", () => {
+  assert.equal(quantityStated(200, ["maybe about 200"]), false);
+  assert.equal(quantityStated(1, ["1 unit per outlet opening"]), false);
+  assert.equal(quantityStated(200, ["abt 200 cup a day each outlet"]), false);
+  assert.equal(quantityStated(80, ["roughly 80 like that correct anot"]), false);
+  assert.equal(quantityStated(2, ["mika can tahan 200 cup a day meh? change to the waring 1.2k one la, same 2"]), true);
+  assert.equal(quantityStated(200, ["mika can tahan 200 cup a day meh? change to the waring 1.2k one la, same 2"]), false);
+  assert.equal(quantityStated(50, ["need 50 pcs"]), true);
+  assert.equal(quantityStated(2, ["2 each"]), true);
+});
+
+test("a number the customer didn't type comes back with a notice to ask how many", async () => {
+  const refused = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ["blow torch"], fakeDeps([torch]));
+  assert.deepEqual(refused.ok ? null : [refused.error, refused.notice], ["QTY_NOT_STATED", QTY_NOTICE]);
+  assert.match(QTY_NOTICE, /^That number isn't one the customer typed for this item\. .*Don't say anything failed or ask them to type a code\.$/);
+});
+
+test("typedQuantities lists the distinct numbers the customer typed as quantities", () => {
+  assert.deepEqual(typedQuantities(["3 and 5 pcs", "the 16 inch one, 3"]), [3, 5]);
+  assert.deepEqual(typedQuantities(["maybe about 200 drinks a day"]), []);
+  assert.deepEqual(typedQuantities(["4 dozen"]), [4]);
+  assert.deepEqual(typedQuantities(["blow torch"]), []);
 });
