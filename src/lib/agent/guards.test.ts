@@ -85,8 +85,13 @@ test("chips with numbers or amounts, long chips and chips past the third are dro
   assert.deepEqual(review(["A chip that is far too long to fit on one button"]).chips, []);
   assert.deepEqual(review(["A chip that is far too long to fit on 1 button", "Cooking"]).chips, ["Cooking"]);
   assert.deepEqual(review(["Cooking", "Desserts", "Grilling", "Bar"]).chips, ["Cooking", "Desserts", "Grilling"]);
-  // A chip past the third never shows, so its number doesn't clear the three that do.
+  // A number chip clears the set only when it would have taken one of the three visible slots.
   assert.deepEqual(review(["Cooking", "Desserts", "Grilling", "2 pcs"]).chips, ["Cooking", "Desserts", "Grilling"]);
+  // A dropped 'add' chip moves a fourth chip into view: it shows when clean, and clears the set when it has a number.
+  assert.deepEqual(review(["Yes, add it", "Cooking", "Desserts", "Grilling"]).chips, ["Cooking", "Desserts", "Grilling"]);
+  assert.deepEqual(review(["Yes, add it", "Without grip", "With grip", "With 2 grips"]).chips, []);
+  // An 'add' chip never shows, so a number in it leaves the rest, as 'Yes, add it' does.
+  assert.deepEqual(review(["Yes, add 2", "Show others"]).chips, ["Show others"]);
 });
 
 test("reply-style problems are style issues, not safety issues", () => {

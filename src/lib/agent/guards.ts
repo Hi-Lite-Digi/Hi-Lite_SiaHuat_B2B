@@ -627,11 +627,13 @@ export function reviewAnswer(
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A dropped chip takes any amount in it along.
   // A 'Yes, add it' chip is the confirm step the owner ruled out; 'Add more items' is not.
-  const usable = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip));
+  const confirmChip = /\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i;
+  const usable = answer.chips.filter((chip) => chipAllowed(chip) && !confirmChip.test(chip));
   // A chip dropped for a number takes the rest of its set along: a lone 'with silicone grip' under an either/or question
   // reads as the only answer (exam 3: 43 of 80 single-chip turns). Drops for length or 'add/confirm' leave the rest.
-  // A chip past the third never shows, so it can't make the set lopsided.
-  const chips = answer.chips.slice(0, 3).some((chip) => !chipAllowed(chip) && chip.length <= 40) ? [] : usable.slice(0, 3);
+  // A number chip clears the set only when it would have taken one of the three visible slots; a dropped 'add' chip moves a fourth one up.
+  const slots = answer.chips.filter((chip) => chip.length <= 40 && !confirmChip.test(chip)).slice(0, 3);
+  const chips = slots.some((chip) => !chipAllowed(chip)) ? [] : usable.slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $. That includes an amount the customer typed ('the 2 dollar one'): name the product instead.`);
   const links = unknownStoreLinks(answer.message, seen, earlier);
