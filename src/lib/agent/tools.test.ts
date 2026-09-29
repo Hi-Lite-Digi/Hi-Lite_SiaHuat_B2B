@@ -365,6 +365,20 @@ test("a decimal size in the query is not read as its fraction: 1.5L doesn't put 
   assert.deepEqual(idsOf(await searchBody({ queries: ["measuring jug 1.5L"], category: "measuring jugs" }, deps)), ["J05", "J1", "J2", "J5"]);
 });
 
+test("a size after another unit and a slash is still that size: \"16oz/500ml\" is 500ml, but \"1/2oz\" is not 2oz", async () => {
+  // The catalogue writes a second unit after a slash ("475Ml/16Oz", "5Kg/8L", '12"/30cm').
+  const hits = [
+    product({ stock_id: "H1", name: "PC MEASURING CUP", third_category: "Measuring jugs" }),
+    product({ stock_id: "H2", name: "PP MEASURING CUP 1000ml", third_category: "Measuring jugs" }),
+  ];
+  const dual = product({ stock_id: "DUAL", name: "PLASTIC MEASURING CUP 16oz/500ml", third_category: "Measuring jugs" });
+  const half = product({ stock_id: "HALF", name: "MEASURING CUP 1/2oz", third_category: "Measuring jugs" });
+  const deps = fakeDeps([...hits, dual, half]);
+  deps.searchDirect = async () => hits;
+  assert.equal(idsOf(await searchBody({ queries: ["measuring cup 500ml"], category: "measuring jugs" }, deps))[0], "DUAL");
+  assert.notEqual(idsOf(await searchBody({ queries: ["measuring cup 2oz"], category: "measuring jugs" }, deps))[0], "HALF");
+});
+
 test("a short brand inside a query word is not named by the customer, so it is still capped", async () => {
   // Real brands AG, IR and AKI sit inside "bag", "stir" and "baking".
   const bags = [

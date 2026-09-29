@@ -134,8 +134,8 @@ const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((w
 const sizeText = (text: string) => text.toLowerCase().replace(/(\d)\.0(?!\d)/g, "$1");
 const SIZE_WORD = /^\d+(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)$/;
 // A size word is a whole number: "6oz" is not inside "16oz" or "1/2oz", and "1.5L" gives no "5l" (exam 3: s01-A T0 asked for 6oz,
-// c12-stress for 7cm and 7.5cm).
-const sizeIn = (text: string, word: string) => new RegExp(String.raw`(?<![\d./])${word}`).test(text);
+// c12-stress for 7cm and 7.5cm). A size after another unit and a slash ("16oz/500ml", '12"/30cm') is still that size.
+const sizeIn = (text: string, word: string) => new RegExp(String.raw`(?<!\d)(?<!\d[./])${word}`).test(text);
 // Colour words don't make a different product (exam 3, c01-A T9: one range's red and blue handles filled the top 10).
 const COLOUR_WORDS = /\b(?:black|white|red|blue|green|yellow|brown|violet|purple|orange|pink|gr[ae]y|cream|beige|ivory|handle|hdle)\b/g;
 const variantKey = (item: Product) => `${item.name.toLowerCase().replace(COLOUR_WORDS, " ").replace(/[^\p{L}\p{N}.]+/gu, " ").trim()}|${item.size ?? item.dimensions ?? ""}|${item.list_price}`;
