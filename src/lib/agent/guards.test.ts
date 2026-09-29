@@ -863,6 +863,7 @@ test("a range summary needs a complete search this turn (exam 3)", () => {
     "MX130 is actually the only other cordless option we carry.",
     "All our other jug blenders (Severin, Mika, Santos) are corded.",
     "Our in-stock chef knives in the size you'd want are the Atlantic Chef range.",
+    "The only chef knives we have to offer are the Atlantic Chef range.",
   ]) {
     assert.equal(claimsOf(message).length, 1, message);
     assert.equal(claimsOf(message, [search({ complete: false })]).length, 1, message);
@@ -977,6 +978,16 @@ test("honest wording raises no claim, even with no searches", () => {
     "The only info I have on it is the capacity.",
     "On the MX1200XTX, we only have 12 units in stock right now.",
     "We only have 2 of the 30cm, so I've shown the 28cm too.",
+    "We only have 12 of the 30cm, so I've shown the 28cm too.",
+    // A fact word after "other" or a qualifier, "have to" and "is" aren't "the only X we have" either (review of V12).
+    "The only other thing I have to check is the lid size.",
+    "The only other thing we have to confirm is the delivery date.",
+    "The only product info I have is the capacity.",
+    "The only size info we have is 30cm.",
+    "The only other detail I have on it is the Series.",
+    "The only catch is we have to order it in.",
+    "The only issue is I have no photo of it.",
+    "The only reason I have to ask is the size.",
     "In stock, our Atlantic Chef 'Japanese Chef Knife' range is a Taiwan brand.",
     "Our Patra plates are the same series as your bowl.",
     "Of the ones I found, the only cordless option is the MX130.",

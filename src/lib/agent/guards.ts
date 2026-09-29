@@ -447,15 +447,16 @@ const MATERIAL = String.raw`(?:stainless|plastic|glass|porcelain|ceramic|alumin(
 const COMPLETE = new RegExp(String.raw`\b(?:that|this|these)\s+(?:covers?|is|are)\s+(?:all\s+of\s+)?(?:our|the)\s+(?:[\w/-]+\s+){0,4}(?:range|line[- ]?up|selection)\b|\bthat['’]?s\s+(?:(?:all|everything)\s+(?:we|i)\s+(?:have|carry|stock|sell|found|could\s+find)|the\s+(?:full|whole|complete|entire)\s+(?:list|range))\b|\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:range|list|line[- ]?up|selection)\b|\beverything\s+else\b(?!\s+(?:looks?|is\s+(?:fine|good|ok|okay|set)|(?:is|are)\s+(?:made\s+(?:of|from)\s+)?${MATERIAL})\b)|\beverything\s+(?:is\s+sold|we\s+(?:have|carry|sell|stock))\b|\bour\s+(?:listings|range|options)\s+(?:are|is)\b|\b(?:only|just)\s+(?:comes?\s+in\s+)?(?:two|three|four|five|\d)\s+(?:sizes|options|kinds|types|models|versions|colou?rs)\b|\bcomes?\s+in\s+(?:two|three|four|five|\d)\s+(?:sizes|colou?rs|versions)\b|\bthe\s+only\s+(?:one|ones|option|options|model|models)\b(?!\s+(?:\w+\s+)?is\s+to\b)|(?<!\b(?:needs?|requires?)\s+)\bno\s+other\b(?!\s+(?:questions?|changes?|parts?|assembly|setup|tools?|charges?|fees?|costs?|way)\b)|(?<!\bif\b[^.!?]*)\bnothing\s+else\b(?!\s+(?:to\s+add|needed)\b)|\bbeyond\s+these,\s+(?:other|the\s+rest|nothing)\b`, "i");
 // Summaries of the whole range beyond COMPLETE's "the only one": "all our chef knives are ...", "what we carry are ...", "the only
 // other cordless option we carry" (exam 3: c01-A T9-T11, c03-stress T7/T9, c07-stress T3, c04-stress T8). Prices, stock counts,
-// facts ("the only thing I can't confirm") and a series match ("our Patra plates are the same series") are not.
+// facts ("the only thing I can't confirm") and a series match ("our Patra plates are the same series") are not. The fact words are
+// checked at every word ("the only other thing I have") and "the only catch is we have to" is not about the range (review of V12).
 const W = String.raw`[\w'’/-]+`;
 const RANGE_SUMMARY = new RegExp([
   String.raw`\ball\s+(?:of\s+)?our\s+(?!(?:prices?|cards?|links?|totals?|figures?|stock|orders?|deliver\w*|enquir\w*|products?\s+(?:are\s+)?priced)\b)(?:${W}\s+){0,4}?(?:\([^)]*\)\s+)?(?:are|is)\b(?!\s+(?:priced|sold|ex|live|checked|quoted)\b)`,
   String.raw`\b(?:our|the)\s+(?:full|whole|complete|entire)\s+(?:${W}\s+){1,3}(?:range|list|line[- ]?up|selection|catalogue)\b`,
   String.raw`\bthe\s+only\s+(?:other\s+)?(?:${W}\s+){0,3}?(?:ones?|options?|models?|choices?|kinds?|types?|versions?|brands?)\b(?!\s+(?:\w+\s+)?is\s+to\b)`,
-  String.raw`\bthe\s+only\s+(?!(?:thing|things|question|way|difference|info\w*|details?|specs?|photos?|pictures?|images?|data|figures?|note|link|record)\b)(?:${W}\s+){1,4}?(?:we|I|sia\s+huat)\s+(?:have|carry|stock|sell)\b`,
+  String.raw`\bthe\s+only\s+(?:(?!(?:is|was|thing|things|question|way|difference|info\w*|details?|specs?|photos?|pictures?|images?|data|figures?|note|link|record)\b)${W}\s+){1,4}?(?:we|I|sia\s+huat)\s+(?:have|carry|stock|sell)\b(?!\s+to\b(?!\s+offer\b))`,
   String.raw`\bwhat\s+we\s+(?:carry|stock|have|sell)\s+(?:are|is)\b`,
-  String.raw`\bwe\s+only\s+(?:carry|stock|have|sell)\b(?!\s+(?:\d|one|two|three|four|five|a\s+few|a\s+couple)\b)(?![^.!?]{0,30}\b(?:units?|pcs?|pieces|left|in\s+stock)\b)`,
+  String.raw`\bwe\s+only\s+(?:carry|stock|have|sell)\b(?!\s+(?:\d+|one|two|three|four|five|a\s+few|a\s+couple)\b)(?![^.!?]{0,30}\b(?:units?|pcs?|pieces|left|in\s+stock)\b)`,
   String.raw`\bour\s+(?:${W}\s+){1,8}?are\s+(?:all\s+|only\s+|just\s+)?the\s+(?!same\b)(?:${W}\s+){1,3}(?:range|line|series)\b`,
 ].join("|"), "i");
 // "the only cordless option I found", "of the ones I found" is the honest scope the repair itself asks for.
