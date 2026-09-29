@@ -33,8 +33,9 @@ const sizeOrPartWords = String.raw`tiers?|levels?|layers?|decks?|burners?|doors?
 const notQuantityAfter = String.raw`(?![-\s]*(?:${sizeOrPartWords})\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款]|\+|(?:\s+more)?\s+times?\b|\s+too\b|\s*(?:"|″|”|'')(?!\w)|\s*(?:or|to)\s*\d+[-\s]*(?:${sizeOrPartWords})\b)`;
 // A guess or a rate is a need, not an order: "maybe about 200" (exams 2-4, c02, 13 times), "abt 200 cup a day each outlet", "1 unit
 // per outlet opening" (s04, 6 times), GST guesses like "roughly 80". Replayed over 2,043 customer texts: 22 numbers, no right add blocked.
-const guessBefore = String.raw`(?<!\b(?:maybe|about|abt|around|approx(?:imately)?|roughly)\s+)`;
-const notRateAfter = String.raw`(?!(?:\s+[a-z]+){0,2}?\s*(?:a|per|each|every|\/)\s*(?:day|daily|week|month|outlet|branch|shop|opening|person|pax)\b)`;
+// "how about 3" offers a number, so it isn't a guess. The rate word starts after a space: "2 for Sentosa outlet" is no rate.
+const guessBefore = String.raw`(?<!\b(?<!\b(?:how|what)\s+)(?:maybe|about|abt|around|approx(?:imately)?|roughly)\s+)`;
+const notRateAfter = String.raw`(?!(?:\s+[a-z]+){0,2}?(?:\s+(?:a|per|each|every)\s*|\s*\/\s*)(?:day|daily|week|month|outlet|branch|shop|opening|person|pax)\b)`;
 // "one" as a quantity: at the start (also after "ok"/"yes"), after a buying word, before a count word, or "one each / one of each";
 // never "that one", "one of them", "one of those" opening the text, or "one more thing / one question / one sec".
 const oneAsQuantity = /^\s*(?:(?:ok(?:ay)?|yes|ya|yah)\b[\s,.!]*(?:(?:la|lah|lor)\b[\s,.!]*)?)?one\b(?!\s+of\b(?!\s+each))(?!(?:\s+more)?\s+(?:thing|question|qn|q|sec|moment)s?\b)|\b(?:just|only|want|need|take|buy|add|order|get|give\s+me|gimme|also|and)\s+one\b(?!\s+of\s+(?:them|it)\b)(?!(?:\s+more)?\s+(?:thing|question|qn|q|sec|moment)s?\b)|\bone\s+(?:each|of\s+each)\b|\bone\s*(?:pcs?|pieces?|units?|sets?|boxe?s?|ctns?|cartons?|pkts?|packets?|packs?)\b/i;
@@ -51,29 +52,37 @@ function listLabels(text: string) {
 }
 
 // "4 dozen", "a dozen", "half a dozen", "两打" (exam 4, c01-persona T11 "4 dozen" and c01-stress T13 "5 dozen": Claude worked out 48 and
-// 60, and both adds were refused). "dozens of" gives no count; 打蛋器 (egg beater) and 打包盒 (takeaway box) are not dozens.
-const DOZEN = /(?<![\w.])(\d{1,4}|a|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:dozens?|doz|dz)\b(?!\s+of\b)/gi;
-const HALF_DOZEN = /\bhalf\s+a\s+dozen\b/gi;
-// Only a whole numeral before 打: 十二打 must not read as 二打.
-const CHINESE_DOZEN = /(?<![\d一二两三四五六七八九十百千万])([一二两三四五六七八九十]|\d{1,3})打(?=\s|$|[,.，。!！?？的])/g;
-const chineseCounts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+// 60, and both adds were refused). "dozens of" gives no count, but "2 dozen of the plates" is 24 plates; "$9 a dozen" and "by a dozen"
+// are prices; 打蛋器 (egg beater) and 打包盒 (takeaway box) are not dozens.
+const DOZEN = /(?<![\w.])(\d{1,4}|(?<!\$\s*[\d.]+\s+|\b(?:per|by)\s+)a|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:dozens?|doz|dz)\b/gi;
+const HALF_DOZEN = /\bhalf\s+(?:a\s+)?dozen\b/gi;
+// Only a whole numeral before 打: 十二打 is 12 dozen, never 二打.
+const CHINESE_DOZEN = /(?<![\d一二两三四五六七八九十百千万])([一二两三四五六七八九]?十[一二三四五六七八九]?|[一二两三四五六七八九]|\d{1,3})打(?=\s|$|[,.，。!！?？的])/g;
+const chineseCounts: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+
+/** A Chinese count up to 99: 两 → 2, 十二 → 12, 二十 → 20, 二十五 → 25; undefined for anything else. */
+function chineseCount(word: string): number | undefined {
+  if (!word.includes("十")) return chineseCounts[word];
+  const [tens, units] = word.split("十");
+  return (chineseCounts[tens] ?? 1) * 10 + (chineseCounts[units] ?? 0);
+}
 
 /**
- * How a dozen count reads for an item: "both" before its unit is known ("4 dozen (48 pcs)": 4 and 48 both count), "pieces" for an
- * item sold by the piece ("48 pcs") and "dozens" for one sold by the dozen ("4 doz"; the catalogue has 31, such as a $9.08/DOZ
- * spoon, where "4 dozen" read as 48 would have added 48 dozen). Half a dozen is 6 pieces, and no count of an item sold by the dozen.
+ * A dozen count as the number it is for an item: N x 12 for one sold by the piece ("4 dozen" reads "48") and N for one sold by the
+ * dozen ("4"; the catalogue has 31, such as a $9.08/DOZ spoon, where "4 dozen" read as 48 would have added 48 dozen). Half a dozen is 6
+ * pieces, and no count of an item sold by the dozen. The bare number keeps the next word in view: "a dozen outlets" reads "12 outlets".
  */
-export function inPieces(text: string, mode: "both" | "pieces" | "dozens") {
-  const written = (whole: string, count: string) => {
+export function inPieces(text: string, mode: "pieces" | "dozens") {
+  const written = (_whole: string, count: string) => {
     const word = count.toLowerCase();
-    const dozens = /^\d+$/.test(word) ? Number(word) : word === "a" ? 1 : chineseCounts[word] ?? numberWords.indexOf(word);
-    return mode === "pieces" ? `${dozens * 12} pcs` : mode === "dozens" ? `${dozens} doz` : `${whole} (${dozens * 12} pcs)`;
+    const dozens = /^\d+$/.test(word) ? Number(word) : word === "a" ? 1 : chineseCount(word) ?? numberWords.indexOf(word);
+    return String(mode === "pieces" ? dozens * 12 : dozens);
   };
-  return text.replace(HALF_DOZEN, mode === "dozens" ? " " : "6 pcs").replace(DOZEN, written).replace(CHINESE_DOZEN, written);
+  return text.replace(HALF_DOZEN, mode === "dozens" ? " " : "6").replace(DOZEN, written).replace(CHINESE_DOZEN, written);
 }
 
 /** Numbers that are never quantities: list labels ("1) pot 2) lid", counting up from 1), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
-function withoutNonQuantities(raw: string, mode: "both" | "pieces" | "dozens") {
+function withoutNonQuantities(raw: string, mode: "pieces" | "dozens") {
   const text = inPieces(raw, mode);
   const labels = listLabels(text);
   // A lone "ok 2." or "2. also 1 of the 6 slot" is a quantity, not a list.
@@ -104,7 +113,8 @@ function chineseNumerals(quantity: number) {
  * "3-in-1", prices ("5 dollar"), head counts ("4 ppl"), "20+", "1 more time" and inch sizes (16").
  * The word "one" counts only when said as a quantity ("just one", "one pc"), not as a pronoun ("the blue one").
  * A guess ("maybe about 200", "roughly 80") or a rate ("200 cup a day", "1 unit per outlet opening") written in digits never counts.
- * "N dozen" counts as `mode` says (see inPieces).
+ * "N dozen" counts as `mode` says (see inPieces); before the item's unit is known ("both") each text is read both ways, so "4 dozen"
+ * states 4 and 48, and the guess, rate and part-word rules apply to each reading.
  */
 export function quantityStated(quantity: number, customerTexts: string[], mode: "both" | "pieces" | "dozens" = "both") {
   const digits = new RegExp(`(?<![\\w.\\-/])(?:x\\s*)?(?<!\\$\\s*)${labelBefore}${guessBefore}${quantity}(?![-/]\\d)${notQuantityAfter}${notRateAfter}(?:\\s*(?:x|pcs?|pieces?|units?|sets?|nos?|ctns?|cartons?|pkts?|packets?|packs?|boxe?s?))?(?!\\w|\\.[^\\s.])`, "i");
@@ -114,7 +124,9 @@ export function quantityStated(quantity: number, customerTexts: string[], mode: 
   const chineseQuantity = chinese.length
     ? new RegExp(`(?<![一二两三四五六七八九十百千万零第]|选项|型号)(?:${chinese.join("|")})(?=[个件只把套箱包盒台支张条打瓶罐双]|\\s*$)`)
     : null;
-  return customerTexts.map((text) => withoutNonQuantities(text, mode)).some((text) => digits.test(text)
+  const readings = mode === "both" ? (["pieces", "dozens"] as const) : [mode];
+  const texts = new Set(customerTexts.flatMap((text) => readings.map((reading) => withoutNonQuantities(text, reading))));
+  return [...texts].some((text) => digits.test(text)
     || (wordQuantity !== null && wordQuantity.test(text))
     || (chineseQuantity !== null && chineseQuantity.test(text)));
 }

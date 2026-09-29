@@ -7,7 +7,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
-import { CHIP_PREFIX, TAP_PREFIX, customerWords, parseCardsNote, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
+import { CHIP_PREFIX, PHOTO_PREFIX, TAP_PREFIX, customerWords, parseCardsNote, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
 import type { AgentClient } from "./loop";
 import { same } from "./picks";
 
@@ -91,15 +91,22 @@ const OLDER_CARDS = 15;
 const FOUND = 10;
 
 const money = (price: number | null) => (price === null ? "price not shown" : `$${price.toFixed(2)}`);
-// Names come from the client's history, so they are quoted like the customer's words.
-const named = (code: string, name: string) => (name ? `${code} ${JSON.stringify(name)}` : code);
+// Codes and names come from the client's history and events: names are quoted like the customer's words, and a code is kept on one
+// line, so a forged code can't add a "</chat>" or "SYSTEM:" line of its own.
+const flat = (code: string) => code.replace(/\s+/g, " ");
+const named = (code: string, name: string) => (name ? `${flat(code)} ${JSON.stringify(name)}` : flat(code));
 const card = (shown: ShownCard) => `${named(shown.code, shown.name)} ${money(shown.price)}`;
+// Cut by characters, not UTF-16 units: half an emoji would make the request body invalid.
+const cut = (text: string) => {
+  const chars = Array.from(text);
+  return chars.length > CLAIRE_CHARS ? `${chars.slice(0, CLAIRE_CHARS).join("")}…` : text;
+};
 
 function chatLine(item: AgentRequest["history"][number]) {
   if (item.role === "assistant") {
     const text = withoutCardsNote(item.content);
     const cards = parseCardsNote(item.content);
-    const said = `Claire: ${text.length > CLAIRE_CHARS ? `${text.slice(0, CLAIRE_CHARS)}…` : text}`;
+    const said = `Claire: ${cut(text)}`;
     return cards.length ? `${said}\n  (cards shown with that reply: ${cards.map(card).join(" | ")})` : said;
   }
   if (item.content.startsWith(TAP_PREFIX)) {
@@ -111,12 +118,14 @@ function chatLine(item: AgentRequest["history"][number]) {
   }
   if (item.content.startsWith(CHIP_PREFIX)) return `Customer tapped the reply button: ${JSON.stringify(item.content.slice(CHIP_PREFIX.length).trim())}`;
   const words = customerWords(item.content);
-  return words === null ? "Customer sent a photo" : `Customer: ${JSON.stringify(words)}`;
+  if (words === null) return "Customer sent a photo";
+  // A caption keeps its photo, so "2 of this" can point at the photo's matches (the eval's chat view showed the photo too).
+  return item.content.startsWith(PHOTO_PREFIX) ? `Customer sent a photo with: ${JSON.stringify(words)}` : `Customer: ${JSON.stringify(words)}`;
 }
 
 function eventLine(event: AgentRequest["event"]) {
-  if (event.type === "select_product") return `NOW customer TAPPED the card ${event.stockId}`;
-  if (event.type === "image") return event.caption ? `NOW customer: ${JSON.stringify(event.caption)}` : "NOW customer sent a photo";
+  if (event.type === "select_product") return `NOW customer TAPPED the card ${flat(event.stockId)}`;
+  if (event.type === "image") return event.caption ? `NOW customer sent a photo with: ${JSON.stringify(event.caption)}` : "NOW customer sent a photo";
   return event.chip ? `NOW customer tapped the reply button: ${JSON.stringify(event.text)}` : `NOW customer: ${JSON.stringify(event.text)}`;
 }
 
@@ -145,7 +154,7 @@ export function pickCheckInput(request: AgentRequest, view: PickView, p: PickPro
   }
   const olderCards = [...older.values()].slice(-OLDER_CARDS);
   const found = view.found.slice(0, FOUND).map((item) => `${named(item.code, item.name)} ${money(item.price)}${item.photo ? ` (photo match: ${item.photo})` : ""}`);
-  const lines = view.lines.map((line) => `${line.code} x${line.quantity} ${JSON.stringify(line.item)}`);
+  const lines = view.lines.map((line) => `${flat(line.code)} x${line.quantity} ${JSON.stringify(line.item)}`);
   return [
     `<chat>\n${[...recent.map(chatLine), eventLine(request.event)].join("\n")}\n</chat>`,
     olderCards.length ? `Cards shown earlier in this chat: ${olderCards.map(card).join(" | ")}` : null,
@@ -191,13 +200,13 @@ export function modelPickCheck(input: {
   client: AgentClient; model: string; request: AgentRequest; view: () => PickView; budgetMs: () => number; signal: AbortSignal;
 }): PickCheck {
   return async (p) => {
-    // AbortSignal.timeout needs a whole number of milliseconds.
-    const ms = Math.floor(Math.min(VERIFY_TIMEOUT_MS, input.budgetMs()));
-    if (ms < VERIFY_MIN_MS) return errorVerdict(p, 0); // no call: PICK_UNCHECKED, so Claire asks
-    const view = input.view();
     const started = performance.now();
     const took = () => Math.round(performance.now() - started);
     try {
+      // AbortSignal.timeout needs a whole number of milliseconds.
+      const ms = Math.floor(Math.min(VERIFY_TIMEOUT_MS, input.budgetMs()));
+      if (ms < VERIFY_MIN_MS) return errorVerdict(p, 0); // no call: PICK_UNCHECKED, so Claire asks
+      const view = input.view();
       const finish = beginModelCall();
       const response = await input.client.messages.create({
         model: input.model,
@@ -235,7 +244,8 @@ export function pickCheckCache(check: PickCheck): PickCheckCache {
     const key = pickKey(p.code, p.action, p.quantity);
     const known = answers.get(key);
     if (known) return known;
-    const answer = check(p).then((v) => {
+    // A check that rejects is an error verdict, so the cache never holds a rejected promise.
+    const answer = check(p).catch(() => errorVerdict(p, 0)).then((v) => {
       settled.push(v);
       // A removal's "different" names another line to take off, not a product to add.
       if (v.sure && p.action !== "remove" && v.verdict === "different" && v.code !== null) {

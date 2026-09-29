@@ -390,7 +390,29 @@ test("'N dozen' states both N and N x 12 until the item's unit is known", () => 
   assert.equal(quantityStated(24, ["两打"]), true);
   assert.equal(quantityStated(144, ["12 dozen"]), true);
   assert.equal(statesAnyQuantity(["dozens of choices"]), false);
-  assert.equal(inPieces("4 dozen spoons", "both"), "4 dozen (48 pcs) spoons");
+  // "N dozen of" is a count too; only "dozens of" with no number isn't.
+  assert.equal(quantityStated(24, ["2 dozen of the plates"]), true);
+  assert.equal(quantityStated(24, ["2 dozen of the plates"], "pieces"), true);
+  assert.equal(quantityStated(2, ["2 dozen of the plates"], "pieces"), false);
+  assert.equal(quantityStated(6, ["half dozen pls"]), true);
+  assert.equal(quantityStated(6, ["half dozen pls"], "dozens"), false);
+  // A whole Chinese numeral before 打: 十二打 is 12 dozen, never 12 pieces.
+  assert.equal(quantityStated(144, ["十二打"]), true);
+  assert.equal(quantityStated(12, ["十二打"], "pieces"), false);
+  assert.equal(quantityStated(12, ["十二打"], "dozens"), true);
+  assert.equal(quantityStated(240, ["要二十打"], "pieces"), true);
+});
+
+test("a dozen that is a price, a guess, a rate or a count of outlets is not a quantity in any reading", () => {
+  // Both readings of the dozen go through the guess and rate rules, and the part-word rule sees the word after it.
+  for (const [quantity, text] of [[48, "maybe about 4 dozen"], [4, "maybe about 4 dozen"], [24, "2 dozen a day"], [2, "2 dozen a day"],
+    [12, "about a dozen"], [48, "4 dozen per outlet"], [4, "4 dozen per outlet"], [12, "we have a dozen outlets"], [12, "is it $9 a dozen?"],
+    [12, "sell by a dozen?"]] as const) {
+    assert.equal(quantityStated(quantity, [text]), false, text);
+    assert.equal(quantityStated(quantity, [text], "pieces"), false, text);
+    assert.equal(statesAnyQuantity([text]), false, text);
+  }
+  assert.equal(quantityStated(12, ["how much for a dozen"]), true);
 });
 
 test("an item's unit decides whether the dozens or the pieces count", () => {
@@ -403,10 +425,10 @@ test("an item's unit decides whether the dozens or the pieces count", () => {
   assert.equal(quantityStated(6, ["half a dozen"], "pieces"), true);
   assert.equal(quantityStated(6, ["half a dozen"], "dozens"), false);
   assert.equal(quantityStated(1, ["a dozen please"], "dozens"), true);
-  assert.equal(inPieces("4 dozen spoons", "pieces"), "48 pcs spoons");
-  assert.equal(inPieces("4 dozen spoons", "dozens"), "4 doz spoons");
+  assert.equal(inPieces("4 dozen spoons", "pieces"), "48 spoons");
+  assert.equal(inPieces("4 dozen spoons", "dozens"), "4 spoons");
   // Texts with no dozen word read the same in every mode.
-  for (const mode of ["both", "pieces", "dozens"] as const) assert.equal(inPieces("need 50 pcs", mode), "need 50 pcs");
+  for (const mode of ["pieces", "dozens"] as const) assert.equal(inPieces("need 50 pcs", mode), "need 50 pcs");
 });
 
 test("打 in an egg beater or a takeaway box is not a dozen", () => {
@@ -428,6 +450,18 @@ test("an item sold by the dozen takes the dozens typed, one sold by the piece ta
   assert.deepEqual(four.ok ? null : [four.error, four.notice], ["UNIT_MISMATCH", "The customer typed dozens: 1 dozen = 12 pieces."]);
   const plain = await add(spoon, 2, "2 pls");
   assert.equal(plain.ok && plain.lines[0].quantity, 2);
+  // "N dozen of": 24 plates, not 2 (review of X2).
+  const of = await add(plate, 24, "2 dozen of the plates");
+  assert.equal(of.ok && of.lines[0].quantity, 24);
+  const two = await add(plate, 2, "2 dozen of the plates");
+  assert.equal(two.ok ? null : two.error, "UNIT_MISMATCH");
+  const each = await add(plate, 12, "a dozen of each");
+  assert.equal(each.ok && each.lines[0].quantity, 12);
+  const spoons = await add(spoon, 2, "2 dozen of the spoons");
+  assert.equal(spoons.ok && spoons.lines[0].quantity, 2);
+  // "a dozen" is 1 of an item sold by the dozen: the first check reads it both ways too.
+  const one = await add(spoon, 1, "a dozen please");
+  assert.equal(one.ok && one.lines[0].quantity, 1);
 });
 
 test("a guessed number or a rate is never a quantity", () => {
@@ -439,6 +473,20 @@ test("a guessed number or a rate is never a quantity", () => {
   assert.equal(quantityStated(200, ["mika can tahan 200 cup a day meh? change to the waring 1.2k one la, same 2"]), false);
   assert.equal(quantityStated(50, ["need 50 pcs"]), true);
   assert.equal(quantityStated(2, ["2 each"]), true);
+  for (const [quantity, text] of [[20, "20 pcs everyday"], [200, "200 cups/day"], [2, "2 pc a day"], [1, "1 for each outlet"], [2, "2 per pax"]] as const) {
+    assert.equal(quantityStated(quantity, [text]), false, text);
+  }
+  // A shop or outlet name ending in "a" or "per" is not a rate word (review of X2).
+  for (const text of ["need 2 for Sentosa outlet", "2 for boba shop", "2 for pasta shop", "2 for paper shop"]) assert.equal(quantityStated(2, [text]), true, text);
+  // "how about 3" offers a number; it isn't a guess.
+  assert.equal(quantityStated(3, ["ok how about 3"]), true);
+  assert.equal(quantityStated(2, ["what about 2 pcs of the black one"]), true);
+  assert.equal(statesAnyQuantity(["ok how about 3"]), true);
+});
+
+test("a rate rule never refuses a number said for a named outlet", async () => {
+  const added = await applyEnquiryAction([], { action: "add", stock_id: "PL-10", quantity: 2 }, ["need 2 for Sentosa outlet"], fakeDeps([plate]));
+  assert.equal(added.ok && added.lines[0].quantity, 2);
 });
 
 test("a number the customer didn't type comes back with a notice to ask how many", async () => {
