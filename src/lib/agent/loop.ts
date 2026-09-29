@@ -9,11 +9,12 @@ import { enquiryTotals, listItemCount, sameQuantityText, statesAnyQuantity, veri
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksConfirmStep, customerMessage, dropRepeatedPitch, enquiryClaimIssues,
-  issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksConfirmStep, customerMessage, dropRepeatedPitch,
+  enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards,
+  withoutEnquiryClaims, withoutKeptLineClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
-import { codePattern, customerChose, pickEvidence } from "./picks";
+import { codePattern, customerChose, pickEvidence, same } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, errorCode, keepBest, lookupDetails, runTool, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 
@@ -116,9 +117,12 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
   }
   const shown = [...ctx.shownIds].slice(-40).join(", ") || "none";
   const unchecked = uncheckedNote(ctx.uncheckedCodes);
+  // The lines the browser still holds, as the customer has them (exam 3, c08-stress T12: Claude took one for a removal).
+  const uncheckedLines = request.enquiry.filter((line) => ctx.uncheckedCodes.some((code) => same(code, line.stockId))).map((line) => ({ code: line.stockId, quantity: line.quantity }));
+  const enquiry = { lines: ctx.lines, totals: enquiryTotals(ctx.lines), ...(uncheckedLines.length ? { unchecked_lines: uncheckedLines } : {}) };
   blocks.push({
     type: "text",
-    text: `[Context from the system, not the customer] Current enquiry: ${JSON.stringify({ lines: ctx.lines, totals: enquiryTotals(ctx.lines) })}${unchecked ? `\n${unchecked}` : ""}${notes.length ? `\nEnquiry changes since last turn: ${notes.join(" ")}` : ""}\nItem codes already shown as cards: ${shown}`,
+    text: `[Context from the system, not the customer] Current enquiry: ${JSON.stringify(enquiry)}${unchecked ? `\n${unchecked}` : ""}${notes.length ? `\nEnquiry changes since last turn: ${notes.join(" ")}` : ""}\nItem codes already shown as cards: ${shown}`,
   });
   return blocks;
 }
@@ -343,7 +347,7 @@ export async function runAgentTurn(input: {
     const typedNumbers = [...new Set(ctx.customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => n > 0 && n <= 100_000).slice(0, 8);
     // A product the customer picked, with or without one of the numbers they typed: a permission question about it is the ruled-out confirm step.
     const picked = (code: string) => [null, ...typedNumbers].some((quantity) => customerChose(code, quantity, ctx.picks, ctx.lines.map((line) => line.code)));
-    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked });
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked, kept: ctx.uncheckedCodes });
     let nudged = false;
     // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
     const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
@@ -405,6 +409,8 @@ export async function runAgentTurn(input: {
     const withoutClaims = (message: string) => withoutEnquiryClaims(message, { ...turnFacts(), seen: ctx.seen });
     const fixers: Fixer[] = [
       { prefix: CLAIM_ISSUE_PREFIX, fix: (message) => removeClaims(message, ctx.searches, ctx.seen) },
+      // Before the enquiry-claim fixer, so a "removed" line the browser still holds gets its own sentence, not NOT_ON_ENQUIRY's.
+      { prefix: KEPT_LINE_PREFIX, fix: (message) => withoutKeptLineClaims(message, ctx.uncheckedCodes, ctx.changes) },
       { prefix: ENQUIRY_CLAIM_PREFIX, fix: withoutClaims },
       noCardFixer,
       { prefix: LINK_ISSUE_PREFIX, fix: (message) => removeLinks(message, unknownStoreLinks(message, ctx.seen, earlier)) },

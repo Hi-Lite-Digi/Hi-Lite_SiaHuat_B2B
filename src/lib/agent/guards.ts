@@ -252,11 +252,14 @@ export const noCardFixer: Fixer = {
 
 /**
  * What this turn's tools did, for checks on the reply; refused: the codes update_enquiry refused as not picked; picked: whether
- * the customer picked a product (a permission question about one is the confirm step).
+ * the customer picked a product (a permission question about one is the confirm step); kept: the enquiry codes not re-checked
+ * this turn, which the browser still holds.
  */
-export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[]; refused?: string[]; picked?: (code: string) => boolean };
+export type TurnFacts = {
+  lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[]; refused?: string[]; picked?: (code: string) => boolean; kept?: string[];
+};
 /** The enquiry facts plus the products looked up this turn, which the reply's words can point at. */
-type ClaimFacts = Pick<TurnFacts, "lines" | "changes"> & { seen: ReadonlyMap<string, CheckedProduct> };
+type ClaimFacts = Pick<TurnFacts, "lines" | "changes" | "kept"> & { seen: ReadonlyMap<string, CheckedProduct> };
 
 /** The products looked up this turn, as cards the reply's words can point at. */
 const seenCards = (seen: ReadonlyMap<string, CheckedProduct>): ShownCard[] => [...seen.values()]
@@ -316,7 +319,10 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
     // An add or update needs its own change this turn; a status line only needs the item on the enquiry.
     return pointed.some((card) => !onLines(card) || !(status || changed(card, ["add", "set"])));
   };
+  // A line the browser still holds said to be removed is keptLineClaims' to fix: it must never become NOT_ON_ENQUIRY.
+  const kept = new Set(keptLineClaims(message, facts.kept ?? [], facts.changes).map((claim) => claim.sentence));
   return sentences(message).filter((said) => {
+    if (kept.has(said)) return false;
     // Judged without its feature wording, so "Added 2 torches - the lid can be removed" is still a claim.
     const sentence = said.replace(featureWording, " ");
     if (notAboutEnquiry.test(sentence)) return false;
@@ -348,6 +354,24 @@ export function withoutEnquiryClaims(message: string, facts: ClaimFacts) {
   const [first, ...rest] = falseEnquiryClaims(message, facts);
   if (!first) return message;
   return removeSentences(message.replace(first, NOT_ON_ENQUIRY), (sentence) => rest.includes(sentence));
+}
+
+export const KEPT_LINE_PREFIX = "This line is still on the enquiry";
+const lostWording = /\b(?:removed|dropped|lost|missing|deleted|no longer (?:on|in)|not (?:on|in) (?:your|the) enquiry)\b/i;
+/**
+ * Sentences saying a line the browser still holds (not re-checked this turn) was removed or is missing, when no remove ran for
+ * it (exam 3, c08-stress T12: "an earlier step accidentally removed your SB3027 line"). Only a typed code counts.
+ */
+export function keptLineClaims(message: string, kept: string[], changes: EnquiryChange[]) {
+  const removed = (code: string) => changes.some((change) => change.action === "remove" && change.code !== null && same(change.code, code));
+  return sentences(message).flatMap((sentence) => {
+    const code = kept.find((item) => codePattern(item).test(sentence) && !removed(item));
+    return code && lostWording.test(sentence) && !/\bstill\b/i.test(sentence) ? [{ sentence, code }] : [];
+  });
+}
+/** The message with each such sentence replaced by one whole sentence saying the line is still there. */
+export function withoutKeptLineClaims(message: string, kept: string[], changes: EnquiryChange[]) {
+  return keptLineClaims(message, kept, changes).reduce((text, { sentence, code }) => text.replace(sentence, `${code} is still on your enquiry.`), message);
 }
 
 export const CLAIM_ISSUE_PREFIX = "This claim";
@@ -514,7 +538,10 @@ export function reviewAnswer(
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
   const links = unknownStoreLinks(answer.message, seen, earlier);
   if (links.length) safety.push(`${LINK_ISSUE_PREFIX} did not come from a tool result or this chat: ${links.join(", ")}. Only give a product's link field or a link from a [cards shown] note; never build one from an item code.`);
-  if (turn.changes) safety.push(...enquiryClaimIssues(answer.message, { lines: turn.lines ?? [], changes: turn.changes, seen }));
+  if (turn.changes) safety.push(...enquiryClaimIssues(answer.message, { lines: turn.lines ?? [], changes: turn.changes, kept: turn.kept, seen }));
+  for (const { sentence, code } of keptLineClaims(answer.message, turn.kept ?? [], turn.changes ?? [])) {
+    safety.push(`${KEPT_LINE_PREFIX}: "${sentence}". ${code} wasn't re-checked this turn but is still on the customer's enquiry: don't say it was removed or is missing.`);
+  }
   for (const { sentence, kind } of turn.searches ? unbackedClaims(answer.message, turn.searches, seen) : []) {
     // A "we don't have it" can be honest about a product type the searches missed, so it is reworded, never removed.
     if (kind === "absence") style.push(`${ABSENCE_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${ABSENCE_FIX}`);
@@ -565,6 +592,7 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [UNKNOWN_CARD_ISSUE_PREFIX, "UNKNOWN_CARD"],
   [MONEY_ISSUE_PREFIX, "MONEY"],
   [ENQUIRY_CLAIM_PREFIX, "ENQUIRY_CLAIM"],
+  [KEPT_LINE_PREFIX, "KEPT_LINE"],
   [CLAIM_ISSUE_PREFIX, "CLAIM"],
   [ALL_IN_STOCK_ISSUE_PREFIX, "CLAIM"],
   [ABSENCE_ISSUE_PREFIX, "ABSENCE"],

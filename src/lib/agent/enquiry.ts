@@ -143,7 +143,9 @@ export function unitStated(quantity: number, unit: "uom" | "carton" | "packet", 
   return quantityStated(quantity, loose);
 }
 
-const clearRequest = /\b(?:clear|start over|reset|remove all|delete all|cancel all|cancel everything)\b|清空|全部取消|重新开始/i;
+// A request to clear, not "not clear leh", "don't clear it" or "clear glass jar": no negation before it, and "clear" only at the
+// end or before all/everything/it/them/my/the enquiry/a softener.
+const clearRequest = /(?<!\b(?:not|don'?t|dont|dun|no|never)\s+(?:\w+\s+)?)(?:\bclear\b(?=\s*(?:$|[.!?,]|(?:all|everything|it|them|my|the\s+(?:enquiry|list|cart|lot)|enquiry|list|cart|la|lah|pls|please)\b))|\b(?:start over|reset|remove all|delete all|cancel all|cancel everything)\b)|清空|全部取消|重新开始/i;
 
 export async function applyEnquiryAction(
   lines: EnquiryReceiptLine[],
@@ -224,8 +226,8 @@ function combinedEcho(echo: EnquiryEcho[]) {
 /**
  * Re-checks the customer's echoed enquiry against the catalogue and the live store.
  * Each line's catalogue lookup and live check are bounded by timeoutMs. A line whose
- * lookup or live check fails or times out is never removed: its code is returned in
- * `unchecked` and the browser keeps its own copy of that line.
+ * lookup or live check fails or times out, or whose live page shows no quantity, is never
+ * removed: its code is returned in `unchecked` and the browser keeps its own copy of that line.
  */
 export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS) {
   const notes: string[] = [];
@@ -233,8 +235,9 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
   const products = new Map<string, CheckedProduct>();
   const checkedLines = await mapWithLimit(combinedEcho(echo), VERIFY_CONCURRENCY, async ({ stockId, quantity }) => {
     const catalogueProduct = await withTimeout(deps.findByCode(stockId).catch(() => "unchecked" as const), timeoutMs, "unchecked" as const);
+    // An unchecked line gets no note: the context lists it as still on the enquiry, and a note under "Enquiry changes since last
+    // turn" read as a removal (exam 3, c08-stress T12).
     if (catalogueProduct === "unchecked") {
-      notes.push(`${stockId} could not be checked just now; it stays on the enquiry as the customer had it, but is left out of the current lines and totals.`);
       unchecked.push(stockId);
       return null;
     }
@@ -246,7 +249,6 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
     products.set(result.product.stock_id, result);
     const label = `${result.product.name} (${result.product.stock_id})`;
     if (!result.verified) {
-      notes.push(`${label} could not be re-checked live just now; it stays on the enquiry as the customer had it, but is left out of the current lines and totals.`);
       unchecked.push(stockId);
       return null;
     }
@@ -261,7 +263,9 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
       notes.push(`Only ${available} ${result.product.uom_id} of ${label} are available now; the line was reduced from ${quantity}.`);
       return checkedEnquiryLine(available, result.product);
     }
-    notes.push(`${label} could not be kept on the enquiry.`);
+    // A page that shows no quantity is not a reason to drop the customer's line: it stays, unchecked (the old "could not be kept"
+    // deleted it for good).
+    unchecked.push(stockId);
     return null;
   });
   return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products, unchecked };

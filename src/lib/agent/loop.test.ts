@@ -487,7 +487,7 @@ test("a slow catalogue lookup cannot hold up enquiry re-verification", async () 
   const started = performance.now();
   const result = await verifyEnquiry([{ stockId: "970S", quantity: 2 }], slow, 300);
   assert.ok(performance.now() - started < 700, "re-verification waited for the slow lookup");
-  assert.equal(result.notes.length, 1);
+  assert.deepEqual(result.notes, []);
   assert.deepEqual(result.unchecked, ["970S"]);
 });
 
@@ -501,6 +501,10 @@ test("a turn that starts with little time left still keeps the customer's enquir
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]]);
 });
 
+/** The system context block of the turn's first Claude call. */
+const contextText = (body: Anthropic.MessageCreateParamsNonStreaming) => (body.messages.at(-1)!.content as Anthropic.ContentBlockParam[])
+  .flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+
 test("a line whose lookup times out is left for the browser to keep, and Claude is told", async () => {
   const stuck = deps();
   stuck.findByCode = (stockId) => stockId === "970S" ? new Promise(() => undefined) : Promise.resolve(safico);
@@ -512,7 +516,10 @@ test("a line whose lookup times out is left for the browser to keep, and Claude 
   assert.equal(reply.provider, "anthropic");
   assert.deepEqual(reply.enquiry.lines.map((line) => line.code), ["BTS-8026D"]);
   assert.deepEqual(reply.enquiry.unchecked, ["970S"]);
-  assert.match(JSON.stringify(bodies[0].messages.at(-1)), /970S could not be checked just now; it stays on the enquiry/);
+  const context = contextText(bodies[0]);
+  assert.match(context, /"unchecked_lines":\[\{"code":"970S","quantity":2\}\]/);
+  assert.match(context, /They are still on the customer's enquiry: never say they were removed or are missing/);
+  assert.doesNotMatch(context, /Enquiry changes since last turn/);
 });
 
 test("while a line is unchecked, the context tells Claude not to quote a total or item count", async () => {
@@ -1342,4 +1349,36 @@ test("the turn log names why the tool rounds stopped", async (t) => {
   await runAgentTurn({ request: request({ event: { type: "text", text: "thank you" } }), deps: deps(), client: thanks.client, model: "claude-sonnet-5" });
   const logs = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").map((call) => call.arguments[1] as Record<string, unknown>);
   assert.deepEqual(logs.map((log) => [log.stopped, log.forcedEarly]), [["ask", false], ["thanks", false]]);
+});
+
+// exam 3, c08-stress T12: SB3027's re-check timed out, its note sat under "Enquiry changes since last turn", and Claire said an
+// earlier step had accidentally removed it.
+const scissors = product({ stock_id: "SB3027", name: "Stainless Steel Detachable Household Kitchen Scissors L20.5cm", list_price: 10 });
+const scissorsUnchecked = request({ event: { type: "text", text: "ok so how i buy. website can?" }, enquiry: [{ stockId: "SB3027", quantity: 2 }, { stockId: "970S", quantity: 3 }] });
+
+test("a line whose live re-check fails is shown to Claude as still on the enquiry, never as a change", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "Yes, each product's store page has Add to Cart." })]);
+  const reply = await runAgentTurn({ request: scissorsUnchecked, deps: fakeDeps([scissors, blowtorch], { SB3027: "fail" }), client, model: "claude-sonnet-5" });
+  const context = contextText(bodies[0]);
+  assert.match(context, /"unchecked_lines":\[\{"code":"SB3027","quantity":2\}\]/);
+  assert.match(context, /still on the customer's enquiry/);
+  assert.doesNotMatch(context, /Enquiry changes since last turn/);
+  assert.deepEqual(reply.enquiry.lines.map((line) => line.code), ["970S"]);
+  assert.deepEqual(reply.enquiry.unchecked, ["SB3027"]);
+});
+
+test("a reply saying an unchecked line was removed is repaired, then fixed with one whole sentence", async () => {
+  const claim = answer({ message: "Sorry, an earlier step accidentally removed your SB3027 line from the enquiry. Yes, each product's store page has Add to Cart." });
+  for (const failing of ["live check", "catalogue lookup"]) {
+    // When the catalogue lookup fails too, the enquiry-claim guard can't point at SB3027 and flags the sentence as well.
+    const deps = fakeDeps([scissors, blowtorch], { SB3027: "fail" });
+    if (failing === "catalogue lookup") deps.findByCode = (code) => (code === "SB3027" ? Promise.reject(new Error("SUPABASE_PRODUCT_500")) : Promise.resolve(blowtorch));
+    const { client, bodies } = fakeClient([claim, claim]);
+    const reply = await runAgentTurn({ request: scissorsUnchecked, deps, client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 2, failing);
+    assert.equal(choice(bodies[1]), "none");
+    assert.match(lastMessage(bodies[1]), /This line is still on the enquiry/);
+    assert.equal(reply.message, "SB3027 is still on your enquiry. Yes, each product's store page has Add to Cart.", failing);
+    assert.deepEqual(reply.enquiry.unchecked, ["SB3027"]);
+  }
 });

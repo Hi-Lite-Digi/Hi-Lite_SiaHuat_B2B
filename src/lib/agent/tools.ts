@@ -322,11 +322,11 @@ async function matchPhotoTool(ctx: TurnContext) {
 
 /**
  * While some lines could not be re-checked, the lines and totals Claude sees are not what the enquiry bar shows
- * (the browser adds those lines back), so Claude must not quote a total or an item count.
+ * (the browser adds those lines back), so Claude must not quote a total or an item count, or say those lines are gone.
  */
 export function uncheckedNote(codes: string[]) {
   return codes.length
-    ? `Unchecked lines (kept by the customer, not in these lines or totals): ${codes.join(", ")}. Don't quote an enquiry total or item count; the enquiry bar shows the full enquiry.`
+    ? `Unchecked lines (kept by the customer, not in these lines or totals): ${codes.join(", ")}. Don't quote an enquiry total or item count; the enquiry bar shows the full enquiry. They are still on the customer's enquiry: never say they were removed or are missing.`
     : undefined;
 }
 
@@ -357,7 +357,8 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   // A line that could not be re-checked stays as the browser has it: it can be removed or cleared, not changed.
   const code = input.stock_id?.toLowerCase();
   if (input.action !== "clear" && ctx.uncheckedCodes.some((item) => item.toLowerCase() === code)) {
-    if (input.action !== "remove") return fail("STOCK_UNVERIFIED");
+    // exam 3, c08-stress T12: a bare STOCK_UNVERIFIED led to retries, then a claim the line was removed.
+    if (input.action !== "remove") return fail("STOCK_UNVERIFIED", { note: "This line is still on the customer's enquiry but couldn't be re-checked just now; don't change it this turn." });
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
     ctx.changes.push({ action: "remove", code: input.stock_id ?? null });
     return ok(enquiryState(ctx));

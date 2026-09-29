@@ -4,9 +4,9 @@ import test from "node:test";
 import { SALES_CONTACT } from "./contact";
 import type { CheckedProduct } from "./facts";
 import {
-  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
+  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
-  noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -900,4 +900,26 @@ test("a link the customer says doesn't open is not typed again, and their browse
   assert.deepEqual(linkStyle("Sorry about that. It's item BTS-8026D; you can search that code on the store.", "torch link cannot open leh"), []);
   assert.deepEqual(linkStyle(`Here it is again: ${torchLink}`, "send the torch link again"), []);
   assert.equal(issueCode(BROKEN_LINK_ISSUE), "LINK");
+});
+
+test("a reply saying a line the browser still holds was removed is flagged, and fixed with one whole sentence", () => {
+  // exam 3, c08-stress T12: SB3027's re-check timed out and Claire said "an earlier step accidentally removed" it.
+  const scissors = new Map<string, CheckedProduct>([["SB3027", { product: product({ stock_id: "SB3027", name: "Detachable Kitchen Scissors" }), verified: false }]]);
+  const review = (message: string, turn: Partial<TurnFacts>) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, scissors, allowed, undefined, { lines: [], changes: [], searches: [], ...turn });
+  const lost = "Sorry, an earlier step accidentally removed your SB3027 line from the enquiry.";
+  const flagged = review(`${lost} You can buy it on our website.`, { kept: ["SB3027"] });
+  assert.deepEqual(flagged.safety.map(issueCode), ["KEPT_LINE"]);
+  assert.ok(flagged.safety[0].startsWith(`${KEPT_LINE_PREFIX}: "${lost}"`));
+  assert.equal(withoutKeptLineClaims(`${lost} You can buy it on our website.`, ["SB3027"], []), "SB3027 is still on your enquiry. You can buy it on our website.");
+  assert.deepEqual(review("SB3027 is still on your enquiry.", { kept: ["SB3027"] }).safety, []);
+  assert.deepEqual(review(lost, {}).safety, []);
+  assert.deepEqual(review("Done, SB3027 is removed from your enquiry.", { kept: [], changes: [{ action: "remove", code: "SB3027" }] }).safety, []);
+  assert.deepEqual(review(lost, { kept: ["SB3027"], changes: [{ action: "remove", code: "sb3027" }] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
+  // With SB3027 not looked up this turn (its catalogue lookup failed), the enquiry-claim check leaves the sentence to this one.
+  const notLookedUp = reviewAnswer({ message: lost, card_ids: [], chips: [], show_contact: false }, new Map(), allowed, undefined, { lines: [], changes: [], searches: [], kept: ["SB3027"] });
+  assert.deepEqual(notLookedUp.safety.map(issueCode), ["KEPT_LINE"]);
+  assert.equal(enquiryClaimIssues(lost, { lines: [], changes: [], seen: new Map() }).length, 1);
+  // Only a typed code counts, and only with a loss word.
+  assert.deepEqual(review("Your scissors were removed from the enquiry.", { kept: ["SB3027"] }).safety.filter((issue) => issueCode(issue) === "KEPT_LINE"), []);
+  assert.deepEqual(review("SB3027 couldn't be re-checked just now.", { kept: ["SB3027"] }).safety, []);
 });

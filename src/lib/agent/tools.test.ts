@@ -503,6 +503,17 @@ test("while a line is unchecked, update_enquiry results tell Claude not to quote
   assert.equal(removed.unchecked, undefined);
 });
 
+test("a line that could not be re-checked is still on the enquiry, and the tool says so", async () => {
+  // exam 3, c08-stress T12: a bare STOCK_UNVERIFIED on an unchecked line led to retries and a "removed" claim.
+  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["BTS-8026D"], picks: tappedAfterTwo("BTS-8026D") });
+  const changed = JSON.parse((await runTool("update_enquiry", { action: "set", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { error: string; note?: string };
+  assert.equal(changed.error, "STOCK_UNVERIFIED");
+  assert.equal(changed.note, "This line is still on the customer's enquiry but couldn't be re-checked just now; don't change it this turn.");
+  const other = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], picks: tappedAfterTwo("BTS-8026D") });
+  const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, other)).content) as { unchecked?: string };
+  assert.match(added.unchecked ?? "", /They are still on the customer's enquiry: never say they were removed or are missing\./);
+});
+
 const addSafico = (overrides: Partial<TurnContext>, action: "add" | "set" = "add") => runTool("update_enquiry", { action, stock_id: "BTS-8026D", quantity: 2 }, context(undefined, overrides));
 
 test("a product whose card the customer tapped this turn can be added", async () => {

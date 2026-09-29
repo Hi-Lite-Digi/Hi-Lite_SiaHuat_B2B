@@ -176,14 +176,15 @@ test("a line whose catalogue lookup fails stays with the browser instead of bein
   const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }], failing);
   assert.deepEqual(result.lines, []);
   assert.deepEqual(result.unchecked, ["BTS-8026D"]);
-  assert.match(result.notes[0], /stays on the enquiry/);
+  // The unchecked list carries it; a note under "Enquiry changes" read as a removal (exam 3, c08-stress T12).
+  assert.deepEqual(result.notes, []);
 });
 
 test("a line whose live re-check fails stays with the browser and its catalogue price is never used", async () => {
   const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }, { stockId: "GAS", quantity: 48 }], fakeDeps([torch, gas], { "BTS-8026D": "fail" }));
   assert.deepEqual(result.lines.map((line) => line.code), ["GAS"]);
   assert.deepEqual(result.unchecked, ["BTS-8026D"]);
-  assert.match(result.notes.join(" "), /\(BTS-8026D\) could not be re-checked/);
+  assert.deepEqual(result.notes, []);
   const allowed = allowedCents(result.products, result.lines, enquiryTotals(result.lines).grandTotal);
   assert.equal(allowed.has(2336), false);
   assert.equal(allowed.has(4672), false);
@@ -334,4 +335,28 @@ test("a pasted list's items are counted, and its first item found", () => {
   assert.equal(firstListItem("1) pot x 5 2) lid"), "pot x 5");
   assert.equal(firstListItem("1) pot"), null);
   assert.equal(firstListItem("blow torch"), null);
+});
+
+test("a live page that shows no quantity leaves the line with the browser instead of dropping it for good", async () => {
+  // Before, such a line got "could not be kept" and the browser deleted it.
+  const unknownStock = [{ available_quantity: null }, { stock_status: "unknown", available_quantity: null }] as const;
+  for (const live of unknownStock) {
+    const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }, { stockId: "GAS", quantity: 48 }], fakeDeps([torch, gas], { "BTS-8026D": live }));
+    assert.deepEqual(result.lines.map((line) => line.code), ["GAS"]);
+    assert.deepEqual(result.unchecked, ["BTS-8026D"]);
+    assert.deepEqual(result.notes, []);
+  }
+});
+
+test("clearing needs a real request to clear, not a negated or describing 'clear'", async () => {
+  const deps = fakeDeps([torch]);
+  const lines = [{ item: torch.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];
+  for (const text of ["clear everything", "pls clear", "can clear all?", "clear the enquiry", "Clear enquiry", "reset", "清空"]) {
+    const cleared = await applyEnquiryAction(lines, { action: "clear" }, [text], deps);
+    assert.deepEqual(cleared.ok && cleared.lines, [], text);
+  }
+  for (const text of ["not clear leh", "don't clear it", "no need clear", "clear glass jar 2 pcs", "Thank you"]) {
+    const refused = await applyEnquiryAction(lines, { action: "clear" }, [text], deps);
+    assert.equal(refused.ok ? null : refused.error, "CLEAR_NOT_REQUESTED", text);
+  }
 });
