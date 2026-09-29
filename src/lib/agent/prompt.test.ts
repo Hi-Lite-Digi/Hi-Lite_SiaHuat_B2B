@@ -16,6 +16,17 @@ test("Claire summarises the enquiry in one line instead of listing it", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked what's in the enquiry, give a one-line summary (item count and total from the context); the enquiry bar shows the lines, so don't list them."));
 });
 
+test("Claire quotes the enquiry totals from the context, says they are before GST and never works out a GST amount", () => {
+  // exam 3, c09-persona T9-T12 and c10-stress T8-T10: the total with GST was refused again and again. Until the owner approves
+  // a computed estimate, Claire says the checkout shows it, once.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("that a tool did not return in this turn; the totals in the Current enquiry context count, so quote them without a tool call."));
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- GST:")) ?? "";
+  assert.ok(line.startsWith("- GST: prices, line totals and the enquiry total are before GST; 9% GST is added at checkout."));
+  assert.ok(line.includes("Don't work out an amount with GST yourself"));
+  assert.ok(line.includes("If they ask again, don't repeat the refusal"));
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /grandTotalWithGst/);
+});
+
 test("the update_enquiry errors Claude must explain are named in the prompt, clearing included", () => {
   for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "UNIT_MISMATCH", "CLEAR_NOT_REQUESTED", "PRODUCT_NOT_CHOSEN"]) {
     assert.ok(CLAIRE_AGENT_PROMPT.includes(code), code);
