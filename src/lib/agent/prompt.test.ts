@@ -23,7 +23,9 @@ test("the update_enquiry errors Claude must explain are named in the prompt, cle
 });
 
 test("Claire never claims an item isn't carried, nothing fits a budget or a list is complete unless a search this turn backs it", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Never say an item isn't carried, that nothing fits a budget, or that a list is complete ('that's all', 'full range', 'only two sizes') unless a search in this same turn backs it: for 'we don't have it', at least two different searches (different words, including the broader product type or a category) and none fit; for a budget, a category search with max_price that returned complete true; for 'that's all', a search that returned complete true. This doesn't apply to things Sia Huat doesn't sell at all (food, cars): just say what Sia Huat supplies. Otherwise say what you found and that there may be more (total_found), and offer to narrow down. When the customer says 'show me all/more', pass the category and show options you haven't shown."));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Never say an item isn't carried, that nothing fits a budget, or that a list is complete ('that's all', 'full range', 'only two sizes') unless a search in this same turn backs it: for 'we don't have it', at least two different searches (different words, including the broader product type or a category) and none fit; for a budget, a category search with max_price that returned complete true; for 'that's all', a search that returned complete true. This doesn't apply to things Sia Huat doesn't sell at all (food, cars): just say what Sia Huat supplies. Otherwise say what you found and that there may be more (don't quote how many), and offer to narrow down. When the customer says 'show me all/more', pass the category and show options you haven't shown."));
+  // exam 3: "(total_found)" led to 11 replies quoting a match count.
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /(total_found)/);
 });
 
 test("Claire searches with the customer's words and size before saying there is no substitute", () => {
@@ -33,12 +35,25 @@ test("Claire searches with the customer's words and size before saying there is 
 
 test("Claire describes stock as the tools found it, keeps fitting products when the customer narrows, and sends unlisted items to sales", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("don't leave out a product from the tool results that fits just because it was shown before"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("'unknown' means not checked"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("'not checked' never means out of stock"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- Not in our catalogue (you ran at least two different searches"));
 });
 
 test("Claire only states product facts the tools gave", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- Only state a product's material, features, use, capacity, size, compatibility or origin if it appears in the tool facts (name, category, size, dimensions, description, details). If it isn't there, say you can't confirm it and share the product link. Read the whole description before saying a product lacks something."));
+});
+
+test("Claire keeps to the facts on extras, sizes, matches, superlatives and the nearest match (exam 3)", () => {
+  // exam 3: "comes with removable whisks", a 10in strainer called 8in, "the cheapest" of a partial list, an unrelated "matching"
+  // bowl, 12QT never searched as 12L, and alternatives picked for stock rather than closeness.
+  for (const words of [
+    "never say the product comes with them", "Copy sizes exactly", "same series only when", "is never an origin",
+    "use them only with complete true", "of the ones I found", "never say we only carry some of them", "covers more than its available_quantity",
+    "not the most stocked or the cheapest", "exact match first, whatever the brand", "search '12L'", "exclude_brands",
+    "For 'not <brand or country>', search the category with exclude_brands.",
+  ]) {
+    assert.ok(CLAIRE_AGENT_PROMPT.includes(words), words);
+  }
 });
 
 test("Claire reads the store's details and category the way the catalogue means them, with no brand hard-coded", () => {

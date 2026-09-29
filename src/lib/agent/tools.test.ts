@@ -48,6 +48,8 @@ test("every search result is live-checked", async () => {
   const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(deps))).content) as { products: FactBody[] };
   assert.equal(body.products.length, 10);
   assert.ok(body.products.every((item) => item.price_and_stock_verified_live && item.available_quantity === 50));
+  // exam 3: the raw token 'in_stock' leaked into 2 replies, so the fact says it in plain words.
+  assert.ok(body.products.every((item) => item.stock === "in stock"));
   assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, 10);
   assert.match(agentTools[0].description ?? "", /checked live/);
   assert.match(agentTools[0].description ?? "", /price_and_stock_verified_live/);
@@ -57,7 +59,7 @@ test("a failed live check leaves that one result unverified, with no price or st
   const ctx = context(fakeDeps(torches(4), { T3: "fail" }));
   const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as { products: FactBody[] };
   const failed = body.products.find((item) => item.stock_id === "T3")!;
-  assert.deepEqual([failed.price_ex_gst, failed.stock, failed.available_quantity, failed.price_and_stock_verified_live], [null, "unknown", null, false]);
+  assert.deepEqual([failed.price_ex_gst, failed.stock, failed.available_quantity, failed.price_and_stock_verified_live], [null, "not checked", null, false]);
   assert.ok(body.products.filter((item) => item.stock_id !== "T3").every((item) => item.price_and_stock_verified_live));
   const remembered = ctx.seen.get("T3")?.product;
   assert.deepEqual([remembered?.in_stock, remembered?.available_quantity], [null, null]);
@@ -683,7 +685,7 @@ test("find_alternatives live-checks the product it was asked about and keeps it 
   const ctx = context(deps);
   const body = JSON.parse((await runTool("find_alternatives", { stock_id: "970S" }, ctx)).content) as AlternativesBody & { source?: FactBody };
   assert.deepEqual([ctx.seen.get("970S")?.verified, ctx.seen.get("970S")?.product.stock_status], [true, "out_of_stock"]);
-  assert.deepEqual([body.source?.stock_id, body.source?.stock, body.source?.price_and_stock_verified_live], ["970S", "out_of_stock", true]);
+  assert.deepEqual([body.source?.stock_id, body.source?.stock, body.source?.price_and_stock_verified_live], ["970S", "out of stock", true]);
   assert.deepEqual(body.products.map((item) => item.stock_id), ["F46700", "BTS-8026D"]);
 });
 

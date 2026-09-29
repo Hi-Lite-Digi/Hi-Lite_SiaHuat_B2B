@@ -193,7 +193,8 @@ export function productFact({ product, verified, details }: CheckedProduct, show
     details: details ? Object.fromEntries(Object.entries(details).map(([label, value]) => [label, inchMarks(value)])) : null,
     price_ex_gst: verified ? product.list_price : null,
     uom: product.uom_id,
-    stock: product.stock_status ?? "unknown",
+    // Plain words: the raw in_stock / out_of_stock leaked into replies (exam 3: 2 replies). The guards read stock_status.
+    stock: ({ in_stock: "in stock", out_of_stock: "out of stock" } as Record<string, string>)[product.stock_status ?? ""] ?? "not checked",
     available_quantity: product.available_quantity ?? null,
     price_and_stock_verified_live: verified,
     shown_before: shownBefore,
