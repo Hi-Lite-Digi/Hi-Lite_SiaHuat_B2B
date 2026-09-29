@@ -148,6 +148,8 @@ test("Claire never calls update_enquiry to check price or stock, or without a nu
 test("Claire asks for all her searches at once and doesn't echo the customer's budget figure", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("into one search_catalogue call"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("within your budget"));
+  // exam 3, c06-stress T4: the customer's "2 dollar" was echoed, then rewritten by the money check.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("calls a product by its price ('the 2 dollar one'), don't repeat their figure"));
 });
 
 test("Claire points to sales once, stops asking for a photo that doesn't arrive, and answers whether they can buy online", () => {

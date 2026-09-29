@@ -275,6 +275,20 @@ test("a staff claim is removed and the reply shows the sales contact", async () 
   assert.equal(reply.showContact, true);
 });
 
+test("an item code from the chat that looks like a phone number reaches the customer unchanged", async () => {
+  // exam 3, c05-persona T10: "3500-0018" was sent as "Sia Huat sales (details below)".
+  const plate = product({ stock_id: "3500-0018", name: "Patra Rim Plate 18cm, Porcelain White", list_price: 7.8 });
+  const shown = `Plain white pair.\n[cards shown: 3500-0018 Patra Rim Plate 18cm, Porcelain White ($7.80) <${plate.source_url}>]`;
+  const message = "Could you type back the plate's code, 3500-0018, with how many you need?";
+  const { client } = fakeClient([answer({ message })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok this one la" }, history: [{ role: "user", content: "white plate" }, { role: "assistant", content: shown }], shownProductIds: ["3500-0018"] }),
+    deps: fakeDeps([plate]), client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.message, message);
+  assert.equal(reply.showContact, false);
+});
+
 test("a repeated pitch is dropped without a repair call", async () => {
   const { client, bodies } = fakeClient([
     answer({ message: "Yes, each product's store page has Add to Cart. You can contact Sia Huat sales with the PDF.", show_contact: true }),

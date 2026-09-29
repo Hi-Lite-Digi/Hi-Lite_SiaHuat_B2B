@@ -471,7 +471,9 @@ export async function runAgentTurn(input: {
       final = finish(final, review);
     }
 
-    const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact));
+    // The chat's item codes, so a code that fits the phone pattern isn't taken for a phone number (exam 3, c05-persona T10).
+    const chatCodes = [...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...ctx.shownIds, ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code))];
+    const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact), chatCodes);
     // Codes and counts only, never customer or reply text.
     console.info("[api/agent] turn", {
       ms: Math.round(performance.now() - started), rounds, forcedEarly, stopped, repaired, repairCauses,

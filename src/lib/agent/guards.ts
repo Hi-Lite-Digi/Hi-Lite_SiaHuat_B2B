@@ -576,7 +576,7 @@ export function reviewAnswer(
   // A 'Yes, add it' chip is the confirm step the owner ruled out; 'Add more items' is not.
   const chips = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip)).slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
-  if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $.`);
+  if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $. That includes an amount the customer typed ('the 2 dollar one'): name the product instead.`);
   const links = unknownStoreLinks(answer.message, seen, earlier);
   if (links.length) safety.push(`${LINK_ISSUE_PREFIX} did not come from a tool result or this chat: ${links.join(", ")}. Only give a product's link field or a link from a [cards shown] note; never build one from an item code.`);
   if (turn.changes) safety.push(...enquiryClaimIssues(answer.message, { lines: turn.lines ?? [], changes: turn.changes, kept: turn.kept, seen }));
@@ -687,14 +687,17 @@ const isSalesContact = (found: string) => (found.includes("@")
 
 /**
  * Final safety pass on the words the customer sees. A sentence claiming stock is reserved or an order placed is
- * removed (an enquiry reserves nothing). A phone number or email that isn't Sia Huat's sales contact is replaced
- * with a pointer to the contact block; that, or a removed staff claim, turns the block on.
+ * removed (an enquiry reserves nothing). A phone number or email that isn't Sia Huat's sales contact or an item code
+ * from this chat is replaced with a pointer to the contact block; that, or a removed staff claim, turns the block on.
  */
-export function customerMessage(message: string) {
+export function customerMessage(message: string, itemCodes: readonly string[] = []) {
+  // 175 catalogue codes fit the phone pattern (the Patra range 3500-xxxx, Westmark 30002260): a code from this chat stays
+  // (exam 3, c05-persona T10-T11). Codes with a space are never spared, so "9123 4567" can't pass as one.
+  const codes = new Set(itemCodes.filter((code) => /^\S+$/.test(code)).map((code) => code.toLowerCase()));
   const trimmed = message.trim();
   const unreserved = sentences(trimmed).some(isReservationClaim) ? removeSentences(trimmed, isReservationClaim) : trimmed;
   if (trimmed && !unreserved) return { message: CONTACT_LINE, showContact: true };
-  const contactChecked = unreserved.replace(contactPattern, (found) => (isSalesContact(found) ? found : OTHER_CONTACT));
+  const contactChecked = unreserved.replace(contactPattern, (found) => (isSalesContact(found) || codes.has(found.toLowerCase()) ? found : OTHER_CONTACT));
   const checked = honestManualHandoff(contactChecked);
   if (checked === contactChecked) return { message: contactChecked, showContact: contactChecked !== unreserved };
   return { message: checked.replace(HANDOFF_SENTENCE, "").trim() || CONTACT_LINE, showContact: true };

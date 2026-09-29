@@ -784,6 +784,24 @@ test("Sia Huat's sales contact, prices, item codes, dates and size lists pass un
   }
 });
 
+test("an item code from this chat that fits the phone pattern is kept; other numbers are still replaced", () => {
+  // exam 3, c05-persona T10-T11: the Patra codes became "Sia Huat sales (details below)" ("the codes u write also dont have").
+  const text = "Could you type back the item codes 3500-0018 (plate) and 3500-3011 (bowl), with how many you need?";
+  assert.deepEqual(customerMessage(text, ["3500-0018", "3500-3011", "R-52568-81"]), { message: text, showContact: false });
+  assert.deepEqual(customerMessage("Westmark 30002260 is in stock.", ["30002260"]), { message: "Westmark 30002260 is in stock.", showContact: false });
+  assert.deepEqual(customerMessage("Call 6223 1732 or see 3500-0018.", ["3500-0018"]), { message: "Call Sia Huat sales (details below) or see 3500-0018.", showContact: true });
+  // A code with a space is never spared, so a phone number can't pass as one.
+  assert.deepEqual(customerMessage("Call 9123 4567.", ["9123 4567"]), { message: "Call Sia Huat sales (details below).", showContact: true });
+  // Without the chat's codes nothing changes.
+  assert.deepEqual(customerMessage(text), { message: "Could you type back the item codes Sia Huat sales (details below) (plate) and Sia Huat sales (details below) (bowl), with how many you need?", showContact: true });
+});
+
+test("the money repair also covers an amount the customer typed", () => {
+  // exam 3, c06-stress T4: the customer's "2 dollar" became "the 'the listed price one'".
+  const review = reviewAnswer({ message: "The '2 dollar one' is the skimmer.", card_ids: [], chips: [], show_contact: false }, seen, allowed);
+  assert.match(review.safety.find((issue) => issue.startsWith(MONEY_ISSUE_PREFIX)) ?? "", /That includes an amount the customer typed \('the 2 dollar one'\): name the product instead\.$/);
+});
+
 const search = (overrides: Partial<SearchRecord> = {}): SearchRecord => ({ queries: ["tongs"], category: null, categoryFound: false, maxPrice: null, complete: false, ...overrides });
 const stockSeen = new Map<string, CheckedProduct>([
   ["BLP10.A0WH", { product: product({ stock_id: "BLP10.A0WH", name: "Kenwood Blender x-Tract 1.5L", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }), verified: true }],
