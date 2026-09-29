@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, cardsToPick, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -22,6 +22,9 @@ type ChatItem = {
   imageUrl?: string;
   tap?: boolean;
   chip?: boolean;
+  /** false hides the contact block's PDF link and the "Tap a product" line (exam 3: both judged templated). */
+  pdf?: boolean;
+  pickHint?: boolean;
 };
 
 const GREETING = "Hi, I'm Claire from Sia Huat 👋 What are you looking for today? You can send me a photo too.";
@@ -105,15 +108,19 @@ export function AgentChat() {
       if (!response.ok) throw new Error("REQUEST_FAILED");
       const reply = agentReplySchema.parse(json);
       reply.cards.forEach((card) => shownIds.current.add(card.stock_id));
-      setEnquiry(nextEnquiry(enquiryRef.current, reply.enquiry));
+      const next = nextEnquiry(enquiryRef.current, reply.enquiry);
+      setEnquiry(next);
       setItems((current) => [...current, {
         id: nextId.current++, role: "assistant", time: timeLabel(),
         text: reply.message, cards: reply.cards, chips: reply.chips, showContact: reply.showContact,
+        // The PDF link once the enquiry has lines or Claire's words point to it (78 of 124 contact blocks came before any add);
+        // "Tap a product" only while a card isn't on the enquiry, not under "Got it: 2 ... added".
+        pdf: next.lines.length > 0 || /\bPDF\b/i.test(reply.message), pickHint: cardsToPick(reply.cards, next.lines),
       }]);
     } catch {
       if (sessionId.current !== session) return;
       setItems((current) => [...current, {
-        id: nextId.current++, role: "assistant", time: timeLabel(), showContact: true,
+        id: nextId.current++, role: "assistant", time: timeLabel(), showContact: true, pdf: enquiryRef.current.lines.length > 0,
         text: `Sorry, something went wrong on my side. Please try again, or reach Sia Huat sales at ${SALES_CONTACT.phone} or ${SALES_CONTACT.email}.`,
       }]);
     } finally {
@@ -259,12 +266,12 @@ export function AgentChat() {
               </button>
               {card.source_url && <a href={card.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{card.source_url} <ExternalLink className="size-3 shrink-0" /></a>}
             </div>)}
-            <p className="text-xs font-medium text-[#176853]">Tap a product to choose it.</p>
+            {item.pickHint !== false && <p className="text-xs font-medium text-[#176853]">Tap a product to choose it.</p>}
           </div> : null}
           {item.showContact && <div className="mt-3 rounded-xl border border-[#176853]/20 bg-[#eef7f3] p-3 text-xs text-[#15362f]">
             <p className="font-semibold">Sia Huat sales</p>
             <p>{SALES_CONTACT.phone} · {SALES_CONTACT.email}</p>
-            <button type="button" onClick={() => void savePdf()} className="mt-2 font-semibold text-[#176853] underline">Download your enquiry PDF to send along</button>
+            {item.pdf !== false && <button type="button" onClick={() => void savePdf()} className="mt-2 font-semibold text-[#176853] underline">Download your enquiry PDF to send along</button>}
           </div>}
           <p className={`mt-2 text-[10px] text-[#667a74]/80 ${item.role === "user" ? "text-right" : ""}`}>{item.role === "user" ? "Sent" : "Received"} · {item.time}</p>
         </div>

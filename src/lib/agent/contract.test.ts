@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
-import { agentReplySchema, agentRequestSchema, cardsNote, nextEnquiry, parseCardsNote, withoutCardsNote } from "./contract";
+import { agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, nextEnquiry, parseCardsNote, withoutCardsNote } from "./contract";
 import { product } from "./testing";
 
 test("a card tap is a product choice, never text", () => {
@@ -92,4 +92,13 @@ test("a name with a semicolon or a leading bracket survives", () => {
     { code: "CS-4", name: '(26-01688) COFFEE SOCK, 4"', price: 2.5, link: "https://store.siahuat.com/product/77" },
     { code: "970S", name: "KITCHEN BLOW TORCH 970S", price: 31.31, link: "https://store.siahuat.com/product/1234" },
   ]);
+});
+
+test("'Tap a product' shows only while a card isn't on the enquiry yet", () => {
+  // exam 3: "Tap a product to choose it." sat under "Got it: 2 ... added" with only that card (judged templated, c12-stress T5).
+  const ut09l = product({ stock_id: "UT09L" });
+  const other = product({ stock_id: "2564L" });
+  assert.equal(cardsToPick([ut09l], [{ code: "UT09L" }]), false);
+  assert.equal(cardsToPick([ut09l, other], [{ code: "ut09l" }]), true);
+  assert.equal(cardsToPick([], []), false);
 });

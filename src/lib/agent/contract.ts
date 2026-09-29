@@ -70,6 +70,9 @@ export function nextEnquiry(current: AgentReply["enquiry"], reply: AgentReply["e
   return { lines, totals: { ...totals, grandTotal: Math.round(totals.grandTotal * 100) / 100 } };
 }
 
+/** True when a card isn't on the enquiry yet, so "Tap a product to choose it" still means something. */
+export const cardsToPick = (cards: Product[], lines: { code: string }[]) => cards.some((card) => !lines.some((line) => line.code.toLowerCase() === card.stock_id.toLowerCase()));
+
 /** How the browser marks a card tap, a chip tap and a photo (with its caption, or NO_CAPTION) in the chat history. */
 export const TAP_PREFIX = "[tap]";
 export const CHIP_PREFIX = "[chip]";

@@ -78,7 +78,7 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(10);
     pdf.setTextColor(51, 75, 68);
-    pdf.text("No items noted yet. Tell Claire what you need before sharing this PDF with sales.", margin, y);
+    pdf.text("No items on the enquiry yet; the conversation below shows what was asked.", margin, y);
     y += 12;
   } else {
     input.lines.forEach((line, index) => {
