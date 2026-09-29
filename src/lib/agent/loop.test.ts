@@ -737,6 +737,56 @@ test("an earlier card whose lookup stalls is attached as unconfirmed within abou
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
 });
 
+// exam 3, c02-A T18: the card was shown twice, the customer said yes with a quantity, and the add receipt re-sent the card.
+const torchShownTwice = (shownProductIds: string[]) => request({
+  event: { type: "text", text: "ok sure. i want 2 units." },
+  history: [{ role: "user", content: "blow torch" }, torchShown, { role: "user", content: "how much ah" }, torchShown],
+  shownProductIds,
+});
+
+test("an add confirmation that re-attaches an already-seen card is sent without a repair", async (t) => {
+  const info = t.mock.method(console, "info", () => undefined);
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+    answer({ message: "Got it: 2 blow torches.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: torchShownTwice(["970S"]), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(reply.cards, []);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]]);
+  const log = info.mock.calls.find((call) => call.arguments[0] === "[api/agent] turn")!.arguments[1] as Record<string, unknown>;
+  assert.deepEqual(log.repairCauses, []);
+});
+
+test("an add confirmation keeps a card the customer hasn't seen, and a cards-only answer keeps its card", async () => {
+  const firstShowing = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+    answer({ message: "Got it: 2 blow torches.", card_ids: ["970S"] }),
+  ]);
+  const shownNever = await runAgentTurn({ request: torchShownTwice([]), deps: deps(), client: firstShowing.client, model: "claude-sonnet-5" });
+  assert.deepEqual(shownNever.cards.map((card) => card.stock_id), ["970S"]);
+  const cardsOnly = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+    answer({ message: "", card_ids: ["970S"] }),
+  ]);
+  const onlyCards = await runAgentTurn({ request: torchShownTwice(["970S"]), deps: deps(), client: cardsOnly.client, model: "claude-sonnet-5" });
+  assert.deepEqual(onlyCards.cards.map((card) => card.stock_id), ["970S"]);
+});
+
+test("an invalid first answer after an add is still repaired", async () => {
+  const invalid = { ...answer({ message: "" }), content: [{ type: "text", text: "not json" }] } as unknown as Anthropic.Message;
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+    invalid,
+    answer({ message: "Got it: 2 blow torches." }),
+  ]);
+  const reply = await runAgentTurn({ request: torchShownTwice(["970S"]), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 3); // the add, the invalid answer and its repair
+  assert.match(JSON.stringify(bodies.at(-1)!.messages.at(-1)), /not valid JSON/);
+  assert.equal(reply.message, "Got it: 2 blow torches.");
+});
+
 test("customer texts exclude taps and include the current message", () => {
   const texts = recentCustomerTexts(request({
     event: { type: "text", text: "3 please" },

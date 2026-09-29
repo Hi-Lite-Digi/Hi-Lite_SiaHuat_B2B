@@ -10,7 +10,7 @@ import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, typ
 import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksPermissionToAdd, customerMessage, dropRepeatedPitch, enquiryClaimIssues,
-  issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, sentences, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutEnquiryClaims,
+  issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, sentences, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence } from "./picks";
@@ -335,7 +335,10 @@ export async function runAgentTurn(input: {
     const withEarlierCards = (answer: FinalAnswer) => beforeDeadline(
       attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, timeLeft, triedCodes), deadline,
     ).catch(() => answer);
-    let final = result.final && await withEarlierCards(result.final);
+    // Dropped before the lookup and the review, so no re-check or REPEAT repair is spent on it (exam 3, c02-A T18). A cards-only
+    // answer keeps its cards: they are all it says.
+    const trimCards = (answer: FinalAnswer) => (answer.message === CARDS_ONLY_MESSAGE ? answer : withoutChangedCards(answer, ctx.changes, ctx.shownIds, earlier.currentText));
+    let final = result.final && await withEarlierCards(trimCards(result.final));
     let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
@@ -382,7 +385,7 @@ export async function runAgentTurn(input: {
           repairFailed = failureCode(error, deadline);
           return tidiedFirst;
         });
-      final = await withEarlierCards(final);
+      final = await withEarlierCards(trimCards(final));
       allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       if (tidiedFirst && unfixable(review.safety, fixers).length) {

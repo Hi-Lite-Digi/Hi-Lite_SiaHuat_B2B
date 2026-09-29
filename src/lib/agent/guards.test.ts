@@ -6,7 +6,7 @@ import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
-  noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -266,6 +266,41 @@ test("re-showing cards is allowed when the customer asks to see or tap them", ()
     assert.deepEqual(styleFor(text), [], text);
   }
   for (const text of ["hello police?", "any others?", "wah still nvr ans how much", "dont show me tongs"]) assert.match(styleFor(text).join(" "), /already shown these same cards twice/, text);
+});
+
+test("complaints, quantities and picks that use again, same, back or earlier don't count as asking to see cards again", () => {
+  // exam 3: all 6 identical third showings went out on bare words (c08-stress "SAME qty la. 20", c09-stress "ok add back 2 la").
+  const tongs = new Map<string, CheckedProduct>([["UT16HR", { product: product({ stock_id: "UT16HR", name: "Stainless Steel Utility Tong with Locking Ring 16in", list_price: 5.69 }), verified: true }]]);
+  const styleFor = (currentText: string) => reviewAnswer(
+    { message: "This one locks shut.", card_ids: ["UT16HR"], chips: [], show_contact: false }, tongs, allowed, { cardSets: [["UT16HR"], ["UT16HR"]], previousMessage: null, currentText },
+  ).style.join(" ");
+  for (const text of [
+    "SAME qty la. 20", "ya tht one. same qty", "still same link leh", "ok add back 2 la", "dont anyhow remove again ah",
+    "Then why did you even ask earlier on", "only 1 of them", "i TAP ALR just now!!", "why need to tap again", "dun give me 3 again",
+    "give me 2 of those", "give me 5 of them", "send them to my office",
+    "don't show me the same ones", "u say wont send but below still got same link??",
+  ]) assert.match(styleFor(text), /already shown these same cards twice/, text);
+  for (const text of [
+    "show me those again", "can see the earlier ones?", "send the same cards again", "give me those again",
+    "ok ok show the 2 again i tap", "tap where?? nothing to tap here leh", "where the product?? show me then i tap la",
+    "u nvr show anything", "i cant see the card", "the previous options pls", "go back to the knives", "what were the options again?",
+  ]) assert.doesNotMatch(styleFor(text), /already shown these same cards twice/, text);
+});
+
+test("an add or change confirmation leaves off a card the customer has already seen", () => {
+  const answerWith = (message: string, card_ids: string[]): FinalAnswer => ({ message, card_ids, chips: [], show_contact: false });
+  const added: EnquiryChange[] = [{ action: "add", code: "970S" }];
+  const shown = new Set(["970S"]);
+  const got = "Got it: 2 blow torches.";
+  assert.deepEqual(withoutChangedCards(answerWith(got, ["970S"]), added, shown, "ok 2").card_ids, []);
+  assert.deepEqual(withoutChangedCards(answerWith(got, ["970S"]), [{ action: "set", code: "970s" }], shown, "make it 2").card_ids, []);
+  assert.deepEqual(withoutChangedCards(answerWith(got, ["970S"]), added, new Set(), "ok 2").card_ids, ["970S"]); // first showing
+  assert.deepEqual(withoutChangedCards(answerWith(got, ["970S", "BTS-8026D"]), added, new Set(["970S", "BTS-8026D"]), "ok 2").card_ids, ["BTS-8026D"]);
+  assert.deepEqual(withoutChangedCards(answerWith("Removed the torch.", ["970S"]), [{ action: "remove", code: "970S" }], shown, "remove it").card_ids, ["970S"]);
+  for (const message of ["Got it: 2 blow torches. Tap it if you want a different one.", "Here it is again.", "See the card below."]) {
+    assert.deepEqual(withoutChangedCards(answerWith(message, ["970S"]), added, shown, "ok 2").card_ids, ["970S"], message);
+  }
+  assert.deepEqual(withoutChangedCards(answerWith(got, ["970S"]), added, shown, "show me those again").card_ids, ["970S"]);
 });
 
 const checked = (stock_id: string, name: string, list_price: number): [string, CheckedProduct] => [stock_id, { product: product({ stock_id, name, list_price }), verified: true }];

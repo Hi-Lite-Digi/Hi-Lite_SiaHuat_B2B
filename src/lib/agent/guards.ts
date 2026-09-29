@@ -101,7 +101,23 @@ export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and i
 export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[]; replies?: string[] };
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
 // Keyed only on the customer's words ("show me then i tap la", "u nvr show anything"), never on Claire's own "tap it".
-const asksAgain = /\b(?:again|those|them|same|previous|earlier|back)\b|\bshow (?:me )?(?:it|that|the (?:card|product|one))\b|\bwhere(?:'s| is)? (?:the )?(?:card|product)\b|\b(?:i(?:'ll| will)?|let me|to|can|then i) tap\b|\b(?:nvr|never|didn'?t|dint|did not)\s+(?:show|see|saw)\w*|\bi (?:don'?t|dun|cannot|can'?t) see\b/i;
+// Show words or card nouns make again/same/those/back an ask to see cards again; on their own they are complaints, quantities
+// and picks ("SAME qty la", "add back 2", "why need tap again", "only 1 of them") (exam 3: all 6 identical third showings).
+const againWord = String.raw`(?:again|those|them|same|previous|earlier|back)`;
+const notBefore = String.raw`(?<!\b(?:dun|don'?t|dont|do\s+not|stop|no\s+need\s+to|won'?t|wont|will\s+not|never|nvr)\s+)`;
+const asksAgain = new RegExp([
+  String.raw`${notBefore}\b(?:show|see|resend|list|pull\s+up|bring\s+up)\b[^.?!\n]{0,25}\b${againWord}\b`,
+  String.raw`${notBefore}\b(?:send|give)\b[^.?!\n]{0,25}\bagain\b`,
+  String.raw`(?<!\b(?:dun|don'?t|dont|not|no|stop)\b[^.?!\n]{0,20})\b(?:those|them|the\s+same|previous|earlier|last)\s+(?:\w+\s+)?(?:cards?|options?|ones|products|items|list|pics?|photos?)\b`,
+  String.raw`\b(?:cards?|options?|ones|products)\s+again\b`,
+  String.raw`\b(?:go|going|come)\s+back\s+to\b`,
+  String.raw`\bshow (?:me )?(?:it|that|the (?:card|product|one))\b`,
+  String.raw`\bwhere(?:'s| is)? (?:the )?(?:card|product)\b`,
+  String.raw`\b(?:tap|click)\s+(?:where|what)\b`,
+  String.raw`\bnothing to (?:tap|click)\b`,
+  String.raw`\b(?:nvr|never|didn'?t|dint|did not)\s+(?:show|see|saw)\w*`,
+  String.raw`\bi (?:don'?t|dun|cannot|can'?t) see\b`,
+].join("|"), "i");
 const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toLowerCase()))].sort().join(" ");
 const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
 const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
@@ -213,6 +229,19 @@ const asksForTap = (sentence: string) => tapAsk.test(sentence) && !tapNotACard.t
 const showPromise = /\b(?:let me|I'?ll|I will|one sec|one moment|hold on)\b[^.!?\n]{0,40}\b(?:pull|bring|show|get)\b[^.!?\n]{0,25}(?<!\bset )\bup\b|\b(?:pulling|bringing) (?:up|those|these|it|that)\b/i;
 // "Let me know the type and I'll pull up options" waits for the customer; "having trouble pulling up the catalogue" is honest.
 const promisesToShow = (sentence: string) => showPromise.test(sentence) && !/\b(?:if|once|when|let me know|tell me|trouble|unable|cannot)\b|n['’]t\b/i.test(sentence);
+// Words that point at a card keep it: "tap it", "here it is", "card below".
+const pointsAtCard = (sentence: string) => asksForTap(sentence) || promisesToShow(sentence) || /\b(?:cards?|below|here it is)\b/i.test(sentence);
+/**
+ * The answer without the cards of items this turn added or set that the customer has already seen: the words and the enquiry
+ * bar show the change, and the card would only repeat (exam 3: 61 of 87 add confirmations re-sent the card, 54 of those a
+ * third showing, and each could cost a REPEAT repair). Words that point at a card, or a customer asking to see it, keep it.
+ */
+export function withoutChangedCards(answer: FinalAnswer, changes: EnquiryChange[], shownIds: ReadonlySet<string>, currentText: string): FinalAnswer {
+  if (sentences(answer.message).some(pointsAtCard) || asksAgain.test(currentText)) return answer;
+  const shown = new Set([...shownIds].map((id) => id.toLowerCase()));
+  const changed = new Set(changes.flatMap((change) => (change.code && (change.action === "add" || change.action === "set") ? [change.code.toLowerCase()] : [])));
+  return { ...answer, card_ids: answer.card_ids.filter((id) => !(changed.has(id.toLowerCase()) && shown.has(id.toLowerCase()))) };
+}
 const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
 const NO_CARD_SHOW_ISSUE = `${NO_CARD_PREFIX}: you promised to show products but attached none. Attach them now or don't promise.`;
 /** After the repair, a tap request or show promise with no card attached is cut out. */

@@ -100,6 +100,12 @@ test("Claire attaches a card she mentions or asks the customer to tap, and never
   assert.ok(CLAIRE_AGENT_PROMPT.includes("card_ids (0-5 item codes from tool results in this turn, or of cards already shown in this chat)"));
 });
 
+test("Claire attaches an earlier card only when it's needed, not again for an item she just changed", () => {
+  // exam 3: re-shown cards rose from 170 to 472, and 61 of 87 add confirmations re-sent the card.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Don't attach an earlier card just because your message mentions it"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("already seen (shown_before true) for the item you changed"));
+});
+
 test("Claire only reports enquiry changes that happened, never promises them, and paces a list", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Only say something was added, changed or removed after update_enquiry succeeded in this turn"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are, handle up to three this turn"));
