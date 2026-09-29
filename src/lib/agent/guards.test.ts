@@ -73,12 +73,17 @@ test("each review issue has a log code", () => {
 
 test("chips with numbers or amounts, long chips and chips past the third are dropped, not raised", () => {
   const review = (chips: string[]) => reviewAnswer({ message: "Which one would you like?", card_ids: [], chips, show_contact: false }, seen, allowed);
+  // A chip dropped for a number takes the rest of its set along (exam 3: a lone chip under an either/or question).
   for (const chip of ["2", "5 pcs", "two", "两个", "Yes, $99 one"]) {
     const result = review([chip, "Cooking"]);
-    assert.deepEqual(result.chips, ["Cooking"], chip);
+    assert.deepEqual(result.chips, [], chip);
     assert.deepEqual([...result.safety, ...result.style], [], chip);
   }
+  assert.deepEqual(review(["9 inch", "16 inch", "with silicone grip"]).chips, []);
+  assert.deepEqual(review(["Kitchen use", "Serving"]).chips, ["Kitchen use", "Serving"]);
+  // A chip dropped for its length doesn't clear the set, even with a number in it.
   assert.deepEqual(review(["A chip that is far too long to fit on one button"]).chips, []);
+  assert.deepEqual(review(["A chip that is far too long to fit on 1 button", "Cooking"]).chips, ["Cooking"]);
   assert.deepEqual(review(["Cooking", "Desserts", "Grilling", "Bar"]).chips, ["Cooking", "Desserts", "Grilling"]);
 });
 
@@ -243,6 +248,25 @@ test("a repeated sales pitch is dropped unless the customer asked for contact, a
   // Without the contact block the pitch is the only pointer to sales; a first pitch is always kept.
   assert.equal(dropRepeatedPitch(message, earlier("then online can buy or not?"), false), message);
   assert.equal(dropRepeatedPitch(message, { ...earlier("then online can buy or not?"), previousMessage: "Here are two torches." }, true), message);
+});
+
+test("a sales pointer that apologises, or says for the first time or on request what sales can do, is kept (exam 3)", () => {
+  const pitched = "Your enquiry is saved. You can contact Sia Huat sales with the PDF.";
+  const earlier = (currentText: string, replies: string[] = [pitched]): EarlierTurns => ({ cardSets: [], previousMessage: replies.at(-1) ?? null, replies, currentText });
+  // exam 3, c05-stress: an apology is never dropped with the pointer it carries.
+  const sorry = "Sorry about the mix-ups earlier - you can reach Sia Huat sales directly if you'd like a person. The prices shown are ex-GST.";
+  assert.equal(dropRepeatedPitch(sorry, earlier("no sorry also ah"), true), sorry);
+  // exam 3, s03-B T2: the first sourcing pointer was dropped, leaving "send them a photo" with no one to send it to.
+  const t1 = "Could you describe or send a photo of the unit you mean? That'll help me search further, or you can check with Sia Huat sales directly.";
+  const t2 = "I searched again but we don't list an automatic rice portioning machine. You can check with Sia Huat sales directly - they can advise if it's something we can source. You could also send them a photo of the exact unit you mean.";
+  assert.equal(dropRepeatedPitch(t2, earlier("The one that portion out cooked rice, can choose half, full, extra", [t1]), true), t2);
+  // Asked about a topic, the pointer on it is the answer, even when an earlier reply named it (s03-B T3).
+  const leadTime = "You can check with Sia Huat sales directly on lead time.";
+  assert.equal(dropRepeatedPitch(leadTime, earlier("Can check for me price and lead time?", [t1, t2]), true), leadTime);
+  assert.equal(dropRepeatedPitch(leadTime, earlier("Can check for me price and lead time?", [t1, `${t2} Sia Huat sales can also tell you the lead time.`]), true), leadTime);
+  // Said again unasked, it is still a repeat; an apology in another sentence doesn't keep it.
+  const again = "Sorry, it's not in our catalogue. You can check with Sia Huat sales directly - they can advise if it's something we can source.";
+  assert.equal(dropRepeatedPitch(again, earlier("hmm ok", [t1, t2]), true), "Sorry, it's not in our catalogue.");
 });
 
 const safetyOf = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, seen, allowed).safety;

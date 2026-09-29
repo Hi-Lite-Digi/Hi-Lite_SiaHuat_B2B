@@ -186,6 +186,20 @@ test("Claire points to sales once, stops asking for a photo that doesn't arrive,
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- Buying online: answer the question directly"));
 });
 
+test("Claire says plainly she is an AI, apologises before answering a complaint, and doesn't repeat herself (exam 3)", () => {
+  // exam 3: 0 of 6 bot questions got a plain answer (c02), 'let's keep it civil' and 'Haha' to annoyed customers (c02-B,
+  // c01-stress), the enquiry restated in reply after reply (c09-persona), and one get_product per round.
+  for (const words of [
+    "automated sales assistant (an AI)", "- Asked if you're a bot, an AI or a real person: answer that first",
+    "start with one short, plain apology", "Never scold ('let's keep it civil')", "after any apology, set show_contact true",
+    "Don't restate the enquiry (its items or total)", "several get_product calls at once are fine",
+    "unless they give new details", "name it in a few words; don't restate the enquiry",
+  ]) {
+    assert.ok(CLAIRE_AGENT_PROMPT.includes(words), words);
+  }
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("add one short pointer to the next step"));
+});
+
 test("Claire only gives store links from the tools or the chat, and handles a link that doesn't open", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("never build one from an item code"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("don't send that link again and don't blame their browser or network"));

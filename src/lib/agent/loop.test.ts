@@ -112,7 +112,8 @@ test("an unverified amount that survives the repair is removed", async () => {
   ]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.doesNotMatch(reply.message, /\$99/);
-  assert.deepEqual(reply.chips, ["Show others"]);
+  // The chip with the amount takes its set along (exam 3: lopsided chips).
+  assert.deepEqual(reply.chips, []);
 });
 
 test("a made-up card that survives the repair gets the backup reply", async () => {
@@ -216,7 +217,7 @@ test("chips with numbers are dropped without a repair call", async () => {
   const { client, bodies } = fakeClient([answer({ message: "What will you use it for?", chips: ["2", "Cooking"] })]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
-  assert.deepEqual(reply.chips, ["Cooking"]);
+  assert.deepEqual(reply.chips, []);
   assert.equal(bodies.length, 1);
 });
 

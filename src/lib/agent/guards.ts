@@ -174,6 +174,9 @@ const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to
 const closingOnly = /^\s*(?:ok(?:ay)?|k|thanks?|thank you|thx|ty|tq|no,? that'?s all|that'?s all|bye|noted|alright)\b[\s.!,]*(?:(?:thanks?|thank you|thx|bye)[\s.!,]*){0,2}$/i;
 // A pitch sentence that also says what Claire can't do may be the answer to the customer's question (exam 2, s06-B: delivery timing).
 const limitation = /\b(?:can['’]?t|cannot|unable|not able|out of stock)\b/i;
+const apology = /\b(?:sorry|apologi[sz]e|my (?:mistake|bad))\b/i;
+// What only sales can do for the customer.
+const SALES_TOPICS = [/\bsourc/i, /\bspecial[- ]order/i, /\blead[- ]?times?\b/i, /\brestock/i, /\bbulk\b/i, /\bdiscount/i, /\bdeliver/i, /\bcollect(?:ion|ing)?\b/i, /\b(?:visit\w*|showroom)\b/i, /\baddress\b/i];
 
 /**
  * The message without its sales or PDF pitch when one of Claire's earlier replies already made it and the contact block shows
@@ -181,9 +184,13 @@ const limitation = /\b(?:can['’]?t|cannot|unable|not able|out of stock)\b/i;
  * Any earlier reply counts, not only the last: the history carries the text after this drop, so the pitch would come back every other turn.
  */
 export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showContact: boolean) {
-  const pitched = (earlier.replies ?? (earlier.previousMessage ? [earlier.previousMessage] : [])).some((reply) => handoffPitch.test(reply));
+  const replies = earlier.replies ?? (earlier.previousMessage ? [earlier.previousMessage] : []);
+  const pitched = replies.some((reply) => handoffPitch.test(reply));
   if (!showContact || !pitched || asksForContact.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
-  return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence)) || message;
+  // What sales can do for this request, said for the first time or about what the customer just asked, is the answer, not a
+  // repeat (exam 3, s03-B T2: sourcing); an apology is never dropped with it (exam 3, c05-stress T13-T15).
+  const answersTopic = (sentence: string) => SALES_TOPICS.some((topic) => topic.test(sentence) && (!replies.some((reply) => topic.test(reply)) || topic.test(earlier.currentText)));
+  return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence) && !apology.test(sentence) && !answersTopic(sentence)) || message;
 }
 
 export const LINK_ISSUE_PREFIX = "These store links";
@@ -617,7 +624,10 @@ export function reviewAnswer(
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A dropped chip takes any amount in it along.
   // A 'Yes, add it' chip is the confirm step the owner ruled out; 'Add more items' is not.
-  const chips = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip)).slice(0, 3);
+  const usable = answer.chips.filter((chip) => chipAllowed(chip) && !/\b(?:add|confirm)\b(?!\s+(?:more|another|other|anything)\b)/i.test(chip));
+  // A chip dropped for a number takes the rest of its set along: a lone 'with silicone grip' under an either/or question
+  // reads as the only answer (exam 3: 43 of 80 single-chip turns). Drops for length or 'add/confirm' leave the rest.
+  const chips = answer.chips.some((chip) => !chipAllowed(chip) && chip.length <= 40) ? [] : usable.slice(0, 3);
   const amounts = unverifiedAmounts(answer.message, allowed);
   if (amounts.length) safety.push(`${MONEY_ISSUE_PREFIX} are not live-checked prices or enquiry totals from this turn: ${amounts.join(", ")}. Remove them or use the exact figures from the tools. When you drop an amount, rephrase the sentence; never leave a bare $. That includes an amount the customer typed ('the 2 dollar one'): name the product instead.`);
   const links = unknownStoreLinks(answer.message, seen, earlier);
