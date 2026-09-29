@@ -41,7 +41,7 @@ export type TurnContext = {
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all.",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others.",
     input_schema: {
       type: "object",
       properties: {
@@ -49,6 +49,7 @@ export const agentTools: Anthropic.Tool[] = [
         category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets'. Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first. If category_found is false, use a name from categories." },
         max_price: { type: "number", description: "Optional budget ceiling per unit, SGD ex GST" },
         exclude_ids: { type: "array", items: { type: "string" }, description: "Item codes the customer rejected" },
+        exclude_brands: { type: "array", items: { type: "string" }, description: "Brands the customer ruled out, or every brand of a country they don't want (details 'Country of Brand Origin')" },
       },
       required: ["queries"],
     },
@@ -107,6 +108,7 @@ const searchInput = z.object({
   category: z.string().trim().min(1).max(80).nullish(),
   max_price: z.number().positive().nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),
+  exclude_brands: z.array(z.string().trim().min(1).max(60)).max(20).nullish(),
 });
 const productInput = z.object({ stock_id: z.string().trim().min(1).max(100).nullish(), url: z.string().max(300).nullish() });
 const alternativesInput = z.object({ stock_id: z.string().trim().min(1).max(100), min_qty: z.number().int().positive().max(100_000).nullish() });
@@ -128,6 +130,48 @@ const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", 
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
 /** A category's words as the catalogue's category filter reads them. */
 const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+// "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size.
+const sizeText = (text: string) => text.toLowerCase().replace(/(\d)\.0(?!\d)/g, "$1");
+const SIZE_WORD = /^\d+(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)$/;
+// Colour words don't make a different product (exam 3, c01-A T9: one range's red and blue handles filled the top 10).
+const COLOUR_WORDS = /\b(?:black|white|red|blue|green|yellow|brown|violet|purple|orange|pink|gr[ae]y|cream|beige|ivory|handle|hdle)\b/g;
+const variantKey = (item: Product) => `${item.name.toLowerCase().replace(COLOUR_WORDS, " ").replace(/[^\p{L}\p{N}.]+/gu, " ").trim()}|${item.size ?? item.dimensions ?? ""}|${item.list_price}`;
+const BRAND_SHARE = 4;
+const houseCode = (brand: string) => /^UB-\d+$/i.test(brand); // house codes are not brands
+
+/**
+ * Rank order, but on a first pass one colour variant per product and at most BRAND_SHARE per brand the queries don't name. Once
+ * an item is skipped, only items naming at least as many query words may take its place, so category filler never outranks a
+ * real match; the rest fill in after.
+ */
+function varied(items: Product[], limit: number, queries: string[], phrases: string[][]) {
+  const words = [...new Set(phrases.flat())];
+  const hits = (item: Product) => words.filter((word) => sizeText(item.name).includes(word)).length;
+  const named = (brand: string) => queries.some((query) => query.toLowerCase().includes(brand));
+  const first: Product[] = [];
+  const keys = new Set<string>();
+  const perBrand = new Map<string, number>();
+  let floor = 0;
+  for (const item of items) {
+    if (first.length >= limit) break;
+    const brand = houseCode(item.brand ?? "") ? "" : (item.brand ?? "").toLowerCase();
+    const count = perBrand.get(brand) ?? 0;
+    const itemHits = hits(item);
+    if (itemHits < floor) continue;
+    if (keys.has(variantKey(item)) || (brand && !named(brand) && count >= BRAND_SHARE)) {
+      floor = Math.max(floor, itemHits);
+      continue;
+    }
+    first.push(item);
+    keys.add(variantKey(item));
+    perBrand.set(brand, count + 1);
+  }
+  return [...first, ...items.filter((item) => !first.includes(item))].slice(0, limit);
+}
+
+/** Brands among a category search's rows, most first; house codes aren't brands. Names only: the counts are rows, not stock. */
+const brandNames = (items: Product[]) => [...items.reduce((counts, item) => (item.brand && !houseCode(item.brand) ? counts.set(item.brand, (counts.get(item.brand) ?? 0) + 1) : counts), new Map<string, number>())]
+  .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([brand]) => brand);
 
 /** A tool's result for Claude; error is its code, which the loop reads to decide whether another tool round can help. */
 export type ToolOutcome = { content: string; isError: boolean; error?: string };
@@ -181,10 +225,12 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const queryLists = settled.map((result) => (result.status === "fulfilled" ? result.value : []));
   const scope = categoryOutcome?.status === "fulfilled" ? categoryOutcome.value : NO_CATEGORY;
   const excluded = new Set((input.exclude_ids ?? []).map((id) => id.toLowerCase()));
+  // exam 3, c03-stress T6-T9: "dun wan taiwan" had no way to leave a brand out.
+  const excludedBrands = new Set((input.exclude_brands ?? []).map((brand) => brand.toLowerCase()));
   const merged: Product[] = [];
   const ids = new Set<string>();
   const add = (item: Product) => {
-    if (ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase())) return;
+    if (ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase()) || excludedBrands.has((item.brand ?? "").toLowerCase())) return;
     if (input.max_price && item.list_price > input.max_price) return;
     ids.add(item.stock_id);
     merged.push(item);
@@ -198,22 +244,30 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const terms = categoryTerms(category ?? "");
   const inScope = (item: Product) => scope.exists
     && [item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
+  const phrases = input.queries.map((query) => sizeText(query).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
   if (!category) {
     byRank(() => true);
   } else {
-    const phrases = input.queries.map((query) => query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
-    const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => item.name.toLowerCase().includes(word)));
-    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => item.name.toLowerCase().includes(word))).size;
+    const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
+    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => sizeText(item.name).includes(word))).size;
     const scopeByHits = [...scope.products].sort((a, b) => nameHits(b) - nameHits(a));
+    const sizedPhrases = phrases.filter((words) => words.some((word) => SIZE_WORD.test(word)));
+    const sizedLiteral = (item: Product) => sizedPhrases.some((words) => words.every((word) => sizeText(item.name).includes(word)));
+    if (sizedPhrases.length) {
+      // 0. rows naming the customer's exact size with every word of its query ("ladle 8oz" showed the 8oz ladle 10th or not at all)
+      scopeByHits.filter(sizedLiteral).forEach(add);
+      byRank(sizedLiteral);
+    }
     byRank(inScope); // 1. query hits inside the category
     scopeByHits.filter(literal).forEach(add); // 2. category rows naming every word of a 2+ word query
     byRank(literal); // 3. other query hits naming every word of a 2+ word query
     scopeByHits.forEach(add); // 4. the rest of the category, most stocked first
     byRank(() => true); // 5. the rest of the query hits
   }
-  const top = merged.slice(0, RESULTS_PER_SEARCH);
+  const top = varied(merged, RESULTS_PER_SEARCH, input.queries, phrases);
   const topIds = new Set(top.map((item) => item.stock_id));
-  // Only a category read in full, with every product in it listed (or rejected), backs "that's all".
+  // Only a category read in full, with every product in it listed (or rejected), backs "that's all". A brand the customer ruled
+  // out still exists, so exclude_brands doesn't count as covered: "that's all" would be false.
   const complete = scope.exists && scope.total <= CATEGORY_ROWS
     && scope.products.every((item) => excluded.has(item.stock_id.toLowerCase()) || topIds.has(item.stock_id));
   const totalFound = scope.exists ? scope.total + merged.filter((item) => !inScope(item)).length : merged.length;
@@ -237,6 +291,8 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     total_found: totalFound,
     more_available: moreAvailable,
     complete,
+    // exam 3, c01-A T9-T11: from a top 10 of two brands Claude said all our chef knives were those two.
+    ...(scope.exists ? { brands: brandNames(merged) } : {}),
     ...(category ? { category_found: scope.exists } : {}),
     categories,
     ...(categoryNote ? { category_note: categoryNote } : {}),

@@ -163,7 +163,7 @@ test("a category's products are merged with the query results, without duplicate
 
 type SearchBody = {
   products: Array<{ stock_id: string }>; total_found: number; more_available: boolean; complete: boolean;
-  category_found?: boolean; categories: string[]; category_note?: string;
+  category_found?: boolean; categories: string[]; category_note?: string; brands?: string[];
 };
 const searchBody = async (input: unknown, deps: ReturnType<typeof fakeDeps>) => JSON.parse((await runTool("search_catalogue", input, context(deps))).content) as SearchBody;
 const tongs = (count: number, overrides: Partial<Product> = {}) => Array.from({ length: count }, (_, index) => product({
@@ -214,6 +214,115 @@ test("a query hit named with every word of the query stays ahead of a near-miss 
   const bag = product({ stock_id: "BAG4", name: "COFFEE BAG 4 INCH", subcategory: "Beverage supplies", third_category: "Hot drinks and specialty items" });
   const body = await searchBody({ queries: ["coffee bag"], category: "coffee" }, fakeDeps([...makers, bag]));
   assert.equal(body.products[0].stock_id, "BAG4");
+});
+
+const idsOf = (body: SearchBody) => body.products.map((item) => item.stock_id);
+const knives = () => [
+  ...[15, 21, 23, 25, 30].flatMap((cm) => ["Red", "Blue"].map((colour) => product({
+    stock_id: `A${cm}${colour[0]}`, name: `Atlantic Chef Chef Knife ${cm}cm, ${colour} Handle`, brand: "ATLANTIC CHEF", list_price: cm, third_category: "Chef knives",
+  }))),
+  product({ stock_id: "G16", name: "Giesser Chef's Knife 16cm With Wide Blade", brand: "GIESSER", third_category: "Chef knives" }),
+  product({ stock_id: "G20", name: "Giesser Chef's Knife 20cm With Wide Blade", brand: "GIESSER", third_category: "Chef knives" }),
+];
+
+test("colour variants of one product and one brand don't fill the results (exam 3, c01-A T9)", async () => {
+  const body = await searchBody({ queries: ["chef knife"], category: "chef knives" }, fakeDeps(knives()));
+  const ids = idsOf(body);
+  assert.ok(ids.includes("G16") && ids.includes("G20"), ids.join(","));
+  const firstSix = ids.slice(0, 6);
+  assert.ok(![15, 21, 23, 25, 30].some((cm) => firstSix.includes(`A${cm}R`) && firstSix.includes(`A${cm}B`)), firstSix.join(","));
+  assert.deepEqual(body.brands, ["ATLANTIC CHEF", "GIESSER"]);
+});
+
+test("a brand the customer names is not capped", async () => {
+  const ids = idsOf(await searchBody({ queries: ["atlantic chef knife"], category: "chef knives" }, fakeDeps(knives())));
+  assert.deepEqual(ids.slice(0, 5), ["A15R", "A21R", "A23R", "A25R", "A30R"]);
+});
+
+test("a brand cap doesn't swap query matches for category filler", async () => {
+  // Real catalogue: 'dinner plate' has 7 dinner plates of one brand in its top 10.
+  const dinner = Array.from({ length: 7 }, (_, index) => product({
+    stock_id: `D${index}`, name: `Petye Porcelain Round Dinner Plate ${20 + index}cm`, brand: "CERABON by PETYE", list_price: 10 + index, third_category: "Plates and platters",
+  }));
+  const filler = Array.from({ length: 6 }, (_, index) => product({
+    stock_id: `F${index}`, name: `Essentials Round Rim Plate ${15 + index}cm`, brand: "CERABON", list_price: 5 + index, third_category: "Plates and platters", available_quantity: 900,
+  }));
+  const ids = idsOf(await searchBody({ queries: ["dinner plate"], category: "plates" }, fakeDeps([...dinner, ...filler])));
+  assert.deepEqual(ids.slice(0, 7).sort(), dinner.map((item) => item.stock_id).sort(), ids.join(","));
+});
+
+test("two sizes with one name are not colour variants", async () => {
+  const catalogue = [
+    product({ stock_id: "1510", name: "PLASTIC CHOPPING BOARD", brand: "A-STAR", list_price: 10 }),
+    product({ stock_id: "1517", name: "PLASTIC CHOPPING BOARD", brand: "A-STAR", list_price: 43.12 }),
+    ...Array.from({ length: 10 }, (_, index) => product({ stock_id: `W${index}`, name: `WOODEN CHOPPING BOARD ${10 + index}in`, brand: "UB-0497", list_price: 20 + index })),
+  ];
+  const deps = fakeDeps(catalogue);
+  deps.searchDirect = async () => catalogue;
+  assert.deepEqual(idsOf(await searchBody({ queries: ["chopping board"] }, deps)).slice(0, 2), ["1510", "1517"]);
+});
+
+test("house codes are not brands: not capped and not listed", async () => {
+  const woks = [
+    ...Array.from({ length: 6 }, (_, index) => product({ stock_id: `UB${index}`, name: `CARBON STEEL WOK ${30 + index}cm`, brand: "UB-0231", list_price: 20 + index, third_category: "Woks" })),
+    product({ stock_id: "YM1", name: "IRON WOK 36cm", brand: "YAMADA", third_category: "Woks" }),
+  ];
+  const body = await searchBody({ queries: ["wok"], category: "woks" }, fakeDeps(woks));
+  assert.deepEqual(idsOf(body), ["UB0", "UB1", "UB2", "UB3", "UB4", "UB5", "YM1"]);
+  assert.deepEqual(body.brands, ["YAMADA"]);
+});
+
+test("brands are listed only with a category", async () => {
+  assert.equal((await searchBody({ queries: ["chef knife"] }, fakeDeps(knives()))).brands, undefined);
+  assert.deepEqual((await searchBody({ queries: ["chef knife"], category: "chef knives" }, fakeDeps(knives()))).brands, ["ATLANTIC CHEF", "GIESSER"]);
+});
+
+test("exclude_brands leaves a brand out and doesn't make the list complete", async () => {
+  // exam 3, c03-stress T6-T9: the customer ruled out Taiwan brands and nothing could leave them out.
+  const catalogue = [
+    product({ stock_id: "T1", name: "TONGS 9in", brand: "A", third_category: "Kitchen tongs" }),
+    product({ stock_id: "T2", name: "TONGS 12in", brand: "A", third_category: "Kitchen tongs" }),
+    product({ stock_id: "T3", name: "TONGS 9in PRO", brand: "B", third_category: "Kitchen tongs" }),
+    product({ stock_id: "T4", name: "TONGS 12in PRO", brand: "B", third_category: "Kitchen tongs" }),
+  ];
+  const body = await searchBody({ queries: ["tongs"], category: "kitchen tongs", exclude_brands: ["a"] }, fakeDeps(catalogue));
+  assert.deepEqual(idsOf(body).sort(), ["T3", "T4"]);
+  // A brand the customer ruled out still exists, so "that's all" would be false.
+  assert.equal(body.complete, false);
+  const search = agentTools.find((tool) => tool.name === "search_catalogue")!;
+  assert.ok("exclude_brands" in (search.input_schema.properties as Record<string, unknown>));
+});
+
+const ladles = () => Array.from({ length: 10 }, (_, index) => product({ stock_id: `L${index}`, name: `S/S LADLE ${index + 1}0cm handle`, third_category: "Kitchen ladles" }));
+
+test("a size in the query puts the category row with that exact size first (exam 3, s01-A T0)", async () => {
+  const sized = product({ stock_id: "L8", name: "S/S ONE-PC LADLE 8.0oz", third_category: "Kitchen ladles", available_quantity: 1 });
+  const deps = fakeDeps([...ladles(), sized]);
+  deps.searchDirect = async () => ladles();
+  assert.equal(idsOf(await searchBody({ queries: ["ladle 8oz"], category: "kitchen ladles" }, deps))[0], "L8");
+  // The real 1508's name carries every word of the customer's longer query.
+  const real = product({ stock_id: "1508", name: "Stainless Steel One-Pieces Ladle Ø10.5 X L30cm, 8.0oz", third_category: "Kitchen ladles", available_quantity: 1 });
+  const realDeps = fakeDeps([...ladles(), real]);
+  realDeps.searchDirect = async () => ladles();
+  assert.equal(idsOf(await searchBody({ queries: ["stainless steel ladle 8oz"], category: "kitchen ladles" }, realDeps))[0], "1508");
+});
+
+test("a number without its unit is not a size: other rows keep today's order", async () => {
+  const soup = product({ stock_id: "SOUP10", name: "SOUP LADLE 10 INCH", third_category: "Kitchen ladles" });
+  const serving = product({ stock_id: "SERVE", name: "SERVING LADLE 25cm", third_category: "Kitchen ladles" });
+  const eightOz = product({ stock_id: "OZ8", name: "Stainless Steel Ladle 8oz", third_category: "Kitchen ladles" });
+  const cc = product({ stock_id: "CC10", name: "S/S LADLE 10cc", third_category: "Kitchen ladles" });
+  const small = product({ stock_id: "SMALL", name: "S/S LADLE 12cm", third_category: "Kitchen ladles" });
+  const deps = fakeDeps([soup, serving, eightOz, cc, small]);
+  deps.searchDirect = async (query) => (query === "ladle 10 inch" ? [soup, serving] : [eightOz]);
+  // Today's order is SOUP10, OZ8, SERVE, CC10, SMALL: only the exact 8oz row moves up; the "10cc" ladle doesn't jump the query hits.
+  const ids = idsOf(await searchBody({ queries: ["ladle 10 inch", "stainless steel ladle 8oz"], category: "kitchen ladles" }, deps));
+  assert.deepEqual(ids, ["OZ8", "SOUP10", "SERVE", "CC10", "SMALL"]);
+  const stick = product({ stock_id: "STICK", name: "IMMERSION BLENDER STICK", third_category: "Blenders" });
+  const hand = product({ stock_id: "HAND", name: "HAND BLENDER 2 IN 1", third_category: "Blenders" });
+  const blenderDeps = fakeDeps([stick, hand]);
+  blenderDeps.searchDirect = async () => [stick];
+  assert.deepEqual(idsOf(await searchBody({ queries: ["2 in 1 hand blender"], category: "blenders" }, blenderDeps)), ["STICK", "HAND"]);
 });
 
 test("a category that matches nothing is reported with the categories of the results", async () => {
