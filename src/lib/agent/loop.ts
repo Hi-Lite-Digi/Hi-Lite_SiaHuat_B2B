@@ -474,10 +474,12 @@ export async function runAgentTurn(input: {
     // The chat's item codes, so a code that fits the phone pattern isn't taken for a phone number (exam 3, c05-persona T10).
     const chatCodes = [...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...ctx.shownIds, ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code))];
     const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact), chatCodes);
-    // Codes and counts only, never customer or reply text.
+    // Codes and counts only, never customer or reply text. The session's tail and the cards' code:status:qty let the exam match
+    // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).
     console.info("[api/agent] turn", {
-      ms: Math.round(performance.now() - started), rounds, forcedEarly, stopped, repaired, repairCauses,
+      ms: Math.round(performance.now() - started), session: request.sessionId.slice(-8), rounds, forcedEarly, stopped, repaired, repairCauses,
       repairSkipped: repairCauses.length > 0 && !repaired, repairFailed, tools: toolNames,
+      cards: review.cards.map((card) => `${card.stock_id}:${card.stock_status}:${card.available_quantity ?? "?"}`),
     });
     return {
       message: cleaned.message,
@@ -489,7 +491,7 @@ export async function runAgentTurn(input: {
     };
   } catch (error) {
     // Only a reason code is logged: error text could echo customer or model content.
-    console.warn("[api/agent] fallback reply", { reason: failureCode(error, deadline), ms: Math.round(performance.now() - started) });
+    console.warn("[api/agent] fallback reply", { reason: failureCode(error, deadline), ms: Math.round(performance.now() - started), session: request.sessionId.slice(-8) });
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
     const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps: input.deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });

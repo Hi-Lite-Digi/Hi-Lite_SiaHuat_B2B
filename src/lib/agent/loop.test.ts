@@ -381,8 +381,10 @@ test("every turn logs one line of codes and counts, never text", async (t) => {
   const [first, second] = turnLogs();
   assert.equal(turnLogs().length, 2);
   assert.equal(typeof first.ms, "number");
+  // The session's last 8 characters and the cards' code:status:qty match a log line to its transcript turn (exam 3 couldn't).
   assert.deepEqual({ ...first, ms: 0 }, {
-    ms: 0, rounds: 2, forcedEarly: false, stopped: null, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null, tools: ["search_catalogue"],
+    ms: 0, session: "ion-1234", rounds: 2, forcedEarly: false, stopped: null, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null,
+    tools: ["search_catalogue"], cards: ["970S:in_stock:50"],
   });
   assert.deepEqual([second.rounds, second.repaired, second.repairCauses, second.tools], [1, true, ["UNKNOWN_CARD"], []]);
   assert.doesNotMatch(JSON.stringify(turnLogs()), /blow torch|FAKE-1|use it for/);
@@ -413,7 +415,7 @@ test("a Claude outage returns the backup reply", async () => {
   assert.ok(reply.cards.some((card) => card.stock_id === "970S"));
 });
 
-test("the backup-reply log carries only a reason code and the time taken, never error text", async (t) => {
+test("the backup-reply log carries only a reason code, the time taken and the session, never error text", async (t) => {
   const warn = t.mock.method(console, "warn", () => undefined);
   const outage = fakeClient([new Error("customer wrote: blow torch for my shop")]);
   await runAgentTurn({ request: request({}), deps: deps(), client: outage.client, model: "claude-sonnet-5" });
@@ -423,9 +425,9 @@ test("the backup-reply log carries only a reason code and the time taken, never 
   await runAgentTurn({ request: request({}), deps: deps(), client: rejected.client, model: "claude-sonnet-5" });
   const overloaded = fakeClient([Object.assign(new Error("Overloaded while reading: blow torch for my shop"), { status: 529 })]);
   await runAgentTurn({ request: request({}), deps: deps(), client: overloaded.client, model: "claude-sonnet-5" });
-  const logged = warn.mock.calls.map((call) => call.arguments[1] as { reason: string; ms: number });
+  const logged = warn.mock.calls.map((call) => call.arguments[1] as { reason: string; ms: number; session: string });
   assert.deepEqual(logged.map((entry) => entry.reason), ["Error", "AGENT_STOP_MAX_TOKENS", "AGENT_REPLY_REJECTED", "API_529"]);
-  assert.ok(logged.every((entry) => typeof entry.ms === "number" && Object.keys(entry).length === 2));
+  assert.ok(logged.every((entry) => typeof entry.ms === "number" && entry.session === "ion-1234" && Object.keys(entry).length === 3));
   assert.doesNotMatch(JSON.stringify(warn.mock.calls), /blow torch|customer wrote|Overloaded/);
 });
 
