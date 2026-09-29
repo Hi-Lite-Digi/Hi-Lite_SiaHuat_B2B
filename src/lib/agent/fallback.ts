@@ -4,7 +4,7 @@ import type { Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { SALES_CONTACT } from "./contact";
 import type { AgentReply } from "./contract";
-import { enquiryTotals } from "./enquiry";
+import { enquiryTotals, firstListItem } from "./enquiry";
 import { liveCheck, retryOnce, withTimeout, type FactDeps } from "./facts";
 
 const FALLBACK_TIMEOUT_MS = 9_000;
@@ -18,8 +18,10 @@ export async function buildFallbackReply(input: { searchText: string | null; lin
   let cards: Product[] = [];
   const search = input.searchText?.trim() ?? "";
   if (search.length >= 3 && !declines.test(search)) {
+    // A pasted list searches its first item (exam 3, s01-B T0: its first 80 characters found a can opener and pot lids).
+    const query = (firstListItem(search) ?? search).slice(0, 80);
     try {
-      const found = await withTimeout(retryOnce(() => input.deps.searchDirect(search.slice(0, 80), 10)), timeoutMs, null);
+      const found = await withTimeout(retryOnce(() => input.deps.searchDirect(query, 10)), timeoutMs, null);
       const left = Math.floor(timeoutMs - (performance.now() - started));
       // If the search used up the time, skip the live checks and show no cards.
       if (found && left > 0) {

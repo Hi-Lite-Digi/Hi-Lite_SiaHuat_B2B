@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import sharp from "sharp";
-import type { AgentRequest } from "./contract";
+import { cardsNote, type AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
 import { searchSlots } from "./facts";
 import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX } from "./guards";
@@ -367,7 +367,7 @@ test("every turn logs one line of codes and counts, never text", async (t) => {
   assert.equal(turnLogs().length, 2);
   assert.equal(typeof first.ms, "number");
   assert.deepEqual({ ...first, ms: 0 }, {
-    ms: 0, rounds: 2, forcedEarly: false, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null, tools: ["search_catalogue"],
+    ms: 0, rounds: 2, forcedEarly: false, stopped: null, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null, tools: ["search_catalogue"],
   });
   assert.deepEqual([second.rounds, second.repaired, second.repairCauses, second.tools], [1, true, ["UNKNOWN_CARD"], []]);
   assert.doesNotMatch(JSON.stringify(turnLogs()), /blow torch|FAKE-1|use it for/);
@@ -1148,4 +1148,198 @@ test("a link from a tool result or already in the chat is sent as it is", async 
   const again = await runAgentTurn({ request: askedAgain("got photo?"), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(bodies.length, 1);
   assert.equal(again.message, fromChat);
+});
+
+const choice = (body: Anthropic.MessageCreateParamsNonStreaming) => (body.tool_choice as { type: string }).type;
+const lastMessage = (body: Anthropic.MessageCreateParamsNonStreaming) => JSON.stringify(body.messages.at(-1));
+const ASK_NOTE = /update_enquiry needs a number the customer types for this item: ask how many, once\. No more tools this turn\./;
+const WHICH_NOTE = /update_enquiry refused this product again/;
+const LIST_NOTE = /That's all the lookups for this list this turn/;
+const PERMISSION_NUDGE = /typed how many\. Call update_enquiry now/;
+
+/** One update_enquiry call after the torch card, then Claude's answer: the second call's tool choice and whether it asks for a number. */
+async function afterUpdate(text: string, input: unknown, live: Parameters<typeof fakeDeps>[1] = {}) {
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", input), answer({ message: "How many do you need?" })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text }, history: [{ role: "user", content: "blow torch" }, torchShown], shownProductIds: ["970S"] }),
+    deps: fakeDeps([blowtorch, safico], live), client, model: "claude-sonnet-5",
+  });
+  return { bodies, reply, second: choice(bodies[1]), asked: ASK_NOTE.test(lastMessage(bodies[1])) };
+}
+
+test("an add that needs a number only the customer can type ends the tool rounds with one how-many question", async () => {
+  // exam 3, c09-stress T7: update_enquiry went three rounds on a number the customer hadn't typed (13.4 s).
+  const qty = await afterUpdate("the 970S one", { action: "add", stock_id: "970S", quantity: 20 });
+  assert.match(lastMessage(qty.bodies[1]), /QTY_NOT_STATED/);
+  assert.deepEqual([qty.second, qty.asked, qty.bodies.length, qty.reply.enquiry.lines.length], ["none", true, 2, 0]);
+  const zero = await afterUpdate("the 970S one", { action: "add", stock_id: "970S", quantity: 0 });
+  assert.deepEqual([zero.second, zero.asked], ["none", true]);
+  const none = await afterUpdate("the 970S one", { action: "set", stock_id: "970S" });
+  assert.deepEqual([none.second, none.asked], ["none", true]);
+});
+
+test("a failed add keeps its tools when the customer typed a number or another call can fix it", async () => {
+  // Claude sent 2 cartons as 48 pieces: the retry with unit carton needs a tool round.
+  const cartons = await afterUpdate("970S, 2 ctn pls", { action: "add", stock_id: "970S", quantity: 48 });
+  assert.deepEqual([cartons.second, cartons.asked], ["auto", false]);
+  const overStock = await afterUpdate("970S 20 pcs", { action: "add", stock_id: "970S", quantity: 20 }, { "970S": { available_quantity: 5 } });
+  assert.match(lastMessage(overStock.bodies[1]), /OVER_STOCK/);
+  assert.equal(overStock.second, "auto");
+  const noCode = await afterUpdate("the 970S one, 2", { action: "add", quantity: 2 });
+  assert.match(lastMessage(noCode.bodies[1]), /MISSING_FIELDS/);
+  assert.equal(noCode.second, "auto");
+});
+
+test("the same product refused twice as not picked ends the tool rounds with one question about it", async () => {
+  // exam 3, c08-persona T8 and c11-stress T7: the refused add was retried round after round.
+  const refusedAdd = () => toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 });
+  const okTwo = request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] });
+  const twice = fakeClient([refusedAdd(), refusedAdd(), answer({ message: "Is it the Safico gas torch burner BTS-8026D?", card_ids: ["BTS-8026D"] })]);
+  const reply = await runAgentTurn({ request: okTwo, deps: deps(), client: twice.client, model: "claude-sonnet-5" });
+  assert.equal(twice.bodies.length, 3);
+  assert.deepEqual(twice.bodies.map(choice), ["auto", "auto", "none"]);
+  assert.match(lastMessage(twice.bodies[2]), WHICH_NOTE);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["BTS-8026D"]);
+  assert.deepEqual(reply.enquiry.lines, []);
+  const searched = fakeClient([refusedAdd(), toolCall("t2", "search_catalogue", { queries: ["gas torch"] }), answer({ message: "Which one would you like?" })]);
+  await runAgentTurn({ request: okTwo, deps: deps(), client: searched.client, model: "claude-sonnet-5" });
+  assert.deepEqual(searched.bodies.map(choice), ["auto", "auto", "auto"]);
+  assert.ok(!searched.bodies.some((body) => WHICH_NOTE.test(JSON.stringify(body.messages))));
+});
+
+test("after a refused add, a reply that claims or offers the add is not nudged back to the tools", async () => {
+  // exam 3, c08-persona T8: a retry after a refusal is refused again; the claim guard still repairs a false add.
+  for (const message of ["Adding the Safico torch now.", "Shall I add 2 of the Safico torch?"]) {
+    const { client, bodies } = fakeClient([
+      toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+      answer({ message }),
+      answer({ message: "Which one would you like, the blow torch or the Safico?" }),
+    ]);
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.ok(!bodies.some((body) => NUDGE.test(JSON.stringify(body.messages)) || PERMISSION_NUDGE.test(JSON.stringify(body.messages))), message);
+    assert.deepEqual(reply.enquiry.lines, [], message);
+    if (message.startsWith("Adding")) {
+      assert.equal(bodies.length, 3, message);
+      assert.equal(choice(bodies[2]), "none", message);
+      assert.match(lastMessage(bodies[2]), /The enquiry didn't change/, message);
+      assert.equal(reply.message, "Which one would you like, the blow torch or the Safico?");
+    } else {
+      assert.equal(bodies.length, 2, message);
+    }
+  }
+});
+
+test("'same qty' after switching items adds the number typed a few messages back", async () => {
+  // exam 3, c09-stress T7: "ya tht one. same qty" after a single UT12HR card; the 20 was typed two messages earlier.
+  const tong16 = product({ stock_id: "2564L", name: "Stainless Steel Utility Tong 16in", list_price: 3.85 });
+  const tong12 = product({ stock_id: "UT12HR", name: "Stainless Steel Utility Tong with Locking Ring 12in", list_price: 4.77 });
+  const { client } = fakeClient([
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "UT12HR", quantity: 20 }),
+    answer({ message: "Got it: 20 of the 12in locking tongs. Anything else?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({
+      event: { type: "text", text: "ya tht one. same qty" },
+      history: [
+        { role: "user", content: "ok la take the 16 inch one, 20pcs" }, { role: "assistant", content: `Got it: 20 of the 16in tongs.${cardsNote([tong16])}` },
+        { role: "user", content: "wait 16 inch too long for my kitchen la. got shorter one with the lock thing? 12 inch like tht" },
+        { role: "assistant", content: `Removed the 16in tong. Here's a 12in with a locking ring. Is this the one you meant?${cardsNote([tong12])}` },
+      ],
+      shownProductIds: ["2564L", "UT12HR"],
+    }),
+    deps: fakeDeps([tong16, tong12]), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["UT12HR", 20]]);
+});
+
+test("a plain thank-you is answered without tools", async () => {
+  // exam 3, s01-B T3: a plain "Thank you" started 3-4 tool rounds and got a stand-in reply.
+  for (const text of ["Thank you", "ok thanks", "Thanks!", "thx"]) {
+    const { client, bodies } = fakeClient([answer({ message: "You're welcome." })]);
+    await runAgentTurn({ request: request({ event: { type: "text", text }, history: [{ role: "user", content: "torch" }, twoCardsShown] }), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.deepEqual(bodies.map(choice), ["none"], text);
+  }
+  // "ok thanks" to the only card just shown can be a yes, and a photo captioned "thanks" still needs match_photo.
+  const yes = fakeClient([answer({ message: "How many do you need?" })]);
+  await runAgentTurn({ request: askedAgain("ok thanks"), deps: deps(), client: yes.client, model: "claude-sonnet-5" });
+  assert.equal(choice(yes.bodies[0]), "auto");
+  const photo = await sharp({ create: { width: 20, height: 20, channels: 3, background: "#808080" } }).jpeg().toBuffer();
+  const captioned = photoRequest(photo);
+  const withPhoto = fakeClient([answer({ message: "What is this used for?" })]);
+  await runAgentTurn({ request: { ...captioned, event: { ...captioned.event, caption: "thanks" } as AgentRequest["event"] }, deps: deps(), client: withPhoto.client, model: "claude-sonnet-5" });
+  assert.equal(choice(withPhoto.bodies[0]), "auto");
+});
+
+const s01List = "Hi, can you send me a quote for the following items: 1) Stainless Steel Pot 12QT 2) Stainless Steel Strainer for the 12QT Pot 3) Stainless Steel Ladle 4oz, 6oz, 8oz 4) 1/2 Stainless Steel Pan 5) 1/4 Stainless Steel Pan 6) Lid for 1/2 S/S Pan 7) Lid for 1/4 S/S Pan 8) Oyster Knife with Plastic Handle";
+
+test("a long list gets one round of lookups, then an answer", async () => {
+  // exam 3, s01-B T0: an 8-item list ran 2-3 tool rounds (31-34 s) and got a stand-in reply.
+  const search = (id: string, item: string) => ({ type: "tool_use", id, name: "search_catalogue", input: { queries: [item] } });
+  const threeItems = { ...toolCall("t1", "search_catalogue", {}), content: [search("t1", "stock pot"), search("t2", "strainer"), search("t3", "ladle")] } as unknown as Anthropic.Message;
+  const lookups = deps();
+  const { client, bodies } = fakeClient([threeItems, answer({ message: "There are 8 items on your list. Which size of stock pot do you need? Next: the pans." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: s01List } }), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.equal(lookups.calls.filter((call) => call.startsWith("search:")).length, 3);
+  assert.deepEqual(bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(bodies[1]), LIST_NOTE);
+  assert.ok(!bodies.some((body) => NUDGE.test(JSON.stringify(body.messages)) || PERMISSION_NUDGE.test(JSON.stringify(body.messages))));
+  // A short list keeps its tools, and a long list answered without tools gets no note.
+  const short = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), answer({ message: "Which torch do you need?" })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: "1) torch 2) pot" } }), deps: deps(), client: short.client, model: "claude-sonnet-5" });
+  assert.deepEqual(short.bodies.map(choice), ["auto", "auto"]);
+  const noTools = fakeClient([answer({ message: "There are 8 items on your list. Which size of stock pot do you need?" })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: s01List } }), deps: deps(), client: noTools.client, model: "claude-sonnet-5" });
+  assert.ok(!noTools.bodies.some((body) => LIST_NOTE.test(JSON.stringify(body.messages))));
+});
+
+test("a recommendation that offers to add a product the customer hasn't picked is sent as it is", async () => {
+  // exam 3, c09-stress T1: the permission nudge turned "which one is better?" into "How many Safico tongs do you need?".
+  const message = "For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?";
+  const { client, bodies } = fakeClient([answer({ message, card_ids: ["BTS-8026D"] })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "which one is better for cooking?" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 1);
+  assert.equal(reply.message, message);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["BTS-8026D"]);
+});
+
+test("a permission question after the customer picked and typed a number is nudged, then added", async () => {
+  const { client, bodies } = fakeClient([
+    answer({ message: "Want me to add 2 of these?" }),
+    toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+    answer({ message: "Got it: 2 Safico torches. Anything else?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "this one 2 pcs" }, history: [{ role: "user", content: "torch" }, saficoShown] }), deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(choice(bodies[1]), "auto");
+  assert.match(lastMessage(bodies[1]), PERMISSION_NUDGE);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
+});
+
+test("a permission question after a pick with no number typed is repaired without tools, not nudged", async () => {
+  // Without a typed number update_enquiry can only refuse: the tool-less repair keeps the rest of the answer.
+  const { client, bodies } = fakeClient([
+    answer({ message: "The Safico runs on gas. Want me to add it?" }),
+    answer({ message: "The Safico runs on gas. How many do you need?" }),
+  ]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "the safico one" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }), deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 2);
+  assert.equal(choice(bodies[1]), "none");
+  assert.match(lastMessage(bodies[1]), /Don't ask permission to add it/);
+  assert.ok(!PERMISSION_NUDGE.test(JSON.stringify(bodies[1].messages)));
+  assert.equal(reply.message, "The Safico runs on gas. How many do you need?");
+});
+
+test("the turn log names why the tool rounds stopped", async (t) => {
+  const info = t.mock.method(console, "info", () => undefined);
+  await afterUpdate("the 970S one", { action: "add", stock_id: "970S", quantity: 20 });
+  const thanks = fakeClient([answer({ message: "You're welcome." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: "thank you" } }), deps: deps(), client: thanks.client, model: "claude-sonnet-5" });
+  const logs = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").map((call) => call.arguments[1] as Record<string, unknown>);
+  assert.deepEqual(logs.map((log) => [log.stopped, log.forcedEarly]), [["ask", false], ["thanks", false]]);
 });

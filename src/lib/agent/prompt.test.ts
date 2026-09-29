@@ -126,8 +126,23 @@ test("Claire attaches an earlier card only when it's needed, not again for an it
 
 test("Claire only reports enquiry changes that happened, never promises them, and paces a list", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Only say something was added, changed or removed after update_enquiry succeeded in this turn"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are, handle up to three this turn"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are and handle only the first three this turn"));
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /keep the rest in mind/);
+});
+
+test("Claire looks a list's first three items up in one response and points a long list to sales once", () => {
+  // exam 3, s01-B T0: an 8-item list ran 2-3 tool rounds and got a stand-in reply.
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- A list of items:")) ?? "";
+  assert.ok(line.includes("look all three up in your first response (one search_catalogue call each)"));
+  assert.ok(line.includes("with no second round of searches"));
+  assert.ok(line.includes("In your first reply to a list of more than three items, also say once that they can send the list straight to Sia Huat sales for a formal quote (show_contact true)."));
+  assert.ok(line.includes("In later turns, answer the customer's new message first"));
+});
+
+test("Claire never calls update_enquiry to check price or stock, or without a number the customer typed", () => {
+  // exam 3, c09-stress T7: three update_enquiry rounds that only the customer's number could unblock.
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- Changes (")) ?? "";
+  assert.ok(line.endsWith("update_enquiry only changes the enquiry: never call it to check price or stock, or to note a pick without a number the customer typed; its result already has the line price and total."));
 });
 
 test("Claire asks for all her searches at once and doesn't echo the customer's budget figure", () => {

@@ -5,12 +5,12 @@ import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
 import { CHIP_PREFIX, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
-import { enquiryTotals, verifyEnquiry } from "./enquiry";
+import { enquiryTotals, listItemCount, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksPermissionToAdd, customerMessage, dropRepeatedPitch, enquiryClaimIssues,
-  issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, sentences, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, asksConfirmStep, customerMessage, dropRepeatedPitch, enquiryClaimIssues,
+  issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, customerChose, pickEvidence } from "./picks";
@@ -34,6 +34,10 @@ const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long;
 const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
 const EARLIER_CARD_CHECK_MS = 2_000;
 const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
+// A pasted list longer than this gets one round of lookups (exam 3, s01-B T0: 8 items ran 2-3 tool rounds and got a stand-in).
+const LIST_ITEMS_PER_TURN = 3;
+// A plain thank-you needs no lookups (exam 3, s01-B T3: 3-4 tool rounds, then a stand-in).
+const THANKS_ONLY = /^\s*(?:ok(?:ay)?[\s,]+)?(?:thanks?|thank you|thx|ty|tq)(?:\s+(?:so much|a lot|lah?|you))?[\s.!]*$/i;
 
 const finalSchema: Record<string, unknown> = {
   type: "object",
@@ -57,7 +61,10 @@ const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty me
 const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
 const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says the enquiry changed (or will change), but no update_enquiry call succeeded for that item in this turn. Call update_enquiry only for exactly what the customer picked and the number they typed; otherwise answer without saying it changed.";
-const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add. If the customer picked the product and typed how many, call update_enquiry now; if the quantity is missing, ask how many.";
+const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add: the customer already picked that product and typed how many. Call update_enquiry now.";
+const ASK_NOTE = "[Context from the system, not the customer] update_enquiry needs a number the customer types for this item: ask how many, once. No more tools this turn.";
+const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry refused this product again: the customer's words don't show they picked it. No more tools this turn: ask one short question naming it with its code, with its card attached, or ask which of the likely cards they mean.";
+const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
 
 /** The customer's last two typed messages (card and chip taps, and photos without a caption, excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
@@ -205,8 +212,14 @@ function failureCode(error: unknown, deadline: AbortSignal) {
     : /aborted/i.test(error.message) ? "CLIENT_ABORT" : code;
 }
 
-/** Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log. */
-async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext, names: string[]): Promise<Anthropic.ToolResultBlockParam[]> {
+/** A tool call this round ran: its name, what Claude sent and its error code, if it failed. */
+type ToolCallDone = { name: string; input: unknown; error?: string };
+
+/**
+ * Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log. Returns the results for
+ * Claude and the calls as they ran, in call order.
+ */
+async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext, names: string[]): Promise<{ results: Anthropic.ToolResultBlockParam[]; done: ToolCallDone[] }> {
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   names.push(...calls.map((call) => call.name));
   const outcomes = new Map<string, ToolOutcome>();
@@ -227,12 +240,38 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   await Promise.all(calls.filter((item) => item.name !== "update_enquiry").map(async (call) => {
     outcomes.set(call.id, await runTool(call.name, call.input, ctx));
   }));
-  return calls.map((call) => ({
-    type: "tool_result",
-    tool_use_id: call.id,
-    content: outcomes.get(call.id)!.content,
-    is_error: outcomes.get(call.id)!.isError,
-  }));
+  return {
+    results: calls.map((call) => ({
+      type: "tool_result",
+      tool_use_id: call.id,
+      content: outcomes.get(call.id)!.content,
+      is_error: outcomes.get(call.id)!.isError,
+    })),
+    done: calls.map((call) => ({ name: call.name, input: call.input, error: outcomes.get(call.id)!.error })),
+  };
+}
+
+/**
+ * Why the tool rounds stop when only the customer can unblock update_enquiry: the same product refused again as not picked
+ * ("which"), or an add or set that needs a number the customer never typed ("ask") (exam 3, c09-stress T7: three update rounds,
+ * 13.4 s). Errors another call can fix (OVER_STOCK, UNIT_MISMATCH, a missing stock_id, a quantity sent in pieces for cartons)
+ * leave the tools on, and so does any other tool call in the round.
+ */
+function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: ReadonlySet<string>): "which" | "ask" | null {
+  if (!done.length || done.some((call) => call.name !== "update_enquiry" || !call.error)) return null;
+  const fields = (call: ToolCallDone) => call.input as { action?: unknown; stock_id?: unknown; quantity?: unknown };
+  const code = (call: ToolCallDone) => {
+    const { stock_id: stockId } = fields(call);
+    return typeof stockId === "string" ? stockId.trim().toLowerCase() : "";
+  };
+  if (done.every((call) => call.error === "PRODUCT_NOT_CHOSEN" && refusedBefore.has(code(call)))) return "which";
+  const needsNumber = (call: ToolCallDone) => {
+    const { action, quantity } = fields(call);
+    const noNumber = !(Number.isInteger(quantity) && (quantity as number) > 0);
+    return (action === "add" || action === "set") && code(call) !== ""
+      && (call.error === "QTY_NOT_STATED" || ((call.error === "MISSING_FIELDS" || call.error === "INVALID_INPUT") && noNumber));
+  };
+  return done.every(needsNumber) && !statesAnyQuantity(ctx.customerTexts) ? "ask" : null;
 }
 
 export async function runAgentTurn(input: {
@@ -260,18 +299,21 @@ export async function runAgentTurn(input: {
   const deadline = AbortSignal.timeout(workMs);
   const timeLeft = () => workMs - (performance.now() - started);
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
-  const customerTexts = recentCustomerTexts(request);
+  const recent = recentCustomerTexts(request);
   const picks = pickEvidence(request.history, request.event);
+  const currentText = request.event.type === "text" && !request.event.chip ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
+  // "same qty" reuses the one number typed a few messages back, so every quantity check sees it (owner question 4).
+  const sameQty = sameQuantityText(currentText, picks.texts.filter((text) => !text.chip).map((text) => text.text));
   const ctx: TurnContext = {
     deps,
     seen: new Map(verified.products),
     lines: verified.lines,
     changes: [],
     uncheckedCodes: verified.unchecked,
-    customerTexts,
-    currentText: request.event.type === "text" && !request.event.chip ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null,
+    customerTexts: sameQty && !recent.includes(sameQty) ? [...recent, sameQty] : recent,
+    currentText,
     // A chip tap can ask to clear the enquiry, but never states a quantity.
-    clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...customerTexts] : customerTexts,
+    clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...recent] : recent,
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
     picks,
@@ -303,26 +345,40 @@ export async function runAgentTurn(input: {
     const picked = (code: string) => [null, ...typedNumbers].some((quantity) => customerChose(code, quantity, ctx.picks, ctx.lines.map((line) => line.code)));
     const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [], picked });
     let nudged = false;
+    // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
+    const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
+      && !(/^\s*ok/i.test(request.event.text) && picks.replies.at(-1)?.cards.length === 1);
+    const listTurn = listItemCount(searchText ?? "") > LIST_ITEMS_PER_TURN;
+    // Why the tool rounds stopped before time or the round cap did: the one place that turns tools off, with its note.
+    let stopped: "which" | "ask" | "list" | "thanks" | null = thanksTurn ? "thanks" : null;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
-      // The first call may always use tools; after a tool round, a nearly spent budget means answer now.
-      const forceAnswer = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= lastCallMs);
-      if (forceAnswer && round < MAX_TOOL_ROUNDS) {
-        forcedEarly = true;
-        (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: TIME_NOTE }); // after the tool results
-      }
+      if (!stopped && listTurn && round > 0 && toolNames.length > 0) stopped = "list";
+      // The first call is never out of time; after a tool round, a nearly spent budget means answer now.
+      const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= lastCallMs);
+      const forceAnswer = stopped !== null || outOfTime;
+      const note = stopped === "which" ? WHICH_NOTE : stopped === "ask" ? ASK_NOTE : stopped === "list" ? LIST_NOTE
+        : outOfTime && round < MAX_TOOL_ROUNDS ? TIME_NOTE : null;
+      if (!stopped && outOfTime && round < MAX_TOOL_ROUNDS) forcedEarly = true;
+      // After the tool results (or the nudge): every user message this loop sends has array content.
+      if (note) (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: note });
       rounds += 1;
       const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", deadline);
       if (response.stop_reason === "tool_use") {
-        messages.push({ role: "assistant", content: response.content });
-        messages.push({ role: "user", content: await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline) });
+        const refusedBefore = new Set((ctx.refused ?? []).map((code) => code.toLowerCase()));
+        const { results, done } = await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline);
+        messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
+        stopped = stopped ?? stopNote(done, ctx, refusedBefore);
         continue;
       }
       const final = readFinal(response);
-      // One chance to make the change the reply talks about or asks permission for, only while the next round may still use tools.
+      // One nudge, only while the next round may still use tools, and never after a refusal (a retry is refused again, exam 3,
+      // c08-persona T8) or on a thank-you or a paced list. A permission question is nudged only when it is the confirm step and the
+      // customer typed a number: without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer.
       // Safe only because update_enquiry checks the pick and the typed number.
-      const nudge = !final || nudged || round + 1 >= MAX_TOOL_ROUNDS || timeLeft() <= CLAIM_NUDGE_MIN_MS ? null
+      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused?.length;
+      const nudge = !final || !toolsLeft ? null
         : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
-        : sentences(final.message).some(asksPermissionToAdd) ? PERMISSION_NUDGE : null;
+        : asksConfirmStep(final, ctx.seen, picked) && statesAnyQuantity(ctx.customerTexts) ? PERMISSION_NUDGE : null;
       if (nudge) {
         nudged = true;
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: nudge }] });
@@ -404,7 +460,7 @@ export async function runAgentTurn(input: {
     const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact));
     // Codes and counts only, never customer or reply text.
     console.info("[api/agent] turn", {
-      ms: Math.round(performance.now() - started), rounds, forcedEarly, repaired, repairCauses,
+      ms: Math.round(performance.now() - started), rounds, forcedEarly, stopped, repaired, repairCauses,
       repairSkipped: repairCauses.length > 0 && !repaired, repairFailed, tools: toolNames,
     });
     return {

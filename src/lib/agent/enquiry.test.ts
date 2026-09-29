@@ -1,7 +1,7 @@
 // src/lib/agent/enquiry.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyEnquiryAction, enquiryTotals, quantityStated, verifyEnquiry } from "./enquiry";
+import { applyEnquiryAction, enquiryTotals, firstListItem, listItemCount, quantityStated, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
 import { allowedCents } from "./guards";
 import { fakeDeps, product } from "./testing";
 
@@ -298,4 +298,40 @@ test("re-verification checks at most 6 lines at a time", async () => {
   const result = await verifyEnquiry(items.map((item) => ({ stockId: item.stock_id, quantity: 1 })), deps);
   assert.equal(result.lines.length, 12);
   assert.ok(peak <= 6, `peak concurrency ${peak}`);
+});
+
+test("statesAnyQuantity reads the customer's numbers the way quantityStated does", () => {
+  for (const text of ["2 ctn pls", "same 50", "two pls", "要二十个"]) assert.equal(statesAnyQuantity([text]), true, text);
+  for (const text of ["same qty", "the 5 dollar one", "option 2 pls"]) assert.equal(statesAnyQuantity([text]), false, text);
+});
+
+test("'same qty' reuses the one number the customer typed in their newest four texts", () => {
+  // exam 3, c09-stress T7: the 20 was typed two messages before "same qty", outside the two-text window. Newest first.
+  const typed = ["ya tht one. same qty", "wait 16 inch too long for my kitchen la. got shorter one with the lock thing? 12 inch like tht", "ok la take the 16 inch one, 20pcs"];
+  assert.equal(sameQuantityText(typed[0], typed), "ok la take the 16 inch one, 20pcs");
+  assert.equal(sameQuantityText(typed[0], [typed[0], "2 of the other one", ...typed.slice(1)]), null);
+  const notSame = "not same qty ah, i tell u later";
+  assert.equal(sameQuantityText(notSame, [notSame, ...typed.slice(1)]), null);
+  assert.equal(sameQuantityText("ya tht one", ["ya tht one", ...typed.slice(1)]), null);
+  assert.equal(sameQuantityText(null, typed), null);
+  // Older than the newest four texts, the number no longer counts.
+  assert.equal(sameQuantityText(typed[0], [typed[0], "hmm", "ok", typed[1], typed[2]]), null);
+});
+
+// exam 3, s01 T0: the chat box is one line, so the pasted list arrives with its line breaks turned into spaces.
+const s01List = [
+  "Hi, can you send me a quote for the following items:", "1) Stainless Steel Pot 12QT", "2) Stainless Steel Strainer for the 12QT Pot",
+  "3) Stainless Steel Ladle 4oz, 6oz, 8oz, length approximate 10inch", '4) 1/2 Stainless Steel Pan, 6" Deep', '5) 1/4 Stainless Steel Pan, 6" Deep',
+  "6) Lid for 1/2 S/S Pan with notch for ladle", "7) Lid for 1/4 S/S Pan with notch for ladle", "8) Oyster Knife with Plastic Handle",
+].join(" ");
+
+test("a pasted list's items are counted, and its first item found", () => {
+  assert.equal(listItemCount(s01List), 8);
+  assert.equal(listItemCount("- pot\n- lid\n- ladle\n- pan"), 4);
+  assert.equal(listItemCount("ok 2. also 1 of the 6 slot"), 0);
+  assert.equal(listItemCount("3 unit. 2 outlet + 1 spare"), 0);
+  assert.equal(firstListItem(s01List), "Stainless Steel Pot 12QT");
+  assert.equal(firstListItem("1) pot x 5 2) lid"), "pot x 5");
+  assert.equal(firstListItem("1) pot"), null);
+  assert.equal(firstListItem("blow torch"), null);
 });

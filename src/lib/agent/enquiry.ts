@@ -37,13 +37,18 @@ const oneAsQuantity = /^\s*(?:(?:ok(?:ay)?|yes|ya|yah)\b[\s,.!]*(?:(?:la|lah|lor
 // The chat box is a single-line input, so a pasted list arrives as "… 1) pot 2) lid": a label starts the text or follows a space.
 const listLabel = /(?<=^|\s)(\d{1,2})[ \t]*[).][ \t]+(?=\S)/g;
 
-/** Numbers that are never quantities: list labels ("1) pot 2) lid", counting up from 1), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
-function withoutNonQuantities(text: string) {
-  // Labels count up from 1; a quantity in between ("1) pot x 5. 2) lid") is skipped, not taken as a label.
+/** The labels of a pasted list ("1) pot 2) lid"), counting up from 1; a quantity in between ("1) pot x 5. 2) lid") is skipped, not taken as a label. */
+function listLabels(text: string) {
   const labels: RegExpExecArray[] = [];
   for (const match of text.matchAll(listLabel)) {
     if (Number(match[1]) === labels.length + 1) labels.push(match);
   }
+  return labels;
+}
+
+/** Numbers that are never quantities: list labels ("1) pot 2) lid", counting up from 1), "the 2 again / the 2 of them", "3-in-1" / "3 in 1". */
+function withoutNonQuantities(text: string) {
+  const labels = listLabels(text);
   // A lone "ok 2." or "2. also 1 of the 6 slot" is a quantity, not a list.
   const unlabelled = labels.length >= 2
     ? labels.reduceRight((rest, match) => rest.slice(0, match.index) + rest.slice(match.index + match[0].length), text)
@@ -83,6 +88,38 @@ export function quantityStated(quantity: number, customerTexts: string[]) {
   return customerTexts.map(withoutNonQuantities).some((text) => digits.test(text)
     || (wordQuantity !== null && wordQuantity.test(text))
     || (chineseQuantity !== null && chineseQuantity.test(text)));
+}
+
+/** True when the customer's texts state any quantity (a digit, a number word or a Chinese numeral used as a count). */
+export function statesAnyQuantity(customerTexts: string[]) {
+  const numbers = new Set([...customerTexts.join(" ").matchAll(/\d+/g)].map((match) => Number(match[0])).filter((n) => n > 0 && n <= 100_000));
+  for (let n = 1; n <= 100; n += 1) numbers.add(n);
+  return [...numbers].some((n) => quantityStated(n, customerTexts));
+}
+
+const sameQuantity = /(?<!\b(?:not|no|dun|don'?t|diff\w*)\s+(?:the\s+)?)\bsame\s+(?:qty|quantity|amount|number|no\.?|pcs|units?)\b|\bsame\s+as\s+(?:before|just now)\b/i;
+
+/**
+ * "same qty" while switching items (owner question 4): the earlier text holding the only quantity the customer typed in their
+ * newest four texts (newest first, this one included), so update_enquiry may use that number; null when they typed none or more
+ * than one (exam 3, c09-stress T7: the 20 was typed two messages before, outside the two-text window).
+ */
+export function sameQuantityText(currentText: string | null, typedTexts: string[]) {
+  if (!currentText || !sameQuantity.test(currentText)) return null;
+  const newest = typedTexts.slice(0, 4);
+  const typed = [...new Set(newest.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => quantityStated(n, newest));
+  return typed.length === 1 ? newest.find((text) => quantityStated(typed[0], [text])) ?? null : null;
+}
+
+/** The items in a pasted list: labels counting up from 1 ("1) pot 2) lid"), or bullet lines. */
+export function listItemCount(text: string) {
+  return Math.max(listLabels(text).length, text.split(/\n/).filter((line) => /^\s*[-•*]\s+\S/.test(line)).length);
+}
+
+/** The first labelled item of a pasted list ("1) pot 2) lid" gives "pot"), or null for fewer than two labels. */
+export function firstListItem(text: string) {
+  const [first, second] = listLabels(text);
+  return second ? text.slice(first.index + first[0].length, second.index).trim() : null;
 }
 
 const packWords = { carton: String.raw`(?:ctns?|cartons?)\b|箱`, packet: String.raw`(?:pkts?|packets?|packs?)\b|包` };

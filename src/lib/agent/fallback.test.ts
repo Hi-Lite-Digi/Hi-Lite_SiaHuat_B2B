@@ -46,3 +46,11 @@ test("a search outage still returns a polite reply", async () => {
   assert.deepEqual(reply.cards, []);
   assert.match(reply.message, /trouble/);
 });
+
+test("a pasted list's backup reply searches its first item", async () => {
+  // exam 3, s01-B T0: the backup reply searched the list's first 80 characters and showed a can opener and pot lids.
+  const deps = fakeDeps([torch]);
+  const reply = await buildFallbackReply({ searchText: "pls quote: 1) kitchen blow torch 2) gas cans 3) pot lids 4) ladles", lines: [], deps });
+  assert.equal(deps.calls[0], "search:kitchen blow torch");
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+});

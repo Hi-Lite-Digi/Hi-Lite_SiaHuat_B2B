@@ -129,9 +129,10 @@ const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.sli
 /** A category's words as the catalogue's category filter reads them. */
 const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
 
-export type ToolOutcome = { content: string; isError: boolean };
+/** A tool's result for Claude; error is its code, which the loop reads to decide whether another tool round can help. */
+export type ToolOutcome = { content: string; isError: boolean; error?: string };
 const ok = (value: unknown): ToolOutcome => ({ content: JSON.stringify(value), isError: false });
-const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome => ({ content: JSON.stringify({ error, ...detail }), isError: true });
+const fail = (error: string, detail: Record<string, unknown> = {}): ToolOutcome => ({ content: JSON.stringify({ error, ...detail }), isError: true, error });
 /** An error as a log code: its message when that is already a code (SUPABASE_SEARCH_500), else its name. Error text can echo customer words. */
 export const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-9_]{3,60}$/.test(error.message) ? error.message : error.name) : "unknown");
 
