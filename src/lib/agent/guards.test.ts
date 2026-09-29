@@ -499,6 +499,7 @@ test("sums, GST, questions about what the customer wants and promises that wait 
     // exam 3, c12-persona T11 (replayed): the repair's GST sum became "That change isn't on your enquiry yet."
     "Adding 9% to $119.09 gets you the GST-inclusive total, but I can't confirm that exact final figure here - Sia Huat sales will confirm it at checkout.",
     "Add 9% GST and it comes to about $101.81.",
+    "Adding 9% GST and it comes to about $101.81.",
     "Adding GST, that's about $101.81.",
     // exam 3, c11-stress T9 (replayed): a question split from its "?" by the comma.
     "Sorry, just to be sure - is it the S/S 4-Slot Toaster (HET-4, $196.36) for the other outlet you want added, qty 1?",
@@ -525,9 +526,22 @@ test("real claims and unconditional promises are still caught", () => {
     "The 2 torches you need are added.",
     "The torch you want added is on your enquiry now.",
     "Got the 2 you need added.",
-    // A GST sum next to an add doesn't excuse the add.
+    // A GST sum next to an add doesn't excuse the add, and "add GST and 2 torches" adds the torches too.
     "Added 2 Safico torches - adding 9% GST, the total is about $153.72.",
     "Adding 2 Safico torches, and adding GST that's about $153.72.",
+    "I'll add GST and 2 Safico torches now.",
+    "Adding the tax and 2 Safico torches now.",
+    // Only a waiting promise's own "added" is excused, not a real claim after it or next to it.
+    "Let me know and I'll get 2 added - I've added the Safico torch already.",
+    "Once you confirm I can have it updated - updated the Safico torch to 3.",
+    "Once you tap it I'll get 3 added and the 2 Safico torches are now in your enquiry.",
+    // A statement that opens like a question, or a hiccup clause with its own claim, is still a claim.
+    "What you need added is now in your enquiry.",
+    "Can confirm the Safico torch you need added is on your enquiry now.",
+    "Can confirm the 2 you need added.",
+    "Sorted the hiccup adding these and added 2 Safico torches.",
+    // A closing "confirmed once more" set off by dashes is no condition either.
+    "Adding 1 Safico torch now - confirmed once more - it's the BTS-8026D.",
   ]) assert.equal(toasterClaims(message).length, 1, message);
   // exam 3, c02-A T12 echoed "That change hasn't been made yet" after "what the fk": the repair says so only for an asked change.
   assert.match(toasterClaims("Confirm and I'll get 2 added.")[0], /If the customer asked for that change, say it hasn't been made yet .*; if they didn't ask for one, just leave that sentence out and answer what they said\.$/);
@@ -561,6 +575,16 @@ test("the fixed line answers only a change the customer asked for, and only once
     "That change isn't on your enquiry yet. Kenwood is a UK brand, though it's not made in Japan.");
   // A claim that was the whole reply to an advice question leaves nothing; the loop sends its cards-only or backup line instead.
   assert.equal(withoutEnquiryClaims("I'll add 3 pcs of the 21cm for you.", facts, false), "");
+  // "That one hasn't been added yet" about the claim's own product (or naming none) says it failed.
+  assert.equal(withoutEnquiryClaims("Sorry, that one hasn't been added yet. I'll add 2 Safico torches now.", facts, true), "Sorry, that one hasn't been added yet.");
+  // exam 3, c10-stress T5 (replayed): the other tong "hasn't been added yet" doesn't say the steak tong add failed.
+  const tongs = { lines: [], changes: [], seen: new Map([checked("ST-15", "Stainless Steel Steak Tong 15\"", 12.48), checked("2564L", "Stainless Steel Utility Tong 16\"", 3.85)]) };
+  const otherTong = "For the 16″ tong, is it the Utility Tong 16″ (2564L)? That one hasn't been added yet, just confirm and I'll add 3 for you.";
+  assert.equal(withoutEnquiryClaims(`Got it: 3 Stainless Steel Steak Tong 15″ added. ${otherTong}`, tongs, true), `That change isn't on your enquiry yet. ${otherTong}`);
+  // Nor does a GST note, another product, or a sentence that isn't about a change.
+  for (const note of [
+    "Note GST is not added to these prices yet.", "The Rooster Series Round Plate is not in your enquiry.", "Prices are not final on your enquiry until sales confirms.",
+  ]) assert.equal(withoutEnquiryClaims(`Added 2 Safico torches. ${note}`, facts, true), `That change isn't on your enquiry yet. ${note}`, note);
 });
 
 test("asking permission to add is a style issue", () => {
@@ -792,6 +816,8 @@ test("an item code from this chat that fits the phone pattern is kept; other num
   assert.deepEqual(customerMessage("Call 6223 1732 or see 3500-0018.", ["3500-0018"]), { message: "Call Sia Huat sales (details below) or see 3500-0018.", showContact: true });
   // A code with a space is never spared, so a phone number can't pass as one.
   assert.deepEqual(customerMessage("Call 9123 4567.", ["9123 4567"]), { message: "Call Sia Huat sales (details below).", showContact: true });
+  // Only a code is spared: shownProductIds come from the browser, so an email passed as one is still replaced.
+  assert.deepEqual(customerMessage("Email evil@example.com for a quote.", ["evil@example.com"]), { message: "Email Sia Huat sales (details below) for a quote.", showContact: true });
   // Without the chat's codes nothing changes.
   assert.deepEqual(customerMessage(text), { message: "Could you type back the item codes Sia Huat sales (details below) (plate) and Sia Huat sales (details below) (bowl), with how many you need?", showContact: true });
 });

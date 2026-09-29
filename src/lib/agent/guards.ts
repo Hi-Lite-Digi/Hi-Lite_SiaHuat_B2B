@@ -276,23 +276,29 @@ export const ENQUIRY_CLAIM_PREFIX = "The enquiry didn't change";
 // A leading "Got it: 2" claims a change; "Got it, 4 pax" or "OK, 2 options" only echoes the customer's numbers.
 const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped|noted down)\b|\bput\b[^.!?\n]{0,25}\bin(?:to)?\s+(?:your|the)\s+enquiry\b|\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b|\bqty\s*\d+\s*done\b|^\s*(?:noted|got it|done|ok(?:ay)?)[:,!]?\s*\d(?![\d.]*(?:(?:in|l|g|m)\b|\s*(?:inch(?:es)?|cm|mm|ltr|litres?|liters?|qt|quarts?|ml|oz|kg|pax|ppl|people|persons?|guests?|options?|choices?|sizes?|dollars?|bucks|sgd|slots?|tiers?|burners?)\b|\s*[%″"]))|已(?:添加|加入|更新|删除|移除)|加好了|帮你加了/i;
 const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|update|note)\b|\badding\b[^.!?\n]*\bnow\b|我来加/i;
-// "I'll get 2 added" and "I'll have it updated" promise a change; they don't report one (exam 3, c06-persona T8 replayed).
-const futureChange = /\b(?:I'?ll|I will|let me|going to|can)\s+(?:get|have)\s+(?:[\w'’″-]+\s+){0,4}(?:added|removed|updated)\b/i;
+// "I'll get 2 added" and "I'll have it updated" promise a change; they don't report one (exam 3, c06-persona T8 replayed). Lazy, so
+// it ends at the promise's own "added": "I'll get 2 added - I've added the torch" still reports one.
+const futureChange = /\b(?:I'?ll|I will|let me|going to|can)\s+(?:get|have)\s+(?:[\w'’″-]+\s+){0,4}?(?:added|removed|updated)\b/i;
 const honestWording = /\b(?:not|never|nothing|no longer|yet to|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
 // A question about what the customer wants: "is it the HET-4 you want added, qty 1?" (exam 3, c11-stress T9 replayed: split from its
-// "?" by the comma). Only a clause that opens as a question counts, so "The torch you want added is on your enquiry now" is a claim.
+// "?" by the comma). Only a clause that opens as a question in a sentence that ends as one counts, so "The torch you want added is on
+// your enquiry now" and "Can confirm the 2 you need added" are claims.
 const wantsChange = /\b(?:want|like|need)s?\s+(?:[\w'’″-]+\s+){0,5}(?:added|removed|updated)\b/i;
 const questionOpen = /^(?:is|are|was|were|do|does|did|which|what|how many|should|shall|can|could|would)\b/i;
 // A clause saying an add failed ("having a hiccup adding these", exam 3, c05-persona T10); it never excuses a whole sentence, so
 // "Sorry for the hiccup, I'll add 2 now" is still a promise.
 const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updating|removing)\b/i;
-const notAClaim = (clause: string) => honestWording.test(clause) || failedWording.test(clause) || (questionOpen.test(clause) && wantsChange.test(clause));
+// Neither phrase excuses a claim made beside it in the same clause: "Sorted the hiccup adding these and added 2 torches".
+const notAClaim = (clause: string, question: boolean) => honestWording.test(clause)
+  || (failedWording.test(clause) && !changeClaim.test(clause.replace(failedWording, " ")))
+  || (question && questionOpen.test(clause) && wantsChange.test(clause) && !changeClaim.test(clause.replace(wantsChange, " ")));
 // GST sums are not enquiry changes: "Adding 9% to $119.09 gets you the GST-inclusive total" (exam 3, c12-persona T11). Stripped like
-// featureWording, so "Added 2 torches - adding 9% GST, about $153.72" is still judged on its add.
-const gstWording = /\badd(?:s|ed|ing)?\s+(?:the\s+)?(?:\d+(?:\.\d+)?\s?%\s*)?(?:gst|tax)\b|\badding\s+\d+(?:\.\d+)?\s?%(?:\s*(?:gst|tax)\b)?/gi;
+// featureWording, so "Added 2 torches - adding 9% GST, about $153.72" is still judged on its add; "I'll add GST and 2 torches now"
+// keeps its verb.
+const gstWording = /\badd(?:s|ed|ing)?\s+(?:the\s+)?(?:\d+(?:\.\d+)?\s?%\s*)?(?:gst|tax)\b(?!\s+and\s+\d)|\badding\s+\d+(?:\.\d+)?\s?%(?:\s*(?:gst|tax)\b)?(?!\s*(?:gst|tax)\b|\s+and\s+\d)/gi;
 // "Pick a plate you like, and I'll add it" waits for the customer too (exam 2, c05-B); "tap to select it, then I'll add" doesn't.
 // A closing "confirmed once more" is no condition (exam 3, c11-stress T9 replayed); "once more stock arrives" still is.
-const conditionalWording = /\b(?:if|once(?!\s+(?:more|again)\s*(?:[.!?…,:;)]|$))|after|when|let me know|tell me)\b|\b(?:pick|choose)\s+(?:a|an|one|any|the|which(?:ever)?)\b[^.!?]*\b(?:and|then)\s+I'?ll\b/i;
+const conditionalWording = /\b(?:if|once(?!\s+(?:more|again)\s*(?:[.!?…,:;)–—-]|$))|after|when|let me know|tell me)\b|\b(?:pick|choose)\s+(?:a|an|one|any|the|which(?:ever)?)\b[^.!?]*\b(?:and|then)\s+I'?ll\b/i;
 // "contact sales to get that line added" is advice, not a claim (exam 2, c05-stress).
 const notAboutEnquiry = /\bto get\b[^.!?]{0,30}\badded\b|\b(?:gst|tax|fee|charges?)\b[^.!?]{0,30}\badded\b|\badded\b[^.!?]{0,20}\b(?:gst|tax|on top|at checkout)\b|\bupdated (?:prices?|stock|list|link|photos?)\b|\bupdated (?:\w+ )?total\b|\bprices?\s+(?:has|have|was|were|is)\s+(?:been\s+)?(?:updated|dropped|changed)\b|\bremoved (?:[^.!?]{0,30} )?from (?:the|my) (?:list of )?(?:options|results|search)\b/i;
 // Product features, not enquiry changes: "the bowl can be removed", "the lid is easily removed", "an added splash guard", "an updated motor".
@@ -310,22 +316,24 @@ const claimClauses = (sentence: string) => sentence
   .map((part) => part.trim()).filter(Boolean);
 // The fixer's line: true for a false add, change or removal, including of an item already on the enquiry.
 const NOT_ON_ENQUIRY = "That change isn't on your enquiry yet.";
+/** The products a reply's words can point at: those looked up this turn and the enquiry's lines. */
+const claimCards = (facts: ClaimFacts): ShownCard[] => [
+  ...seenCards(facts.seen),
+  ...facts.lines.map((line) => ({ code: line.code, name: line.item, price: null, link: null })),
+];
 
 /**
  * Sentences that say an item was added, changed or removed, or promise to do it, when update_enquiry didn't do that
  * for the item this turn. The item is the product whose code the clause types, else the one its words point at.
  */
 function falseEnquiryClaims(message: string, facts: ClaimFacts) {
-  const cards: ShownCard[] = [
-    ...seenCards(facts.seen),
-    ...facts.lines.map((line) => ({ code: line.code, name: line.item, price: null, link: null })),
-  ];
+  const cards = claimCards(facts);
   const onLines = (card: ShownCard) => facts.lines.some((line) => same(line.code, card.code));
   const changed = (card: ShownCard, actions: EnquiryChange["action"][] = ["add", "set", "remove"]) => facts.changes.some((change) => change.code !== null && same(change.code, card.code) && actions.includes(change.action));
   const point = (text: string) => pointedBy(text, cards);
   // A clause with a change word, judged on its own: a swap's "HET-4 removed" and "WCT708K added" each hold for their item.
-  const falseClause = (clause: string, statusAllowed: boolean) => {
-    if (notAClaim(clause)) return false;
+  const falseClause = (clause: string, statusAllowed: boolean, question: boolean) => {
+    if (notAClaim(clause, question)) return false;
     const status = statusAllowed && (statusWording.test(clause) || !changeClaim.test(clause.replace(onEnquiryWording, "")));
     const pointed = point(clause);
     if (!pointed.length) return !facts.changes.length && !(status && facts.lines.length);
@@ -346,15 +354,17 @@ function falseEnquiryClaims(message: string, facts: ClaimFacts) {
       if (!(pointed.length && pointed.every((card) => changed(card)))) return true;
     }
     // A condition ("once you pick one, I'll add it") only excuses a sentence with no past-tense claim in it; the "added" of a
-    // promise ("let me know and I'll get 2 added") is not one.
-    if (!changeClaim.test(sentence) || (conditionalWording.test(sentence) && !/\b(?:added|removed|updated)\b/i.test(sentence.replace(futureChange, " ")))) return false;
+    // promise ("let me know and I'll get 2 added") is not one, but a status beside it ("…and the torch is now in your enquiry") is.
+    const waiting = sentence.replace(futureChange, " ");
+    if (!changeClaim.test(sentence) || (conditionalWording.test(sentence) && !/\b(?:added|removed|updated)\b/i.test(waiting) && !(waiting !== sentence && onEnquiryWording.test(waiting)))) return false;
+    const question = /\?\s*$/.test(sentence);
     const clauses = claimClauses(sentence).filter((clause) => changeClaim.test(clause));
     const judged = clauses.length ? clauses : [sentence];
-    if (judged.some((clause) => falseClause(clause, !reportsChange.test(sentence)))) return true;
+    if (judged.some((clause) => falseClause(clause, !reportsChange.test(sentence), question))) return true;
     // The rest of an add's list ("Added: 2 torches, 4 plates") has no change word of its own: each item it names must be
     // on the enquiry or changed this turn.
-    if (!judged.some((clause) => !removalWord.test(clause) && !notAClaim(clause))) return false;
-    return claimClauses(sentence).filter((part) => !notAClaim(part)).some((part) => point(part).some((card) => !onLines(card) && !changed(card)));
+    if (!judged.some((clause) => !removalWord.test(clause) && !notAClaim(clause, question))) return false;
+    return claimClauses(sentence).filter((part) => !notAClaim(part, question)).some((part) => point(part).some((card) => !onLines(card) && !changed(card)));
   });
 }
 
@@ -370,19 +380,34 @@ const adviceOnly = /\b(?:recomm?end\w*|recomend\w*|suggest\w*|which\b[^.?!]{0,25
 const changeWords = /\b(?:add\w*|put|take|want|order|buy|change|switch|swap|remove|cancel|delete|make it|yes|ya|yup|ok(?:ay)?|confirm|same|need|skip|only|tap\w*|enquiry|cart|keep|pls|please)\b|\d|加|要|换|删|不要/i;
 /** Whether the customer's message (or a card tap) may ask for an enquiry change. */
 export const askedForChange = (currentText: string | null, tapped = false) => tapped || !adviceOnly.test(currentText ?? "") || changeWords.test(currentText ?? "");
-// The rest of the reply already says the change wasn't made (exam 3: c06-persona T8 "didn't go through", c08-persona T9 "hasn't been
-// added yet"); "not made in Japan" doesn't.
-const saysNotMade = /\b(?:hasn['’]t|has not|haven['’]t|isn['’]t|wasn['’]t|not)\b[^.!?]{0,40}\b(?:added|gone through|been made|(?:in|on)\s+(?:your|the)\s+enquiry)\b|\bdidn['’]t go through\b|\bnothing['’]?s? (?:is )?(?:in|on) (?:your|the) enquiry\b/i;
+// A sentence saying the change wasn't made (exam 3: c06-persona T8 "didn't go through", c08-persona T9 "hasn't been added yet");
+// "not made in Japan" and "prices are not final on your enquiry" don't.
+const saysNotMade = /\b(?:hasn['’]t|has not|haven['’]t|isn['’]t|wasn['’]t|not)\b[^.!?]{0,40}\b(?:added|gone through|been made)\b|\b(?:isn['’]t|aren['’]t|not)\s+(?:yet\s+|still\s+)?(?:in|on)\s+(?:your|the)\s+enquiry\b|\bdidn['’]t go through\b|\bnothing['’]?s? (?:is )?(?:in|on) (?:your|the) enquiry\b/i;
+/**
+ * Whether the rest of the reply already says each dropped change wasn't made: a sentence saying so about the claim's product, or
+ * about none. A sentence naming no product is about the one the reply names: exam 3, c10-stress T5 (replayed) said "That one hasn't
+ * been added yet" of the other tong, not the steak tong it claimed. A GST note ("GST is not added yet") is about no change.
+ */
+function saysEachNotMade(kept: string, claims: string[], cards: ShownCard[]) {
+  const replyNamed = pointedBy(kept, cards);
+  const notMade = sentences(kept).filter((sentence) => saysNotMade.test(sentence) && !/\b(?:gst|tax)\b/i.test(sentence))
+    .map((sentence) => { const named = pointedBy(sentence, cards); return named.length ? named : replyNamed; });
+  return claims.every((claim) => {
+    const claimed = pointedBy(claim, cards);
+    return notMade.some((named) => !claimed.length || !named.length || named.some((card) => claimed.some((item) => same(item.code, card.code))));
+  });
+}
 
 /**
- * The message without its false enquiry claims. Only when the customer asked for a change, and nothing left in the reply says it
- * wasn't made, does one NOT_ON_ENQUIRY line take the first claim's place.
+ * The message without its false enquiry claims. Only when the customer asked for a change, and the rest of the reply doesn't already
+ * say each one wasn't made, does one NOT_ON_ENQUIRY line take the first claim's place.
  */
 export function withoutEnquiryClaims(message: string, facts: ClaimFacts, askedChange = true) {
-  const [first, ...rest] = falseEnquiryClaims(message, facts);
+  const claims = falseEnquiryClaims(message, facts);
+  const [first, ...rest] = claims;
   if (!first) return message;
-  const kept = removeSentences(message, (sentence) => sentence === first || rest.includes(sentence));
-  if (!askedChange || saysNotMade.test(kept)) return kept;
+  const kept = removeSentences(message, (sentence) => claims.includes(sentence));
+  if (!askedChange || saysEachNotMade(kept, claims, claimCards(facts))) return kept;
   return removeSentences(message.replace(first, NOT_ON_ENQUIRY), (sentence) => rest.includes(sentence));
 }
 
@@ -697,7 +722,8 @@ export function customerMessage(message: string, itemCodes: readonly string[] = 
   const trimmed = message.trim();
   const unreserved = sentences(trimmed).some(isReservationClaim) ? removeSentences(trimmed, isReservationClaim) : trimmed;
   if (trimmed && !unreserved) return { message: CONTACT_LINE, showContact: true };
-  const contactChecked = unreserved.replace(contactPattern, (found) => (isSalesContact(found) || codes.has(found.toLowerCase()) ? found : OTHER_CONTACT));
+  // Only a phone-shaped code is spared: shownProductIds come from the browser, so an email among them is still replaced.
+  const contactChecked = unreserved.replace(contactPattern, (found) => (isSalesContact(found) || (!found.includes("@") && codes.has(found.toLowerCase())) ? found : OTHER_CONTACT));
   const checked = honestManualHandoff(contactChecked);
   if (checked === contactChecked) return { message: contactChecked, showContact: contactChecked !== unreserved };
   return { message: checked.replace(HANDOFF_SENTENCE, "").trim() || CONTACT_LINE, showContact: true };
