@@ -34,6 +34,8 @@ export type TurnContext = {
   picks: PickEvidence;
   /** This turn's searches, for the checks on the reply's claims about the range. */
   searches: SearchRecord[];
+  /** Codes update_enquiry refused this turn as not picked (PRODUCT_NOT_CHOSEN): the reply's question about them needs their cards. */
+  refused?: string[];
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -331,6 +333,22 @@ function enquiryState(ctx: TurnContext) {
   return { lines: ctx.lines, totals: enquiryTotals(ctx.lines), unchecked: uncheckedNote(ctx.uncheckedCodes) };
 }
 
+const REFUSED_LOOKUP_MS = 2_000; // like an earlier card's check: the question about it shouldn't wait longer
+const NOT_CHOSEN_NOTE = "The customer's words don't show they picked this product. Don't call update_enquiry for this code again this turn; if picked lists a product, that one may be added. Otherwise ask one short question naming this product with its code ('Is it the <name> <code>?') with its card attached, or if two or three fit, attach them and ask which one. A yes or a tap then adds it.";
+
+/**
+ * The refused product's live facts, so the question about it can give its price and carry its card; null when slow or not found
+ * (exam 3, c08-persona T8: the refused product wasn't looked up, so the question's price and card were lost).
+ */
+function refusedProduct(code: string, ctx: TurnContext) {
+  return withTimeout((async () => {
+    const found = await ctx.deps.findByCode(code).catch(() => null);
+    if (!found) return null;
+    const [checked, details] = await Promise.all([liveCheck(found, ctx.deps, REFUSED_LOOKUP_MS), lookupDetails(ctx, [found.stock_id])]);
+    return remember(ctx, withDetails(checked, details));
+  })(), REFUSED_LOOKUP_MS, null);
+}
+
 async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext) {
   // A line that could not be re-checked stays as the browser has it: it can be removed or cleared, not changed.
   const code = input.stock_id?.toLowerCase();
@@ -342,10 +360,8 @@ async function enquiryTool(input: z.infer<typeof enquiryInput>, ctx: TurnContext
   }
   const lineCodes = ctx.lines.map((line) => line.code);
   if ((input.action === "add" || input.action === "set") && input.stock_id && !customerChose(input.stock_id, input.quantity ?? null, ctx.picks, lineCodes)) {
-    return fail("PRODUCT_NOT_CHOSEN", {
-      note: "The customer hasn't picked this product: no tap, code, name, size, price or yes to it. Show the likely cards and ask which one.",
-      picked: pickedCodes(ctx.picks, lineCodes),
-    });
+    (ctx.refused ??= []).push(input.stock_id);
+    return fail("PRODUCT_NOT_CHOSEN", { note: NOT_CHOSEN_NOTE, product: await refusedProduct(input.stock_id, ctx), picked: pickedCodes(ctx.picks, lineCodes) });
   }
   // The typed number lets a second add through (it guards against an earlier message's number); within one turn it would double the line.
   if (input.action === "add" && ctx.changes.some((change) => (change.action === "add" || change.action === "set") && change.code?.toLowerCase() === code)) {

@@ -146,6 +146,23 @@ test("a card set already shown twice is flagged unless the customer asks for it 
   assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, cardSets: [["BTS-8026D"], ["OLD", "BTS-8026D"]] }).style, []);
 });
 
+test("a card update_enquiry refused, or the one card a question names, is not a repeat", () => {
+  // exam 3, c08-persona T8: the confirm card had been shown alone twice, REPEAT stripped it, and the next "yes" had no card to point at.
+  const scissors = new Map<string, CheckedProduct>([
+    ["E910076", { product: product({ stock_id: "E910076", name: "Zyliss Stainless Steel Household Scissors", list_price: 29.27 }), verified: true }],
+    ["E910077", { product: product({ stock_id: "E910077", name: "Zyliss Polypropylene Basic Household Scissors Basic, Gray", list_price: 22.84 }), verified: true }],
+    ["BTS-8026D", { product: product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER SAFICO PRO", list_price: 23.36 }), verified: true }],
+  ]);
+  const repeats = (message: string, card_ids: string[], turn: Partial<TurnFacts> = {}) => reviewAnswer(
+    { message, card_ids, chips: [], show_contact: false }, scissors, allowed, { cardSets: [card_ids, card_ids], previousMessage: null, currentText: "hmm" }, turn,
+  ).style.some((issue) => issueCode(issue) === "REPEAT");
+  assert.equal(repeats("This one is stainless steel.", ["E910076"]), true);
+  assert.equal(repeats("This one is stainless steel.", ["E910076"], { refused: ["e910076"] }), false);
+  assert.equal(repeats("Is it the Zyliss E910076?", ["E910076"]), false);
+  assert.equal(repeats("Here are the Zyliss scissors again.", ["E910076"]), true);
+  assert.equal(repeats("Which one would you like?", ["E910076", "E910077", "BTS-8026D"]), true);
+});
+
 test("repeating the previous message word for word is flagged", () => {
   const answer = { message: "Which size do you need?", card_ids: [], chips: [], show_contact: false };
   const earlier = { cardSets: [], previousMessage: "which size do you need", currentText: "not sure" };

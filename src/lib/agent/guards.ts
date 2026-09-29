@@ -145,10 +145,10 @@ const photoAgain = /\b(?:re-?send(?:ing)?|send(?:ing)? (?:it|the (?:photo|image|
 const asksPhotoAgain = (message: string) => sentences(message).some((sentence) => /[?？]$/.test(sentence) && photoAgain.test(sentence));
 export const PHOTO_AGAIN_ISSUE = "You already asked once for the photo. Don't ask again: ask what it looks like or what it's for (shape, size, material, any brand or label) and offer Sia Huat sales (show_contact true).";
 
-function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns, changed: boolean) {
+function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns, changed: boolean, needed: boolean) {
   const issues: string[] = [];
   const key = cardSetKey(cards.map((card) => card.stock_id));
-  if (cards.length && !asksAgain.test(earlier.currentText)) {
+  if (cards.length && !needed && !asksAgain.test(earlier.currentText)) {
     if (earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2) {
       issues.push(REPEATED_CARDS_ISSUE);
     }
@@ -250,8 +250,8 @@ export const noCardFixer: Fixer = {
   fix: (message) => removeSentences(message, (s) => asksForTap(s) || promisesToShow(s)) || "Tell me which one by its name or code.",
 };
 
-/** What this turn's tools did, for checks on the reply. */
-export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[] };
+/** What this turn's tools did, for checks on the reply; refused: the codes update_enquiry refused as not picked. */
+export type TurnFacts = { lines: EnquiryReceiptLine[]; changes: EnquiryChange[]; searches: SearchRecord[]; refused?: string[] };
 /** The enquiry facts plus the products looked up this turn, which the reply's words can point at. */
 type ClaimFacts = Pick<TurnFacts, "lines" | "changes"> & { seen: ReadonlyMap<string, CheckedProduct> };
 
@@ -503,7 +503,14 @@ export function reviewAnswer(
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
   if (said.some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
-  style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length)));
+  // A card the reply needs is not a loop: one update_enquiry refused as not picked, or the one card a question names ("Is it the
+  // Zyliss E910076?", "How many of the HET-4?"); the customer's yes or number picks it only while it is shown (exam 3: c08-persona T8,
+  // c11-stress T7-T8, c02-B T13).
+  const refused = turn.refused ?? [];
+  const needed = cards.some((card) => refused.some((code) => same(code, card.stock_id)))
+    || (cards.length === 1 && lastQuestion(answer.message) !== null
+      && pointedBy(answer.message, [{ code: cards[0].stock_id, name: cards[0].name, price: null, link: null }]).length > 0);
+  style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length), needed));
   style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };
 }

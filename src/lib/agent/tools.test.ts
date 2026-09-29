@@ -551,9 +551,42 @@ test("a PRODUCT_NOT_CHOSEN refusal tells Claude what to do and which products th
   const history = [twoCardsReply, { role: "user" as const, content: "[tap] Picked: KITCHEN BLOW TORCH 970S (code 970S)" }, { role: "assistant" as const, content: "How many do you need?" }];
   const outcome = await addSafico({ customerTexts: ["2 torches"], picks: typedAfter(history, "2 torches") });
   const body = JSON.parse(outcome.content) as { error: string; note: string; picked: string[] };
-  assert.deepEqual(Object.keys(body), ["error", "note", "picked"]);
+  assert.deepEqual(Object.keys(body), ["error", "note", "product", "picked"]);
   assert.equal(body.error, "PRODUCT_NOT_CHOSEN");
   assert.deepEqual(body.picked, ["970S"]);
+});
+
+test("a refused add returns the product's live facts and records the code", async () => {
+  // exam 3, c08-persona T8: the refused product wasn't looked up, so the question about it lost its price and its card.
+  const ctx = context(undefined, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") });
+  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
+  const body = JSON.parse(outcome.content) as { error: string; note: string; product: { stock_id: string; price_ex_gst: number | null } | null; picked: string[] };
+  assert.equal(outcome.isError, true);
+  assert.deepEqual(Object.keys(body), ["error", "note", "product", "picked"]);
+  assert.equal(body.product?.stock_id, "BTS-8026D");
+  assert.equal(body.product?.price_ex_gst, 23.36);
+  assert.match(body.note, /Don't call update_enquiry for this code again this turn/);
+  assert.equal(ctx.seen.get("BTS-8026D")?.verified, true);
+  assert.deepEqual(ctx.refused, ["BTS-8026D"]);
+  assert.deepEqual(ctx.lines, []);
+});
+
+test("a refused add whose lookup fails or stalls returns product null within about 2 s", async () => {
+  const failing = fakeDeps([blowtorch, mastrad, safico]);
+  failing.findByCode = async () => { throw new Error("DB_DOWN"); };
+  const refusedCtx = context(failing, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") });
+  const failed = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, refusedCtx)).content) as { error: string; product: unknown };
+  assert.equal(failed.error, "PRODUCT_NOT_CHOSEN");
+  assert.equal(failed.product, null);
+  assert.deepEqual(refusedCtx.refused, ["BTS-8026D"]);
+  const stalled = fakeDeps([blowtorch, mastrad, safico]);
+  const fetchLive = stalled.fetchLive;
+  stalled.fetchLive = (url, ms) => (url === safico.source_url ? new Promise(() => undefined) : fetchLive(url, ms));
+  const started = performance.now();
+  const slow = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, context(stalled, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") }))).content) as { error: string; product: unknown };
+  assert.ok(performance.now() - started < 2_300, `${performance.now() - started} ms`);
+  assert.equal(slow.error, "PRODUCT_NOT_CHOSEN");
+  assert.equal(slow.product, null);
 });
 
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {

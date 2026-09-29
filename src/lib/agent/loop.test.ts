@@ -787,6 +787,26 @@ test("an invalid first answer after an add is still repaired", async () => {
   assert.equal(reply.message, "Got it: 2 blow torches.");
 });
 
+test("a refused add, then 'Is it the X?' with X shown twice before, is sent with its card and no repair", async (t) => {
+  // exam 3, c08-persona T8 and c11-stress T7: REPEAT stripped the one card the question was about, so the next yes had nothing to pick.
+  const info = t.mock.method(console, "info", () => undefined);
+  for (const message of ["Is it the Kitchen Blow Torch 970S?", "Which one do you mean?"]) {
+    const { client, bodies } = fakeClient([
+      toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+      answer({ message, card_ids: ["970S"] }),
+    ]);
+    const reply = await runAgentTurn({
+      request: { ...torchShownTwice(["970S"]), event: { type: "text", text: "2 of the gas one" } }, deps: deps(), client, model: "claude-sonnet-5",
+    });
+    assert.match(JSON.stringify(bodies[1].messages.at(-1)), /PRODUCT_NOT_CHOSEN/, message);
+    assert.equal(bodies.length, 2, message);
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"], message);
+    assert.deepEqual(reply.enquiry.lines, [], message);
+    const log = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").at(-1)!.arguments[1] as Record<string, unknown>;
+    assert.deepEqual(log.repairCauses, [], message);
+  }
+});
+
 test("customer texts exclude taps and include the current message", () => {
   const texts = recentCustomerTexts(request({
     event: { type: "text", text: "3 please" },

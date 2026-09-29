@@ -297,7 +297,7 @@ export async function runAgentTurn(input: {
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
-    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches });
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused ?? [] });
     let nudged = false;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       // The first call may always use tools; after a tool round, a nearly spent budget means answer now.

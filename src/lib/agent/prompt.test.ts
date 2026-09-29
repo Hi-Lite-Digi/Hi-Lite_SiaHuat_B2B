@@ -59,6 +59,15 @@ test("Claire adds a product the customer picked from any card in the chat, witho
   assert.ok(!CLAIRE_AGENT_PROMPT.includes("otherwise show it as a card first"));
 });
 
+test("after a PRODUCT_NOT_CHOSEN refusal Claire stops retrying and asks one question naming the product, with its card", () => {
+  // exam 3, c08-persona T8 and c11-stress T7: the refused add was retried, then asked about without its card.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("don't call it again for that product this turn"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("rather than asking them to tap or type the code"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("(\"Is it the <name> <code>?\")"));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("show the likely cards and ask which one"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say the system needs a tap"));
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });
