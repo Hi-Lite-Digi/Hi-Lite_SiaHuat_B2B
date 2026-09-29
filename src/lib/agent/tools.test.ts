@@ -409,7 +409,82 @@ test("a lid or cover for another product is not an alternative, unless a lid is 
     product({ stock_id: "4010", name: "S/S BAIN MARIE POT 1.25qt/1.2L" }),
   ];
   assert.deepEqual((await alternativesFor("4020", pots)).products.map((item) => item.stock_id), ["4010"]);
-  assert.deepEqual((await alternativesFor("4010C", pots)).products.map((item) => item.stock_id), ["4020", "4012C", "4010"]);
+  // A cover's closest match is another cover.
+  assert.deepEqual((await alternativesFor("4010C", pots)).products.map((item) => item.stock_id), ["4012C", "4020", "4010"]);
+});
+
+const altIds = async (deps: ReturnType<typeof fakeDeps>, stockId: string, minQty: number) => (JSON.parse(
+  (await runTool("find_alternatives", { stock_id: stockId, min_qty: minQty }, context(deps))).content,
+) as AlternativesBody).products.map((item) => item.stock_id);
+const MIXERS = "Immersion blenders, whisks and emulsifiers";
+
+test("find_alternatives offers the closest products that have the quantity, not the most stocked (exam 3, c07-persona T7)", async () => {
+  const catalogue = [
+    product({ stock_id: "FT001", name: "Dynamic Power Whisk Mixer 5 Gal", brand: "DYNAMIC", list_price: 1340.37, third_category: MIXERS }),
+    product({ stock_id: "E001", name: "MANUAL SALAD SPINNER 2.5gal/10Ltr", third_category: "Salad spinners", available_quantity: 900 }),
+    product({ stock_id: "MX425", name: "Dynamic Standard Mixer With 4 Emulsifying Knife", list_price: 428.44, third_category: MIXERS, available_quantity: 800 }),
+    product({ stock_id: "34761", name: "Robot Coupe Mini MP 240 Power Mixer", brand: "ROBOT COUPE", list_price: 730, third_category: MIXERS, available_quantity: 700 }),
+    product({ stock_id: "34801L", name: "Robot Coupe MP 350 Ultra Power Mixer", brand: "ROBOT COUPE", list_price: 970, third_category: MIXERS, available_quantity: 4 }),
+    product({ stock_id: "MX022", name: "Dynamic Junior Mixer Bi-Function, Up To 5Gal", list_price: 1222.02, third_category: MIXERS, available_quantity: 2 }),
+    product({ stock_id: "34311B", name: "Robot Coupe CMP300 Combi Power Mixer", brand: "ROBOT COUPE", list_price: 1295, third_category: MIXERS, available_quantity: 1 }),
+  ];
+  assert.deepEqual(await altIds(fakeDeps(catalogue), "FT001", 2), ["34801L", "34761", "MX022"]);
+});
+
+test("unit words don't make products the same kind", async () => {
+  const catalogue = [
+    product({ stock_id: "WM", name: "POWER WHISK MIXER 5 GAL" }),
+    product({ stock_id: "SPIN", name: "SALAD SPINNER 2.5GAL/10LTR" }),
+    product({ stock_id: "HAND", name: "HAND MIXER 450W" }),
+  ];
+  assert.deepEqual(await altIds(fakeDeps(catalogue), "WM", 1), ["HAND"]);
+});
+
+test("a product with no leaf category gets same-series alternatives by name (exam 3, c05-persona T12)", async () => {
+  const patra = (cm: number, price: number, quantity: number) => product({
+    stock_id: `3500-00${cm}`, name: `Patra Rim Plate ${cm}cm, Porcelain White`, list_price: price, available_quantity: quantity, category: "Dinnerware",
+  });
+  const deps = fakeDeps([
+    product({ stock_id: "3500-0018", name: "Patra Rim Plate 18cm", list_price: 7.8, available_quantity: 1, category: "Dinnerware" }),
+    patra(16, 6.51, 237), patra(25, 13.12, 106), patra(28, 18.9, 68),
+    product({ stock_id: "SH16", name: "PORCELAIN ROUND PLATE 16.25cm, SHANGRILA" }),
+  ]);
+  deps.findAlternatives = async () => [];
+  assert.deepEqual(await altIds(deps, "3500-0018", 4), ["3500-0016", "3500-0025", "3500-0028"]);
+  assert.equal(deps.calls.filter((call) => call === "search:Patra Rim Plate").length, 1);
+});
+
+test("a failed series search still returns the catalogue's alternatives", async () => {
+  const deps = fakeDeps([product({ stock_id: "A1", name: "Patra Rim Plate 18cm" }), product({ stock_id: "B1", name: "Other Rim Plate 18cm" })]);
+  deps.searchDirect = async () => { throw new Error("SUPABASE_SEARCH_500"); };
+  assert.deepEqual(await altIds(deps, "A1", 1), ["B1"]);
+});
+
+test("a series-search hit of another kind is not an alternative", async () => {
+  // Exam 3 check on the real catalogue: a name search offered refuse bins for a step stool.
+  const catalogue = [
+    product({ stock_id: "MSS", name: "Vicando Mobile Step Stool with Wheels Ø40.6X34.3cm", brand: "VICANDO", list_price: 56.15, third_category: "Step stools and ladders" }),
+    product({ stock_id: "FSS", name: "Vicando Two-Step Folding Stepstool W49xH58", brand: "VICANDO", list_price: 53.67, third_category: "Step stools and ladders" }),
+    product({ stock_id: "NT120", name: "Vicando Mobile Refuse Bin with Wheels 120L", brand: "VICANDO", list_price: 85.5, third_category: "Refuse bins" }),
+  ];
+  const deps = fakeDeps(catalogue);
+  deps.findAlternatives = async () => catalogue.filter((item) => item.stock_id === "FSS");
+  deps.searchDirect = async () => catalogue.filter((item) => item.stock_id !== "FSS");
+  assert.deepEqual(await altIds(deps, "MSS", 1), ["FSS"]);
+});
+
+test("out-of-stock series siblings don't use up the live checks", async () => {
+  const source = product({ stock_id: "W1", name: "Dynamic Power Whisk Mixer 5 Gal", brand: "DYNAMIC", list_price: 1340, third_category: MIXERS });
+  const siblings = Array.from({ length: 8 }, (_, index) => product({
+    stock_id: `SIB${index}`, name: `Dynamic Power Whisk Mixer ${index + 2} Gal`, brand: "DYNAMIC", list_price: 1300 + index, third_category: MIXERS,
+    stock_status: "out_of_stock", in_stock: false, available_quantity: 0,
+  }));
+  const pool = [product({ stock_id: "MP350", name: "Robot Coupe MP 350 Ultra Power Mixer", brand: "ROBOT COUPE", list_price: 970, third_category: MIXERS, available_quantity: 4 })];
+  const deps = fakeDeps([source, ...siblings, ...pool]);
+  deps.findAlternatives = async () => pool;
+  deps.searchDirect = async () => siblings;
+  assert.deepEqual(await altIds(deps, "W1", 1), ["MP350"]);
+  assert.deepEqual(deps.calls.filter((call) => call.startsWith("live:SIB")), []);
 });
 
 test("find_alternatives live-checks the product it was asked about and keeps it for the reply", async () => {

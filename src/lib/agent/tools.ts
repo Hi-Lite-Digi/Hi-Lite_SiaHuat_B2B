@@ -66,7 +66,7 @@ export const agentTools: Anthropic.Tool[] = [
   },
   {
     name: "find_alternatives",
-    description: "Find up to 3 similar products that are in stock right now (live-checked), for an item that is out of stock or short.",
+    description: "Find up to 3 in-stock products (live-checked, at least min_qty) closest to an item: same kind first, then the nearest price; other sizes of the same series included. They are similar, not the same: check the feature the customer needs in each one's facts.",
     input_schema: {
       type: "object",
       properties: {
@@ -253,15 +253,20 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
   return ok({ product: remember(ctx, withDetails(checked, details)) });
 }
 
-// Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share.
-const GENERIC = new Set(["the", "and", "for", "per", "pcs", "set", "new", "top", "stainless", "steel", "with", "without", "black", "white", "grey", "gray", "blue", "red", "green", "silver", "size", "piece", "pieces", "year", "warranty", "domestic", "function", "speed", "come", "free", "pulse", "heat", "resistant", "use", "pro", "rpm", "plug", "phase"]);
+// Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share, and
+// unit words ("gal" made a salad spinner a whisk mixer's alternative: exam 3, c07-persona T7).
+const GENERIC = new Set(["the", "and", "for", "per", "pcs", "set", "new", "top", "stainless", "steel", "with", "without", "black", "white", "grey", "gray", "blue", "red", "green", "silver", "size", "piece", "pieces", "year", "warranty", "domestic", "function", "speed", "come", "free", "pulse", "heat", "resistant", "use", "pro", "rpm", "plug", "phase", "gal", "ltr", "litre", "liter", "capacity"]);
 const letterWords = (text: string): string[] => text.toLowerCase().match(/\p{L}{3,}/gu) ?? [];
 // Whole brand words only: "Panasonic" must not hide "pan". "pans" matches "pan".
 const kindWords = (item: Product) => new Set(letterWords(item.name)
   .filter((word) => !GENERIC.has(word) && !letterWords(item.brand ?? "").includes(word)).map(stem));
-/** True when the two share a word, or a 4+ letter word sits inside the other's ("torch" in "blowtorch"). */
-const sharesWord = (a: Set<string>, b: Set<string>) => [...b].some((word) => [...a].some((own) => own === word
-  || (Math.min(own.length, word.length) >= 4 && (own.includes(word) || word.includes(own)))));
+/** How many of b's words a shares, counting a 4+ letter word that sits inside the other's ("torch" in "blowtorch"). */
+const sharedWords = (a: Set<string>, b: Set<string>) => [...b].filter((word) => [...a].some((own) => own === word
+  || (Math.min(own.length, word.length) >= 4 && (own.includes(word) || word.includes(own))))).length;
+/** A product's series: its name before the first comma, bracket, size or number ("Patra Rim Plate 18cm, …" -> "Patra Rim Plate"). */
+export const seriesName = (name: string) => name.split(/[,(]|\s\d|\s[Øø]/)[0].replace(/\s+/g, " ").trim();
+/** How far apart two prices are, as a ratio: a proxy for size and grade. */
+const priceGap = (item: Product, source: Product) => Math.abs(Math.log(Math.max(item.list_price, 0.01) / Math.max(source.list_price, 0.01)));
 // "Cover For #4010 Pot" fits another product; it is no substitute for the pot.
 const ACCESSORY = /\b(?:cover|lid)\s+for\b|\bfor\s+#/i;
 const NO_CLOSE_ALTERNATIVE = "No close in-stock match in the same range. Check size and capacity against what the customer needs; search with the customer's words and size (e.g. 'stock pot 12L') before saying there is no substitute.";
@@ -271,25 +276,47 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
   const minQty = input.min_qty ?? 1;
   let candidates: Product[];
   let source: Product | null;
+  let siblings: Product[];
+  const exclude = new Set([...ctx.shownIds, input.stock_id]);
   try {
-    [candidates, source] = await Promise.all([
-      retryOnce(() => ctx.deps.findAlternatives(input.stock_id, minQty, new Set([...ctx.shownIds, input.stock_id]))),
-      ctx.deps.findByCode(input.stock_id).catch(() => null),
+    const sourceLookup = ctx.deps.findByCode(input.stock_id).catch(() => null);
+    // 1,405 active products have no leaf category, so the catalogue finds no siblings for them (exam 3, c05-persona T12: Patra):
+    // search the series by name alongside the catalogue query.
+    const siblingsLookup = sourceLookup.then((found) => (found && seriesName(found.name).split(" ").length >= 2
+      ? ctx.deps.searchDirect(seriesName(found.name), 10).catch(() => [])
+      : []));
+    [candidates, source, siblings] = await Promise.all([
+      retryOnce(() => ctx.deps.findAlternatives(input.stock_id, minQty, exclude)),
+      sourceLookup,
+      siblingsLookup,
     ]);
   } catch (error) {
     console.warn("[api/agent] search unavailable", { errors: [errorCode(error)] });
     return fail("SEARCH_UNAVAILABLE");
   }
-  // Only products of the same kind (exam 2, s10-A: bowls and a gas cartridge offered for a torch), the same leaf category
-  // first; the catalogue's stock order breaks ties.
+  // Only products of the same kind (exam 2, s10-A: bowls and a gas cartridge offered for a torch).
   if (source) {
+    const series = seriesName(source.name).toLowerCase();
+    const uom = source.uom_id.trim().toLowerCase();
+    const pooled = new Set(candidates.map((item) => item.stock_id));
+    for (const item of siblings) {
+      // Other sizes of the same series only, in stock with enough (exam 3 check: a name search offered refuse bins for a step stool
+      // and a mop for a toaster, and out-of-stock rows used up the live checks).
+      if (item.stock_id === source.stock_id || pooled.has(item.stock_id) || exclude.has(item.stock_id) || item.uom_id.trim().toLowerCase() !== uom) continue;
+      if (seriesName(item.name).toLowerCase() !== series || item.stock_status !== "in_stock" || (item.available_quantity ?? 0) < minQty) continue;
+      candidates.push(item);
+      pooled.add(item.stock_id);
+    }
     const own = kindWords(source);
     const leaf = source.third_category;
     const sameLeaf = (item: Product) => Number(Boolean(leaf) && item.third_category === leaf);
     const accessoryOk = ACCESSORY.test(source.name);
+    const shared = new Map(candidates.map((item) => [item.stock_id, sharedWords(own, kindWords(item))]));
+    // Same leaf, then more kind words, then the nearest price as a proxy for size and grade; stale stock no longer orders it
+    // (exam 3, c07-persona T7: the most stocked mixers crowded out the closest ones).
     candidates = candidates
-      .filter((item) => sharesWord(own, kindWords(item)) && (accessoryOk || !ACCESSORY.test(item.name)))
-      .sort((a, b) => sameLeaf(b) - sameLeaf(a));
+      .filter((item) => shared.get(item.stock_id)! > 0 && (accessoryOk || !ACCESSORY.test(item.name)))
+      .sort((a, b) => sameLeaf(b) - sameLeaf(a) || shared.get(b.stock_id)! - shared.get(a.stock_id)! || priceGap(a, source) - priceGap(b, source));
   }
   // The source is checked too, so the reply's "X is out of stock" is judged against its live stock (the memo avoids a refetch).
   const checking = candidates.slice(0, 8);

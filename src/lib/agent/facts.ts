@@ -94,8 +94,9 @@ export function defaultFactDeps(): FactDeps {
     searchCategory: (words, limit, maxPrice) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice)),
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
-    // Its broad fallback runs search_products too.
-    findAlternatives: (stockId, minQty, exclude) => searchSlot(() => findAvailableCatalogueAlternatives(stockId, 30, minQty, exclude)),
+    // Its broad fallback runs search_products too. The agent ranks the pool itself, so it needs every candidate, not the 30 with
+    // the most 13-Aug stock (exam 3, c07-persona T7).
+    findAlternatives: (stockId, minQty, exclude) => searchSlot(() => findAvailableCatalogueAlternatives(stockId, 200, minQty, exclude)),
     fetchLive: fetchSiaHuatProduct,
     lookupImage: lookupCatalogueImage,
     findDetails: findCatalogueAttributes,
