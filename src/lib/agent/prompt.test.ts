@@ -13,8 +13,10 @@ test("Claire's agent prompt carries the sales voice and the hard rules", () => {
   assert.match(CLAIRE_AGENT_PROMPT, /customer's own words/);
 });
 
-test("Claire summarises the enquiry in one line instead of listing it", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked what's in the enquiry, give a one-line summary (item count and total from the context); the enquiry bar shows the lines, so don't list them."));
+test("asked to list the enquiry, Claire lists its lines and the total; asked only for the total, she gives the total", () => {
+  // r4 c09-persona idx 14-15: asked twice to list it, she gave the count and total (3 of 3 right in the P5 replays after).
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- When asked what's in the enquiry or to list it, list each line briefly (quantity and short name) and the total, from the Current enquiry context. When they ask only for the total, give the total."));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("so don't list them"));
 });
 
 test("Claire quotes the enquiry totals from the context, unless it lists unchecked lines", () => {
@@ -99,8 +101,23 @@ test("Claire reads the store's details and category the way the catalogue means 
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /Atlantic Chef|Giesser|Kikumori/);
 });
 
-test("Claire knows product cards have no photos", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
+test("Claire knows product cards have no photos, and what to do when a store page has none", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). If they say the page opens but has no photo, say that store page has no photo, describe the product from the tool facts and offer Sia Huat sales for photos (show_contact true). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
+});
+
+test("Claire's wording on links, pushback, searches, threats, orders she can't see and a website they can't use (exam 4, P5)", () => {
+  const lineWith = (start: string) => CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith(start)) ?? "";
+  // r4 c08-stress idx 4-5: a link that didn't open got "search the code on the store".
+  assert.ok(lineWith("- Links:").endsWith(" give the item code and offer Sia Huat sales for photos (show_contact true) or a similar product. Don't tell them to search the store for it."));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("they can search it on the store"));
+  assert.ok(lineWith("- Don't repeat cards").endsWith(" Never repeat the same question or the same cards after the customer pushes back ('these are not sets', 'then u still ask?'); change approach instead: recommend one from what they've told you, or say plainly what we don't have and offer Sia Huat sales. Ask a narrowing question (size, slots, budget) once; if they don't answer it or say either is fine, recommend one instead of asking again."));
+  assert.ok(lineWith("- Don't restate the enquiry").endsWith(" Don't narrate your searches ('I ran two searches', 'I checked again'): say what you found."));
+  // r4 c05-A idx 8 (police): 3 of 3 right in the P5 replays, against 0 of 2 before.
+  assert.ok(lineWith("- The customer is annoyed").endsWith(" If they say you never said sorry, apologise. Never scold ('let's keep it civil'), never argue with what they said about you ('I'm not broken', 'no wrongdoing here'), and never answer a complaint with 'No worries'. A threat (police, a complaint, a bad review): one short apology and Sia Huat sales (show_contact true), and nothing else that turn (no joke, no defence, no cards) unless the same message asks a question: then answer just that question too. In any reply, never laugh or joke ('ha', 'haha'), and don't open with filler ('Fair enough', 'Fair point', 'Good question', 'To be upfront', 'I get that, but')."));
+  // r4 s07-A idx 1-3: 'Any update on this order?' and 'please send invoice' (3 of 3 right in the P5 replays, against 0 of 2).
+  assert.ok(lineWith("- Existing orders").endsWith(" If they seem to think this chat placed an order or sent their enquiry to Sia Huat ('any update on this order?', 'send the invoice'), say plainly once that nothing from this chat has reached Sia Huat yet: it stays an enquiry until they send the PDF to Sia Huat sales or contact them."));
+  // r4 c04-stress idx 13 ('or must go down') and c08-stress idx 11-13 ('i cant even open ur website').
+  assert.ok(lineWith("- Buying online:").endsWith(" and don't state delivery, collection, payment or account terms, not even whether they need to come down: when they ask about one, say Sia Huat sales can confirm it. Offer to keep building the enquiry here. If they say they can't open or use the website, don't point them to the store or checkout again: they can send the enquiry PDF (or just contact) Sia Huat sales to order (show_contact true)."));
 });
 
 test("Claire adds a product the customer picked from any card in the chat, without a confirm step or a demand to tap", () => {
