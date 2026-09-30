@@ -1145,6 +1145,9 @@ test("'specifically' is not read as 'spec': the 'we don't have it' is still chec
     "We don't have any records of that.",
     "I don't have any issues with that.",
     "I don't have any invoices here.",
+    // Other long forms are still prefixes; only 'spec' is a whole word.
+    "I don't have a detailed breakdown for that.",
+    "I don't have any photographs of it.",
   ]) assert.deepEqual(absenceOf(message), [], message);
 });
 
@@ -1164,6 +1167,9 @@ test("'I couldn't find X' and 'we don't carry X by that name' are not repaired a
     // Curly or no quotes after "anything called" (review of D10).
     "We don't list anything called “prata pan”.",
     "We don't list anything called a prata pan.",
+    // Two names joined by 'or' stay one name-scoped clause.
+    "We don't carry a 'prata pan' or 'tawa' by that name.",
+    "We don't list a prata pan or tawa by that name.",
   ]) assert.deepEqual(absenceOf(message), [], message);
   for (const message of [
     // 'list' is checked like 'carry', and a name in another clause doesn't scope it.
@@ -1191,6 +1197,10 @@ test("'I couldn't find X' and 'we don't carry X by that name' are not repaired a
     "I couldn't find anything by that name, and we don't carry tandoor ovens.",
     "We don't list anything called 'prata pan' - it's not in our catalogue.",
     "We don't list anything called 'prata pan', and none of our pans would suit.",
+    // Joined by 'and' with no comma, the range claim is still its own clause.
+    "We don't list anything called 'tawa' and we don't carry griddles either.",
+    "We don't list anything called 'prata pan' and we don't stock flat griddles.",
+    "I couldn't find anything called 'tawa' and we don't carry griddle pans.",
   ]) assert.equal(absenceOf(message).length, 1, message);
   // Backed by two queries and a found category, a range 'we don't list' passes.
   assert.deepEqual(absenceOf("We don't list tandoor ovens specifically.", [search({ queries: ["tandoor oven", "clay oven"], category: "ovens", categoryFound: true })]), []);

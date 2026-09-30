@@ -603,14 +603,15 @@ const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\
 const ranking = (sentence: string) => RANKING.test(sentence) || PRICE_RANK.test(sentence.replace(OFFER, " "));
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
-// "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product. Whole words
-// only: "We don't have a tawa specifically" is (runs-new3 c03-stress T1 slipped through as "spec"); plurals and long forms spelled out
-// ("any other links", "a specification sheet").
-const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec(?:ification)?s?|info|information|details?|photos?|pictures?|images?|dates?|confirmations?|figures?|ratings?|records?|ways?|links?|attachments?|orders?|invoices?|address(?:es)?|codes?|prices?|messages?|live\s+prices?|issues?|problems?)\b)`;
+// "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product. 'spec' is a
+// whole word: "We don't have a tawa specifically" is (runs-new3 c03-stress T1 slipped through as "spec"); the rest are prefixes, so
+// "any other links" and "a detailed breakdown" are not either (review of D9).
+const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec(?:ification)?s?\b|info|detail|photo|picture|image|date|confirmation|figure|rating|record|way|link|attachment|order|invoice|address|code|price|message|live\s+price|issue|problem))`;
 // "I haven't found an actual Japan-made knife brand" and "I don't have anything actually made in Japan" (exam 4, c03-A idx 6,
 // c03-persona idx 4); "I haven't found a boxed set yet" says its own scope, and "I don't have anything else to add" or "anything more
 // on its warranty" is no product. "We don't list tandoor ovens" is checked like "we don't carry" (r6 area N).
 const ABSENT = new RegExp(String.raw`\b(?:we|i|sia\s+huat)\s+(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not)\s+(?:carry|stock|sell|list)\b|\b(?:we|i)\s+(?:don['’]?t|do\s+not)\s+have\s+(?:a|an|any|anything(?!\s+(?:else|more)\s+(?:to\s+add|on)\b)|another|other|bundled|boxed|pre[- ]?\w+|such)\b${NOT_A_PRODUCT}|\bnot\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b${NOT_A_PRODUCT}|\b(?:i['’]?m|am)\s+not\s+finding\b|\b(?:I|we)\s+(?:haven['’]?t|have\s+not)\s+(?:yet\s+)?(?:found|seen|come\s+across)\b(?![^.!?]*\b(?:yet|so\s+far))${NOT_A_PRODUCT}|\bnone\s+of\s+our\b`, "i");
+const EVERY_ABSENT = new RegExp(ABSENT.source, "gi");
 // "No close substitute", "couldn't find a close in-stock substitute": a finished find_alternatives backs these (exam 4, s03-B idx 1: 3
 // of 4 reruns were repaired at 18.6-27.1 s after it had run).
 const SUBSTITUTE_ABSENT = /\bno\s+(?:direct\s+|close\s+|similar\s+)?(?:substitute|alternative|replacement)s?\b(?!\s+needed)|\bcan['’]?t\s+offer\s+(?:a|an|any)\s+(?:substitute|alternative)|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\s+(?:(?:a|an|any)\s+)?(?:[\w-]+\s+){0,3}?(?:substitute|alternative|replacement)s?\b/i;
@@ -742,10 +743,11 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     // Judged without its substitute wording, which find_alternatives backs: "we don't carry X" beside it still needs the searches.
     const withoutSubstitute = sentence.replace(EVERY_SUBSTITUTE_ABSENT, " ");
     const absent = ABSENT.test(withoutSubstitute);
-    // Scoped to this turn's search or to the customer's name for it, not the range: every clause (split at a dash, comma, semicolon,
-    // "but" or "or") that says we don't have it names it or is only a "couldn't find", so "we don't list anything called 'tawa' - we
-    // don't carry griddles" is still a range claim (review of D10). A range summary beside it keeps it a range claim too.
-    const clauses = withoutSubstitute.split(/\s[-–—]\s|[;,]|\bbut\b|\bor\b/i);
+    // Scoped to this turn's search or to the customer's name for it, not the range: every clause (split before each "we don't have
+    // it", and at a dash, comma, semicolon, "but" or "or anything") that says we don't have it names it or is only a "couldn't find",
+    // so "we don't list anything called 'tawa' and we don't carry griddles" is still a range claim while "a 'prata pan' or 'tawa' by
+    // that name" is one clause (review of D10). A range summary beside it keeps it a range claim too.
+    const clauses = withoutSubstitute.replace(EVERY_ABSENT, "\n$&").split(/\n|\s[-–—]\s|[;,]|\bbut\b|\bor\b(?=\s+anything\b)/i);
     const scoped = absent && !RANGE_TAIL.test(sentence) && clauses.every((part) => NAME_SCOPED.test(part) || !ABSENT.test(part.replace(EVERY_FOUND_NOTHING, " ")));
     const absence = (absent || SUBSTITUTE_ABSENT.test(sentence)) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence);
     const found = absence ? disprovedBy(sentence, seen, absent, sources) : [];
