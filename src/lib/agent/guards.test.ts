@@ -7,8 +7,8 @@ import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
-  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
-  withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
+  withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -269,9 +269,12 @@ test("a repeated sales pitch is dropped unless the customer asked for contact, a
     "i want to talk to a real person", "ok bowl i call ur sales la", "ok that's all. how do i order?", "ya la add. then how i pay", "ok thanks bye",
     // The loop's thank-you turns (exam 3, s01-B T3) are thanks here too.
     "thank u", "ok thank u", "tysm",
+    // Asking what to do next is asking for the route (r4 c08-stress idx 13).
+    "ok whatever. so now how, u send my order to them or i must do wat", "how to confirm order", "send me the list",
   ]) {
     assert.equal(dropRepeatedPitch(message, earlier(text), true), message, text);
   }
+  assert.equal(dropRepeatedPitch(message, earlier("so now how much"), true), answered);
   // The client sends back the text after this drop, so a pitch two replies back still counts.
   const twoBack = { ...earlier("then online can buy or not?"), previousMessage: "Sorry for the confusion.", replies: [earlier("").previousMessage!, "Sorry for the confusion."] };
   assert.equal(dropRepeatedPitch(message, twoBack, true), answered);
@@ -320,6 +323,27 @@ test("a sales pointer that apologises, or says for the first time or on request 
   // Said again unasked, it is still a repeat; an apology in another sentence doesn't keep it.
   const again = "Sorry, it's not in our catalogue. You can check with Sia Huat sales directly - they can advise if it's something we can source.";
   assert.equal(dropRepeatedPitch(again, earlier("hmm ok", [t1, t2]), true), "Sorry, it's not in our catalogue.");
+});
+
+test("a reply saying nothing has reached Sia Huat yet keeps its route to order (r4 c08-stress idx 13, s07-A)", () => {
+  const pitched = "The exact figure with GST will show at checkout. If the website gives you trouble, you can contact Sia Huat sales directly.";
+  const earlier = (currentText: string): EarlierTurns => ({ cardSets: [], previousMessage: pitched, replies: [pitched], currentText });
+  const raw = "Nothing from this chat has reached Sia Huat yet - it's still just an enquiry here. To actually order, you can download the enquiry PDF and send it to Sia Huat sales, and they can help you complete the order.";
+  for (const text of ["ok whatever. so now how, u send my order to them or i must do wat", "any update on this order?"]) {
+    assert.equal(dropRepeatedPitch(raw, earlier(text), true), raw, text);
+  }
+  const plain = "Yes, each product's store page has Add to Cart. You can contact Sia Huat sales with the PDF.";
+  assert.equal(dropRepeatedPitch(plain, earlier("any update on this order?"), true), "Yes, each product's store page has Add to Cart.");
+});
+
+test("a closing 'Anything else?' is kept right after a change, but not with no change or twice running (r4 c09-persona)", () => {
+  const added = "Got it: 2 Safico torches. Anything else?";
+  assert.equal(withoutRepeatedCloser(added, "Here are two torches.", true), added);
+  assert.equal(withoutRepeatedCloser("The blow torch is for kitchen use. Anything else?", "Here are two torches.", false), "The blow torch is for kitchen use.");
+  assert.equal(withoutRepeatedCloser(added, "Got it: 1 blow torch. Anything else you'd like to add?", true), "Got it: 2 Safico torches.");
+  // Never emptied, and a real either-or question is not a closer.
+  assert.equal(withoutRepeatedCloser("Anything else?", "Got it: 1 blow torch. Anything else?", false), "Anything else?");
+  assert.equal(withoutRepeatedCloser("Want the Kenwood, or anything else?", null, false), "Want the Kenwood, or anything else?");
 });
 
 const safetyOf = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, seen, allowed).safety;

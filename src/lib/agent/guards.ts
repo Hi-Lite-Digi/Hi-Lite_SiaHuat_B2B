@@ -182,7 +182,8 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
 
 // Pointing the customer to Sia Huat sales or the enquiry PDF.
 const handoffPitch = /\b(?:contact|reach|call|email|check with|speak (?:to|with)|talk to)\b[^.?!\n]{0,40}\bsales\b|\bPDF\b/i;
-const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to|do i))\b[^.?!]{0,30}\b(?:phone|number|contact|email|pdf)\b|\b(?:speak|talk) to (?:someone|a person|a human|staff|sales)\b|\bq(?:uo|ou)t(?:e|ation)s?\b|\bcall me\b|\bget someone\b|\bsomeone (?:to )?call\b|\b(?:real|actual) (?:person|human)\b|\bi(?:['’]ll| will)? call\b|\bhow (?:to |do i |can i |i )?(?:order|buy|download|pay)\b|电话|联系方式|报价/i;
+// Asking what to do next is asking for the route too (r4 c08-stress idx 13: "so now how, u send my order to them or i must do wat").
+const asksForContact = /\b(?:what(?:['’]?s| is)?|give|send|got|can i|how (?:to|do i))\b[^.?!]{0,30}\b(?:phone|number|contact|email|pdf)\b|\b(?:speak|talk) to (?:someone|a person|a human|staff|sales)\b|\bq(?:uo|ou)t(?:e|ation)s?\b|\bcall me\b|\bget someone\b|\bsomeone (?:to )?call\b|\b(?:real|actual) (?:person|human)\b|\bi(?:['’]ll| will)? call\b|\bhow (?:to |do i |can i |i )?(?:order|buy|download|pay)\b|\b(?:send|pass|forward|submit)\b[^.?!]{0,20}\b(?:order|enquiry|list)\b|\b(?:what|wat)\s+(?:do|must|should|shld)\s+i\s+do\b|\bi\s+(?:must|need\s+to|have\s+to)\s+do\s+(?:what|wat)\b|\bhow\s+(?:to|do\s+i|can\s+i)\s+(?:proceed|place|confirm|complete)\b|\bnow\s+how\b(?!\s+(?:much|many|long|big))|电话|联系方式|报价/i;
 // Asked if she's a bot, her answer names Sia Huat's sales staff as the real people to reach (exam 3, c02-stress T14). "ai" only
 // counts after "u", "are", "is" or "an": it is also Hokkien for "want" ("wa ai 2 pcs leh").
 const asksIfBot = /\b(?:(?:chat)?bot|human)\b|\b(?:u|you|are|r|is|it|this|an?)\s+(?:an?\s+)?ai\b|机器人/i;
@@ -193,6 +194,9 @@ const limitation = /\b(?:can['’]?t|cannot|unable|not able|out of stock)\b/i;
 const apology = /\b(?:sorry|apolog(?:y|ies|i[sz]e[sd]?)|my (?:mistake|bad))\b/i;
 // What only sales can do for the customer.
 const SALES_TOPICS = [/\bsourc/i, /\bspecial[- ]order/i, /\blead[- ]?times?\b/i, /\brestock/i, /\bbulk\b/i, /\bdiscount/i, /\bdeliver/i, /\bcollect(?:ion|ing)?\b/i, /\b(?:visit\w*|showroom)\b/i, /\baddress\b/i];
+// Telling a customer who thinks the chat ordered that nothing has reached Sia Huat: its route to order is the answer, not a repeat
+// (r4 s07-A; without this the c08-stress idx 13 replays lost the route 3 of 3 times).
+const notSentYet = /\bnothing (?:from this chat )?has (?:been sent|reached|gone)\b|\b(?:still|stays|remains) (?:just |only )?(?:an|as an) enquiry\b|\b(?:isn['’]?t|not) (?:yet )?an order\b|\bhasn['’]?t (?:been sent|reached)\b/i;
 
 /**
  * The message without its sales or PDF pitch when one of Claire's earlier replies already made it and the contact block shows
@@ -201,6 +205,7 @@ const SALES_TOPICS = [/\bsourc/i, /\bspecial[- ]order/i, /\blead[- ]?times?\b/i,
  * Any earlier reply counts, not only the last: the history carries the text after this drop, so the pitch would come back every other turn.
  */
 export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showContact: boolean) {
+  if (notSentYet.test(message)) return message;
   const replies = earlier.replies ?? (earlier.previousMessage ? [earlier.previousMessage] : []);
   const pitched = replies.some((reply) => handoffPitch.test(reply));
   if (!showContact || !pitched || asksForContact.test(earlier.currentText) || asksIfBot.test(earlier.currentText) || closingOnly.test(earlier.currentText)) return message;
@@ -208,6 +213,17 @@ export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showCo
   // repeat (exam 3, s03-B T2: sourcing); an apology is never dropped with it (exam 3, c05-stress T13-T15).
   const answersTopic = (sentence: string) => SALES_TOPICS.some((topic) => topic.test(sentence) && (!replies.some((reply) => topic.test(reply)) || topic.test(earlier.currentText)));
   return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence) && !apology.test(sentence) && !answersTopic(sentence)) || message;
+}
+
+// A closing "Anything else ...?" as its own sentence ("Want the Kenwood, or anything else?" is a real question).
+const closingAsk = /(?:^|(?<=[.!?]\s+)|(?<=\n))anything else\b[^.?!\n]{0,40}\?\s*$/i;
+/**
+ * The message without its closing "Anything else?" unless the enquiry changed this turn and the last reply didn't end on one
+ * too: r4 c09-persona ended 9 replies with it, c03-stress 7. A message that is only the closer is kept.
+ */
+export function withoutRepeatedCloser(message: string, previousMessage: string | null, changed: boolean) {
+  if (!closingAsk.test(message) || (changed && !closingAsk.test(previousMessage?.trim() ?? ""))) return message;
+  return message.replace(closingAsk, "").trim() || message;
 }
 
 export const LINK_ISSUE_PREFIX = "These store links";

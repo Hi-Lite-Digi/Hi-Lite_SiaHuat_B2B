@@ -997,7 +997,8 @@ test("a false add claim that survives the nudge and the repair is replaced", asy
   assert.equal(bodies.length, 3);
   assert.equal(reply.provider, "anthropic");
   assert.doesNotMatch(reply.message, /added/i);
-  assert.equal(reply.message, "That change isn't on your enquiry yet. Which item and how many would you like? Anything else?");
+  // Nothing changed this turn, so the closer goes too.
+  assert.equal(reply.message, "That change isn't on your enquiry yet. Which item and how many would you like?");
 });
 
 test("no nudge when little time is left: the repair runs instead", async () => {
@@ -1039,10 +1040,27 @@ test("a reply about what is already on the enquiry is sent without a nudge", asy
     const { client, bodies } = fakeClient([answer({ message })]);
     const reply = await runAgentTurn({ request: request({ event: { type: "text", text }, enquiry }), deps: deps(), client, model: "claude-sonnet-5" });
     assert.equal(bodies.length, 1, message);
-    assert.equal(reply.message, message);
+    // Nothing changed this turn, so the closer goes.
+    assert.equal(reply.message, message.replace(" Anything else?", ""));
     assert.doesNotMatch(reply.message, /isn't on your enquiry/);
     assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), enquiry.map((item) => [item.stockId, item.quantity]));
   }
+});
+
+test("a doubly escaped character reaches the customer as the character (r4 c11-A idx 1)", async () => {
+  const { client } = fakeClient([answer({ message: "Got it, not conveyor \\u2014 both are pop-up toasters.", chips: ["Pop-up \\u2014 smaller"] })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "not conveyor" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.message, "Got it, not conveyor — both are pop-up toasters.");
+  assert.deepEqual(reply.chips, ["Pop-up — smaller"]);
+  const emoji = fakeClient([answer({ message: "Happy cooking \\ud83d\\ude0a" })]);
+  const smiled = await runAgentTurn({ request: request({ event: { type: "text", text: "ok la" } }), deps: deps(), client: emoji.client, model: "claude-sonnet-5" });
+  assert.equal(smiled.message, "Happy cooking 😊");
+});
+
+test("a closing 'Anything else?' with no enquiry change this turn is dropped (r4 c09-persona, c03-stress)", async () => {
+  const { client } = fakeClient([answer({ message: "The blow torch is for kitchen use. Anything else?" })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "the blow torch for kitchen or not" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.message, "The blow torch is for kitchen use.");
 });
 
 test("an 'Updated: 5' reply for a line already on the enquiry is nudged until update_enquiry runs", async () => {
@@ -1176,7 +1194,7 @@ test("an unbacked completeness claim is repaired once, then removed", async () =
   assert.equal(reply.message, "Anything else?");
 });
 
-test("a completeness claim backed by a complete category search is sent unchanged", async () => {
+test("a completeness claim backed by a complete category search is sent without a repair", async () => {
   const lighters = [
     product({ stock_id: "GL1", name: "COOKING TORCH", third_category: "Gas lighters" }),
     product({ stock_id: "GL2", name: "GAS TORCH BURNER", third_category: "Gas lighters" }),
@@ -1185,7 +1203,8 @@ test("a completeness claim backed by a complete category search is sent unchange
   const { client, bodies } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"], category: "gas lighters" }), answer({ message })]);
   const reply = await runAgentTurn({ request: request({}), deps: fakeDeps(lighters), client, model: "claude-sonnet-5" });
   assert.equal(bodies.length, 2);
-  assert.equal(reply.message, message);
+  // Nothing changed this turn, so the closer goes.
+  assert.equal(reply.message, "That covers our torch range.");
 });
 
 test("an out-of-stock claim about a product checked live as out of stock needs no repair", async () => {

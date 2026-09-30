@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet, withoutWrongStockCounts,
+  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -52,10 +52,13 @@ const finalSchema: Record<string, unknown> = {
     show_contact: { type: "boolean" },
   },
 };
+// A doubly escaped character ("\\u2014" in the JSON) reached the customer as six raw characters, not a dash (r4 c11-A idx 1).
+// Decoded here, so repairs are decoded too and the guards read the real text.
+const decodeEscapes = (text: string) => text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 const finalAnswerSchema = z.object({
-  message: z.string().trim(),
+  message: z.string().trim().transform(decodeEscapes),
   card_ids: z.array(z.string()),
-  chips: z.array(z.string()),
+  chips: z.array(z.string().transform(decodeEscapes)),
   show_contact: z.boolean(),
 });
 const CARDS_ONLY_MESSAGE = "Here are some options.";
@@ -545,7 +548,7 @@ export async function runAgentTurn(input: {
       ...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...request.enquiry.map((line) => line.stockId), ...ctx.shownIds,
       ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)),
     ];
-    const cleaned = customerMessage(dropRepeatedPitch(final.message, earlier, final.show_contact), chatCodes);
+    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(final.message, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Codes and counts only, never customer or reply text. The session's tail and the cards' code:status:qty let the exam match
     // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).
     console.info("[api/agent] turn", {
