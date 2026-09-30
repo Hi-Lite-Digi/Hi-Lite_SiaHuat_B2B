@@ -348,8 +348,9 @@ function pointedBy(text: string, cards: ShownCard[]) {
 }
 
 export const ENQUIRY_CLAIM_PREFIX = "The enquiry didn't change";
-// A leading "Got it: 2" claims a change; "Got it, 4 pax" or "OK, 2 options" only echoes the customer's numbers.
-const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped|noted down)\b|\bput\b[^.!?\n]{0,25}\bin(?:to)?\s+(?:your|the)\s+enquiry\b|\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b|\bqty\s*\d+\s*done\b|^\s*(?:noted|got it|done|ok(?:ay)?)[:,!]?\s*\d(?![\d.]*(?:(?:in|l|g|m)\b|\s*(?:inch(?:es)?|cm|mm|ltr|litres?|liters?|qt|quarts?|ml|oz|kg|pax|ppl|people|persons?|guests?|options?|choices?|sizes?|dollars?|bucks|sgd|slots?|tiers?|burners?)\b|\s*[%″"]))|已(?:添加|加入|更新|删除|移除)|加好了|帮你加了/i;
+// A leading "Got it: 2" claims a change; "Got it, 4 pax" or "OK, 2 options" only echoes the customer's numbers. An apology before it
+// still claims one (r6 rescue sample: "Sorry, got it: 2 ..." for an add that never ran, with the enquiry empty).
+const changeClaim = /\b(?:added|adding|removed|removing|updated|updating|dropped|noted down)\b|\bput\b[^.!?\n]{0,25}\bin(?:to)?\s+(?:your|the)\s+enquiry\b|\b(?:is|are|now)\s+(?:in|on)\s+(?:your|the)\s+enquiry\b|\bqty\s*\d+\s*done\b|^\s*(?:(?:sorry|apologies)[,!.]?\s*)?(?:noted|got it|done|ok(?:ay)?)[:,!]?\s*\d(?![\d.]*(?:(?:in|l|g|m)\b|\s*(?:inch(?:es)?|cm|mm|ltr|litres?|liters?|qt|quarts?|ml|oz|kg|pax|ppl|people|persons?|guests?|options?|choices?|sizes?|dollars?|bucks|sgd|slots?|tiers?|burners?)\b|\s*[%″"]))|已(?:添加|加入|更新|删除|移除)|加好了|帮你加了/i;
 const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|update|note)\b|\badding\b[^.!?\n]*\bnow\b|我来加/i;
 // "I'll get 2 added" and "I'll have it updated" promise a change; they don't report one (exam 3, c06-persona T8 replayed). Lazy, so
 // it ends at the promise's own "added": "I'll get 2 added - I've added the torch" still reports one.

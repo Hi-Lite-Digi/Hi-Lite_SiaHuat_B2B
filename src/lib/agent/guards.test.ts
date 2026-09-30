@@ -501,6 +501,15 @@ test("saying the enquiry changed needs an update for that item this turn", () =>
   assert.equal(issueCode(claimIssues("Noted: 2 torches.")[0]), "ENQUIRY_CLAIM");
 });
 
+test("an apology before 'Got it: N' still claims an add", () => {
+  // r6 rescue sample: "Sorry, got it: 2 ..." after a cut, with nothing added and the enquiry empty.
+  const crepe = new Map([checked("LACOR-22", "Lacor Robust Non-Stick Crepe Pan Ø22cm", 48.81)]);
+  const facts = { lines: [], changes: [], seen: crepe };
+  assert.equal(enquiryClaimIssues("Sorry, got it: 2 of the Lacor Robust Non-Stick Crepe Pan Ø22cm.", facts).length, 1);
+  // Echoed numbers and plain apologies are still not claims.
+  for (const message of ["Sorry, got it, 4 pax.", "Sorry, 2 sizes are listed."]) assert.deepEqual(enquiryClaimIssues(message, facts), [], message);
+});
+
 test("claims are checked per item", () => {
   const plateAdded = { lines: [line("RS-J1009-7", 4)], changes: [added("RS-J1009-7")] };
   const issues = claimIssues("Plate qty 4 done. Let me add the bowl too.", plateAdded);
