@@ -6,7 +6,7 @@ import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode, keptLineClaims,
-  noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -704,6 +704,19 @@ test("a permission question about a product the customer hasn't picked is a pick
   // An "or" question lets them choose.
   assert.deepEqual(styleWith("The Safico fits. Want me to add it to your enquiry, or see other options?", ["02-00864"], () => false), []);
   assert.match(NO_PERMISSION_ISSUE, /Keep the rest of your answer/);
+});
+
+test("permissionCodes gives the products a permission-to-add question is about", () => {
+  // r4 c02-persona idx 8: "shall I add 2 of the MX1000" after the customer had named it. The loop checks that one product first.
+  const blenders = new Map<string, CheckedProduct>([checked("MX1000", "Waring Blender MX1000XTX", 1220), checked("MX1200", "Waring Blender MX1200XTX", 1535)]);
+  const answerWith = (message: string, card_ids: string[] = []): FinalAnswer => ({ message, card_ids, chips: [], show_contact: false });
+  assert.deepEqual(permissionCodes(answerWith("Shall I add 2 of the MX1000?"), blenders), ["MX1000"]);
+  assert.deepEqual(permissionCodes(answerWith("The MX1000 fits. How many do you need?"), blenders), []);
+  // A question naming no product is about the reply's cards, else the products the reply names; an earlier card counts too.
+  assert.deepEqual(permissionCodes(answerWith("Both fit. Want me to add them?", ["MX1000", "MX1200"]), blenders), ["MX1000", "MX1200"]);
+  const earlier = [{ code: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER SAFICO PRO", price: 23.36, link: null }];
+  assert.deepEqual(permissionCodes(answerWith("The Safico runs on gas. Want me to add it?"), new Map(), earlier), ["BTS-8026D"]);
+  assert.deepEqual(permissionCodes(answerWith("Shall I add 2 to your enquiry?"), blenders), []);
 });
 
 test("a confirm-add chip is dropped", () => {

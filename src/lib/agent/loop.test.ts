@@ -9,7 +9,7 @@ import { searchSlots } from "./facts";
 import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, fakePickCheck, product } from "./testing";
-import { PICK_CHECK_PROMPT } from "./verify";
+import { PICK_CHECK_PROMPT, type PickCheck } from "./verify";
 
 const blowtorch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 31.31 });
 const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER SAFICO PRO", list_price: 23.36 });
@@ -390,7 +390,7 @@ test("every turn logs one line of codes and counts, never text", async (t) => {
   // The session's last 8 characters and the cards' code:status:qty match a log line to its transcript turn (exam 3 couldn't).
   assert.deepEqual({ ...first, ms: 0 }, {
     ms: 0, session: "ion-1234", rounds: 2, forcedEarly: false, stopped: null, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null,
-    tools: ["search_catalogue"], cards: ["970S:in_stock:50"],
+    tools: ["search_catalogue"], updates: [], picks: [], pickFast: 0, cards: ["970S:in_stock:50"],
   });
   assert.deepEqual([second.rounds, second.repaired, second.repairCauses, second.tools], [1, true, ["UNKNOWN_CARD"], []]);
   assert.doesNotMatch(JSON.stringify(turnLogs()), /blow torch|FAKE-1|use it for/);
@@ -902,8 +902,9 @@ test("a permission question with no tool round left is repaired and asked to kee
     answer({ message }),
     answer({ message: "The Safico runs on gas. How many do you need?" }),
   ]);
+  // A tap is a pick: no check says so for a product only named, as no number was typed (X5 checks named products only then).
   const picked = searchedTwice("The Safico runs on gas. Want me to add it?");
-  await runAgentTurn({ request: request({ event: { type: "text", text: "the safico one" }, history: [{ role: "user", content: "torch" }, saficoShown] }), deps: deps(), client: picked.client, model: "claude-sonnet-5" });
+  await runAgentTurn({ request: request({ event: { type: "select_product", stockId: "BTS-8026D" }, history: [{ role: "user", content: "torch" }, saficoShown] }), deps: deps(), client: picked.client, model: "claude-sonnet-5" });
   assert.equal(picked.bodies.length, 4);
   assert.match(JSON.stringify(picked.bodies.at(-1)!.messages.at(-1)), /Keep the rest of your answer/);
   // exam 3, c09-stress T1: offering the product they asked about lets them pick it; it is not the confirm step.
@@ -1217,7 +1218,9 @@ test("a link from a tool result or already in the chat is sent as it is", async 
 const choice = (body: Anthropic.MessageCreateParamsNonStreaming) => (body.tool_choice as { type: string }).type;
 const lastMessage = (body: Anthropic.MessageCreateParamsNonStreaming) => JSON.stringify(body.messages.at(-1));
 const ASK_NOTE = /update_enquiry needs a number the customer types for this item/;
-const WHICH_NOTE = /update_enquiry refused this product again/;
+const WHICH_NOTE = /update_enquiry couldn't settle which product the customer means/;
+const ANSWER_NOTE = /The customer hasn't picked this product. No more tools this turn/;
+const KEEP_NOTE = /That line stays on the enquiry. No more tools this turn/;
 const LIST_NOTE = /That's all the lookups for this list this turn/;
 const PERMISSION_NUDGE = /If the customer typed how many of this product/;
 
@@ -1236,8 +1239,9 @@ test("an add that needs a number only the customer can type ends the tool rounds
   const qty = await afterUpdate("the 970S one", { action: "add", stock_id: "970S", quantity: 20 });
   assert.match(lastMessage(qty.bodies[1]), /QTY_NOT_STATED/);
   assert.deepEqual([qty.second, qty.asked, qty.bodies.length, qty.reply.enquiry.lines.length], ["none", true, 2, 0]);
+  // Quantity 0 fails before the pick check, so nothing says the typed code is a pick: no how-many stop (see the 'ask' test below).
   const zero = await afterUpdate("the 970S one", { action: "add", stock_id: "970S", quantity: 0 });
-  assert.deepEqual([zero.second, zero.asked], ["none", true]);
+  assert.deepEqual([zero.second, zero.asked], ["auto", false]);
   const none = await afterUpdate("the 970S one", { action: "set", stock_id: "970S" });
   assert.deepEqual([none.second, none.asked], ["none", true]);
 });
@@ -1261,19 +1265,20 @@ test("a failed add keeps its tools when the customer typed a number or another c
   assert.deepEqual([unpicked.second, unpicked.asked], ["auto", false]);
 });
 
-test("the same product refused twice as not picked ends the tool rounds with one question about it", async () => {
+test("the same product the check isn't sure of, refused twice, ends the tool rounds with one question about it", async () => {
   // exam 3, c08-persona T8 and c11-stress T7: the refused add was retried round after round.
   const refusedAdd = () => toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 });
   const okTwo = request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] });
+  const unsureTurn = (input: TurnInput) => runAgentTurn({ pickCheck: () => fakePickCheck({ sure: false }), ...input });
   const twice = fakeClient([refusedAdd(), refusedAdd(), answer({ message: "Is it the Safico gas torch burner BTS-8026D?", card_ids: ["BTS-8026D"] })]);
-  const reply = await refusedTurn({ request: okTwo, deps: deps(), client: twice.client, model: "claude-sonnet-5" });
+  const reply = await unsureTurn({ request: okTwo, deps: deps(), client: twice.client, model: "claude-sonnet-5" });
   assert.equal(twice.bodies.length, 3);
   assert.deepEqual(twice.bodies.map(choice), ["auto", "auto", "none"]);
   assert.match(lastMessage(twice.bodies[2]), WHICH_NOTE);
   assert.deepEqual(reply.cards.map((card) => card.stock_id), ["BTS-8026D"]);
   assert.deepEqual(reply.enquiry.lines, []);
   const searched = fakeClient([refusedAdd(), toolCall("t2", "search_catalogue", { queries: ["gas torch"] }), answer({ message: "Which one would you like?" })]);
-  await refusedTurn({ request: okTwo, deps: deps(), client: searched.client, model: "claude-sonnet-5" });
+  await unsureTurn({ request: okTwo, deps: deps(), client: searched.client, model: "claude-sonnet-5" });
   assert.deepEqual(searched.bodies.map(choice), ["auto", "auto", "auto"]);
   assert.ok(!searched.bodies.some((body) => WHICH_NOTE.test(JSON.stringify(body.messages))));
 });
@@ -1369,10 +1374,11 @@ test("a recommendation that offers to add a product the customer hasn't picked i
   // Also with a number typed: the nudge is decided before the earlier card is looked up again, so it must know that card too.
   // With no card attached and nothing looked up, the nudge and the review both judge it by the earlier cards: an unknown product
   // counted as the confirm step, and the repair turned it into "How many do you need?".
+  // With a number typed, the named Safico gets one pick check first, which says "not picked" here.
   for (const cardIds of [["BTS-8026D"], []]) {
     for (const text of ["which one is better for cooking?", "which one better for cooking? need 10", "need 2 pcs. which one more suitable for cooking"]) {
       const { client, bodies } = fakeClient([answer({ message, card_ids: cardIds }), answer({ message: "How many do you need?" })]);
-      const reply = await runAgentTurn({
+      const reply = await refusedTurn({
         request: request({ event: { type: "text", text }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
         deps: deps(), client, model: "claude-sonnet-5",
       });
@@ -1399,13 +1405,13 @@ test("a permission question after the customer picked and typed a number is nudg
 });
 
 test("a permission question after a pick with no number typed is repaired without tools, not nudged", async () => {
-  // Without a typed number update_enquiry can only refuse: the tool-less repair keeps the rest of the answer.
+  // Without a typed number update_enquiry can only refuse: the tool-less repair keeps the rest of the answer. The pick is a tap.
   const { client, bodies } = fakeClient([
     answer({ message: "The Safico runs on gas. Want me to add it?" }),
     answer({ message: "The Safico runs on gas. How many do you need?" }),
   ]);
   const reply = await runAgentTurn({
-    request: request({ event: { type: "text", text: "the safico one" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }), deps: deps(), client, model: "claude-sonnet-5",
+    request: request({ event: { type: "select_product", stockId: "BTS-8026D" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }), deps: deps(), client, model: "claude-sonnet-5",
   });
   assert.equal(bodies.length, 2);
   assert.equal(choice(bodies[1]), "none");
@@ -1483,4 +1489,193 @@ test("without an injected check, update_enquiry asks the turn's client: pickMode
   assert.deepEqual([bodies[1].model, bodies[1].system, bodies[1].thinking], ["claude-check-model", PICK_CHECK_PROMPT, { type: "disabled" }]);
   assert.match(String(bodies[1].messages[0].content), /NOW customer: "ok 2"\n<\/chat>/);
   assert.match(String(bodies[1].messages[0].content), /Proposed: add 2 \(unit PC\) of BTS-8026D "CASSETTE GAS TORCH BURNER SAFICO PRO" \$23\.36$/);
+});
+
+const twoAddsRound = (first: Record<string, unknown>, second: Record<string, unknown>) => ({
+  ...toolCall("t1", "update_enquiry", {}),
+  content: [{ type: "tool_use", id: "t1", name: "update_enquiry", input: first }, { type: "tool_use", id: "t2", name: "update_enquiry", input: second }],
+}) as unknown as Anthropic.Message;
+
+test("two adds in one round start both pick checks before either answers", async () => {
+  // "these 2. 6 each" costs one check round, not two.
+  const started: string[] = [];
+  let release = () => {};
+  const both = new Promise<void>((resolve) => { release = resolve; });
+  const check: PickCheck = async (p) => {
+    started.push(p.code);
+    if (started.length === 2) release();
+    await both;
+    return { verdict: "picked", sure: true, code: null, candidates: [], quantity: p.quantity, ms: 0, proposed: p.code, action: p.action };
+  };
+  const { client } = fakeClient([
+    twoAddsRound({ action: "add", stock_id: "970S", quantity: 2 }, { action: "add", stock_id: "BTS-8026D", quantity: 3 }),
+    answer({ message: "Got it: 2 blow torches and 3 Safico torches. Anything else?" }),
+  ]);
+  const reply = await within(runAgentTurn({
+    request: request({ event: { type: "text", text: "2 of the 970S and 3 of the BTS-8026D please" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: deps(), client, model: "claude-sonnet-5", pickCheck: () => check, deadlineMs: 6_000, fallbackReserveMs: 1_000, lastCallMs: 1_000,
+  }), 5_500);
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual([...started].sort(), ["970S", "BTS-8026D"]);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2], ["BTS-8026D", 3]]);
+});
+
+test("a swap in one round adds the new item first: a failed add keeps the old line and asks how many; with the number typed it completes", async () => {
+  // r4 c09-persona idx 11: [remove old, add new] took the old line off while the new one was refused.
+  const tong16 = product({ stock_id: "UT16HR", name: "Stainless Steel Utility Tong 16in", list_price: 3.85 });
+  const lockTong = product({ stock_id: "UT16LR", name: "Stainless Steel Utility Tong with Locking Ring 16in", list_price: 4.9 });
+  const text = "ok whatever. actually change the 16 inch ones to the one with the lock ring";
+  const swap = async (typed: string, message: string) => {
+    const { client, bodies } = fakeClient([twoAddsRound({ action: "remove", stock_id: "UT16HR" }, { action: "add", stock_id: "UT16LR", quantity: 4 }), answer({ message })]);
+    const shown = { role: "assistant" as const, content: `Here's the one with a lock ring.${cardsNote([lockTong])}` };
+    const reply = await checkedTurn({
+      request: request({ event: { type: "text", text: typed }, history: [{ role: "user", content: "got one with lock ring?" }, shown], enquiry: [{ stockId: "UT16HR", quantity: 4 }] }),
+      deps: fakeDeps([tong16, lockTong]), client, model: "claude-sonnet-5",
+    });
+    return { reply, bodies };
+  };
+  const failed = await swap(text, "How many of the locking-ring tong do you need?");
+  const results = (failed.bodies[1].messages.at(-1)!.content as Array<{ type: string; tool_use_id: string; content: string }>).filter((item) => item.type === "tool_result").map((item) => [item.tool_use_id, JSON.parse(item.content).error]);
+  assert.deepEqual(results, [["t1", "SWAP_NOT_DONE"], ["t2", "QTY_NOT_STATED"]]); // in call order, though the add ran first
+  assert.equal(choice(failed.bodies[1]), "none");
+  assert.match(lastMessage(failed.bodies[1]), ASK_NOTE);
+  assert.deepEqual(failed.reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["UT16HR", 4]]);
+  const done = await swap(`${text}, same 4`, "Got it: 4 locking-ring tongs. Anything else?");
+  assert.deepEqual(done.reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["UT16LR", 4]]);
+});
+
+/** The same update_enquiry call in two rounds, then Claude's answer; the check answers as `answerFor` says. */
+async function sameCallTwice(answerFor: Parameters<typeof fakePickCheck>[0], input: Record<string, unknown>, overrides: Partial<AgentRequest> = {}) {
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", input), toolCall("t2", "update_enquiry", input), answer({ message: "Which one would you like?" })]);
+  await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown], ...overrides }),
+    deps: deps(), client, model: "claude-sonnet-5", pickCheck: () => fakePickCheck(answerFor),
+  });
+  return { choices: bodies.map(choice), note: lastMessage(bodies.at(-1)!) };
+}
+
+test("a refusal repeated in the next round ends the tools: not picked answers, unclear or another pick asks which, a kept line stays", async () => {
+  const add = { action: "add", stock_id: "BTS-8026D", quantity: 2 };
+  // exam 4: 23 forced "which" stops asked "Just to confirm…?" about products the customer never picked.
+  const notPicked = await sameCallTwice({ verdict: "not_picked" }, add);
+  assert.deepEqual(notPicked.choices, ["auto", "auto", "none"]);
+  assert.match(notPicked.note, ANSWER_NOTE);
+  assert.doesNotMatch(notPicked.note, WHICH_NOTE);
+  const unclear = await sameCallTwice({ verdict: "unclear", candidates: ["970S", "BTS-8026D"] }, add);
+  assert.deepEqual(unclear.choices, ["auto", "auto", "none"]);
+  assert.match(unclear.note, WHICH_NOTE);
+  const other = await sameCallTwice({ verdict: "different", code: "970S", quantity: 2 }, add);
+  assert.deepEqual(other.choices, ["auto", "auto", "none"]);
+  assert.match(other.note, WHICH_NOTE);
+  const kept = await sameCallTwice({ verdict: "not_picked" }, { action: "remove", stock_id: "BTS-8026D" }, { event: { type: "text", text: "so expensive leh" }, enquiry: [{ stockId: "BTS-8026D", quantity: 2 }] });
+  assert.deepEqual(kept.choices, ["auto", "auto", "none"]);
+  assert.match(kept.note, KEEP_NOTE);
+  // PICKED_OTHER for another number is a new call, so the tools stay on.
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", add), toolCall("t2", "update_enquiry", { ...add, quantity: 3 }), answer({ message: "Which one would you like?" })]);
+  await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok 2 or 3" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: deps(), client, model: "claude-sonnet-5", pickCheck: () => fakePickCheck({ verdict: "different", code: "970S", quantity: null }),
+  });
+  assert.deepEqual(bodies.map(choice), ["auto", "auto", "auto"]);
+});
+
+test("the how-many stop needs a product the customer picked", async () => {
+  // A code the check never confirmed (an unknown one, with Claude's untyped number): no how-many question about it.
+  const unknown = await afterUpdate("the 970S one", { action: "add", stock_id: "NOPE-1", quantity: 2 });
+  assert.match(lastMessage(unknown.bodies[1]), /QTY_NOT_STATED/);
+  assert.deepEqual([unknown.second, unknown.asked], ["auto", false]);
+  // The check picked it, with Claude's untyped number: ask how many.
+  const picked = await afterUpdate("the 970S one", { action: "add", stock_id: "970S", quantity: 2 });
+  assert.deepEqual([picked.second, picked.asked], ["none", true]);
+  // r4 c06-persona idx 14 shape: a GST question, and Claude sends quantity 0 for a card shown earlier.
+  const gst = await afterUpdate("I ask gst is 9% or not only. yes or no", { action: "add", stock_id: "970S", quantity: 0 });
+  assert.match(lastMessage(gst.bodies[1]), /INVALID_INPUT/);
+  assert.deepEqual([gst.second, gst.asked], ["auto", false]);
+  // A tapped card is picked: quantity 0 for it asks how many.
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 0 }), answer({ message: "How many do you need?" })]);
+  await checkedTurn({ request: request({ event: { type: "select_product", stockId: "970S" }, history: [{ role: "user", content: "blow torch" }, torchShown] }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual([choice(bodies[1]), ASK_NOTE.test(lastMessage(bodies[1]))], ["none", true]);
+});
+
+test("a permission question about a product the customer named but Claude never proposed gets one check, and a nudge only on a sure pick", async () => {
+  // r4 c02-persona idx 8 shape: "shall I add 2 of the MX1000" after the customer had named it is the confirm step the owner ruled out.
+  const message = "The Safico runs on gas. Want me to add 2 of the Safico?";
+  const cases: Array<[Parameters<typeof fakePickCheck>[0], boolean]> = [[{ quantity: 2 }, true], [{ sure: false }, false], [{ verdict: "not_picked" }, false]];
+  for (const [answerFor, nudged] of cases) {
+    const check = fakePickCheck(answerFor);
+    const { client, bodies } = fakeClient([
+      answer({ message }),
+      toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }),
+      answer({ message: "Got it: 2 Safico torches. Anything else?" }),
+    ]);
+    const reply = await runAgentTurn({
+      request: request({ event: { type: "text", text: "the safico one, need 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+      deps: deps(), client, model: "claude-sonnet-5", pickCheck: () => check,
+    });
+    const label = JSON.stringify(answerFor);
+    assert.deepEqual([check.calls[0].code, check.calls[0].action, check.calls[0].quantity], ["BTS-8026D", "add", null], label);
+    assert.equal(check.calls.length, 1, label); // the sure pick's number answers the add that follows
+    if (nudged) {
+      assert.match(lastMessage(bodies[1]), PERMISSION_NUDGE, label);
+      assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]], label);
+    } else {
+      assert.equal(bodies.length, 1, label);
+      assert.equal(reply.message, message, label);
+    }
+  }
+});
+
+/** A client whose pick-check calls never answer until aborted; Claire's own calls get the scripted responses. */
+function checksHang(responses: Array<Anthropic.Message | Error>) {
+  const { client, bodies } = fakeClient(responses);
+  let checks = 0;
+  const hanging: AgentClient = {
+    messages: {
+      create: (body, options) => {
+        if (body.system !== PICK_CHECK_PROMPT) return client.messages.create(body, options);
+        checks += 1;
+        return new Promise((_, reject) => {
+          const abort = () => reject(new DOMException("aborted", "AbortError"));
+          if (options?.signal?.aborted) abort();
+          else options?.signal?.addEventListener("abort", abort, { once: true });
+        });
+      },
+    },
+  };
+  return { client: hanging, bodies, checks: () => checks };
+}
+
+test("a pick check that never answers is cut at its budget and Claire asks; with under a second to spare no check is made", async () => {
+  const run = async (lastCallMs: number) => {
+    const hang = checksHang([toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }), answer({ message: "Is it the Safico gas torch burner BTS-8026D?", card_ids: ["BTS-8026D"] })]);
+    const started = performance.now();
+    // 15 s of work time: the check gets what the last call leaves, 1.5 s or 0.5 s.
+    const reply = await within(runAgentTurn({
+      request: request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+      deps: deps(), client: hang.client, model: "claude-sonnet-5", deadlineMs: 16_000, fallbackReserveMs: 1_000, lastCallMs,
+    }), 10_000);
+    return { reply, ms: performance.now() - started, checks: hang.checks(), result: lastMessage(hang.bodies[1]) };
+  };
+  const cut = await run(13_500);
+  assert.equal(cut.reply.provider, "anthropic");
+  assert.ok(cut.ms < 4_000, `${Math.round(cut.ms)} ms`);
+  assert.equal(cut.checks, 1);
+  assert.match(cut.result, /PICK_UNCHECKED/);
+  assert.deepEqual(cut.reply.enquiry.lines, []);
+  assert.deepEqual(cut.reply.cards.map((card) => card.stock_id), ["BTS-8026D"]);
+  const none = await run(14_500);
+  assert.equal(none.reply.provider, "anthropic");
+  assert.equal(none.checks, 0);
+  assert.match(none.result, /PICK_UNCHECKED/);
+});
+
+test("the turn log adds the pick verdicts, the tap passes and each update's result, never text", async (t) => {
+  const info = t.mock.method(console, "info", () => undefined);
+  const { client } = fakeClient([toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }), answer({ message: "Got it: 2 Safico torches. Anything else?" })]);
+  await checkedTurn({ request: request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, saficoShown] }), deps: deps(), client, model: "claude-sonnet-5" });
+  const tapped = fakeClient([toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }), answer({ message: "Got it: 2 blow torches. Anything else?" })]);
+  await checkedTurn({ request: request({ event: { type: "select_product", stockId: "970S" }, history: [{ role: "user", content: "I need 2 blow torches" }, twoCardsShown] }), deps: deps(), client: tapped.client, model: "claude-sonnet-5" });
+  const logs = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").map((call) => call.arguments[1] as Record<string, unknown>);
+  assert.deepEqual(logs.map((log) => [log.picks, log.pickFast, log.updates]), [[["add:picked:0"], 0, ["add:ok"]], [[], 1, ["add:ok"]]]);
+  assert.doesNotMatch(JSON.stringify(logs), /ok 2|safico|blow torch|got it/i);
 });

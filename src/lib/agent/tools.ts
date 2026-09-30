@@ -484,7 +484,8 @@ export async function pickProposal(input: EnquiryInput, ctx: TurnContext): Promi
       uom: line?.uom ?? seen?.uom_id.trim() ?? "", action: "remove", quantity: null, requested: null, unit: "uom",
     };
   }
-  if (tapPicks(code, ctx)) return null;
+  // A line that couldn't be re-checked can't be changed (STOCK_UNVERIFIED), so the round's early start makes no call for it.
+  if (tapPicks(code, ctx) || ctx.uncheckedCodes.some((item) => same(item, code))) return null;
   // A lookup that fails is still checked, by the code alone: a flaky catalogue must not skip the check.
   const found = await ctx.deps.findByCode(code).catch(() => undefined);
   if (found === null) return null;

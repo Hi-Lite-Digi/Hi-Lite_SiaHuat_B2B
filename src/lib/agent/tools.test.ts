@@ -4,7 +4,7 @@ import test from "node:test";
 import type { Product } from "@/lib/chat-contract";
 import { QTY_NOTICE } from "./enquiry";
 import { turnDeps, type CheckedProduct } from "./facts";
-import { agentTools, runTool, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, runTool, startPickCheck, type ToolOutcome, type TurnContext } from "./tools";
 import { fakeDeps, fakePickCheck, product } from "./testing";
 import { pickCheckCache } from "./verify";
 
@@ -957,9 +957,13 @@ test("after a refused removal, an add of that line is refused so it isn't merged
 });
 
 test("a line that could not be re-checked can be removed or cleared, but not changed", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], clearTexts: ["clear it all"], uncheckedCodes: ["BTS-8026D", "F46700"] });
+  const check = fakePickCheck();
+  const ctx = context(undefined, { customerTexts: ["2 please"], clearTexts: ["clear it all"], uncheckedCodes: ["BTS-8026D", "F46700"], checkPick: pickCheckCache(check) });
   const changed = await update(ctx, { action: "add", stock_id: "bts-8026d", quantity: 2 });
   assert.match(changed.content, /STOCK_UNVERIFIED/);
+  // The round's early start makes no check for a change that can't happen.
+  await startPickCheck({ action: "set", stock_id: "BTS-8026D", quantity: 2 }, ctx);
+  assert.equal(check.calls.length, 0);
   const removed = await update(ctx, { action: "remove", stock_id: "BTS-8026D" });
   assert.equal(removed.isError, false);
   assert.deepEqual(ctx.uncheckedCodes, ["F46700"]);

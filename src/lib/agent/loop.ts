@@ -10,13 +10,13 @@ import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, typ
 import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, customerMessage, dropRepeatedPitch,
-  enquiryClaimIssues, issueCode, noCardFixer, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards,
+  enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards,
   withoutEnquiryClaims, withoutKeptLineClaims,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
-import { codePattern, pickEvidence, same, turnChooser, type Chooser } from "./picks";
+import { codePattern, pickEvidence, same } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, errorCode, keepBest, lookupDetails, runTool, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, keepBest, lookupDetails, refusalKey, runTool, startPickCheck, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 import { modelPickCheck, pickCheckCache, pickView, type PickCheck } from "./verify";
 
 export type AgentClient = {
@@ -66,7 +66,9 @@ const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says
 // Conditional: the number the customer typed may be for another item.
 const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add. If the customer typed how many of this product, call update_enquiry now; otherwise ask how many, once.";
 const ASK_NOTE = "[Context from the system, not the customer] update_enquiry needs a number the customer types for this item: ask how many, once. No more tools this turn.";
-const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry refused this product again: the customer's words don't show they picked it. No more tools this turn: ask one short question naming it with its code, with its card attached, or ask which of the likely cards they mean.";
+const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry couldn't settle which product the customer means. No more tools this turn: ask the one question its result asked for (which of the fitting cards, naming them, or whether it's the named product), with those cards. Don't ask them to confirm a number they typed.";
+const ANSWER_NOTE = "[Context from the system, not the customer] The customer hasn't picked this product. No more tools this turn: answer what they said; don't add it, don't ask them to confirm it, and don't say it was added.";
+const KEEP_NOTE = "[Context from the system, not the customer] That line stays on the enquiry. No more tools this turn: say plainly it's still on, answer what they said, and don't ask them to confirm again.";
 const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
 
 /** The customer's last two typed messages (card and chip taps, and photos without a caption, excluded), newest first. */
@@ -218,11 +220,19 @@ function failureCode(error: unknown, deadline: AbortSignal) {
     : /aborted/i.test(error.message) ? "CLIENT_ABORT" : code;
 }
 
-/** The pick check's refusals that only the customer's answer to one question can settle. */
-const WHICH_ERRORS = new Set(["NOT_PICKED", "PICK_UNCLEAR", "PICK_UNCONFIRMED", "PICK_UNCHECKED"]);
-
 /** A tool call this round ran: its name, what Claude sent and its error code, if it failed. */
 type ToolCallDone = { name: string; input: unknown; error?: string };
+/** An update_enquiry call's fields as Claude sent them (not yet checked). */
+const updateFields = (input: unknown) => input as { action?: unknown; stock_id?: unknown; quantity?: unknown };
+const updateCode = (input: unknown) => {
+  const { stock_id: stockId } = updateFields(input);
+  return typeof stockId === "string" ? stockId.trim().toLowerCase() : "";
+};
+/** An update_enquiry call's action for the turn log: one of the four, never other text. */
+const updateAction = (input: unknown) => {
+  const { action } = updateFields(input);
+  return typeof action === "string" && /^(?:add|set|remove|clear)$/.test(action) ? action : "?";
+};
 
 /**
  * Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log. Returns the results for
@@ -233,17 +243,20 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   names.push(...calls.map((call) => call.name));
   const outcomes = new Map<string, ToolOutcome>();
   const updates = calls.filter((item) => item.name === "update_enquiry");
-  // Several adds in one round: their lookups run together first and fill the turn's memo, so the updates don't wait in turn.
-  if (updates.length > 1) {
-    await Promise.all(updates.map(async (call) => {
-      const { action, stock_id: code } = call.input as { action?: unknown; stock_id?: unknown };
-      if ((action !== "add" && action !== "set") || typeof code !== "string" || !code.trim()) return;
-      const found = await ctx.deps.findByCode(code.trim()).catch(() => null);
-      if (found) await liveCheck(found, ctx.deps);
-    }));
-  }
-  // Enquiry updates change shared state, so they run one after another; lookups run in parallel.
-  for (const call of updates) {
+  const action = (call: Anthropic.ToolUseBlock) => updateFields(call.input).action;
+  // Every update's pick check starts now, side by side ("these 2. 6 each" costs one check round, not two), and the adds' lookups
+  // run together and fill the turn's memo, so the updates don't wait in turn.
+  await Promise.all(updates.map(async (call) => {
+    const { stock_id: code } = updateFields(call.input);
+    const lookup = (action(call) === "add" || action(call) === "set") && typeof code === "string" && code.trim()
+      ? ctx.deps.findByCode(code.trim()).then((found) => found && liveCheck(found, ctx.deps)).catch(() => null) : null;
+    await Promise.all([startPickCheck(call.input, ctx), lookup]);
+  }));
+  // Enquiry updates change shared state, so they run one after another, adds and sets first: a swap's old line comes off only once
+  // the new item is on (r4 c09-persona idx 11). A remove of a code the round also adds or sets keeps its place (a redo, not 4 + 6).
+  const removeLast = (call: Anthropic.ToolUseBlock) => Number(action(call) === "remove"
+    && !updates.some((other) => other !== call && action(other) !== "remove" && updateCode(other.input) === updateCode(call.input)));
+  for (const call of [...updates].sort((a, b) => removeLast(a) - removeLast(b))) {
     outcomes.set(call.id, await runTool(call.name, call.input, ctx));
   }
   await Promise.all(calls.filter((item) => item.name !== "update_enquiry").map(async (call) => {
@@ -260,29 +273,35 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   };
 }
 
+type Stop = "which" | "ask" | "answer" | "keep";
+// A refusal again for a code refused before this round: only the customer can settle it. Exam 4: 23 forced "which" stops asked
+// "Just to confirm...?" about products the customer never picked, so a plain "not picked" is answered instead.
+const STUCK: Partial<Record<string, Stop>> = { NOT_PICKED: "answer", PICK_UNCLEAR: "which", PICK_UNCONFIRMED: "which", PICK_UNCHECKED: "which", REMOVE_REFUSED: "keep", SWAP_NOT_DONE: "keep" };
+// The same code, action and number refused again (another number is a new call).
+const BY_KEY: Partial<Record<string, Stop>> = { PICKED_OTHER: "which", QTY_NOT_FOR_ITEM: "which" };
+
 /**
- * Why the tool rounds stop when only the customer can unblock update_enquiry: the same product refused again as not picked
- * ("which"), or an add or set that needs a number the customer never typed ("ask") (exam 3, c09-stress T7: three update rounds,
- * 13.4 s). Errors another call can fix (OVER_STOCK, UNIT_MISMATCH, a missing stock_id, a quantity sent in pieces for cartons)
- * leave the tools on, and so does any other tool call in the round.
+ * Why the tool rounds stop when only the customer can unblock update_enquiry: every call refused again (STUCK, BY_KEY; "which"
+ * before "keep" before "answer"), or an add or set of a product the customer picked that needs a number they never typed ("ask")
+ * (exam 3, c09-stress T7: three update rounds, 13.4 s). A swap's held remove waits on its add, so the add's error decides. Errors
+ * another call can fix (OVER_STOCK, UNIT_MISMATCH, a missing stock_id, a quantity sent in pieces for cartons) leave the tools on,
+ * and so does any other tool call in the round. before: the codes refused or kept, and the calls refused, before this round.
  */
-function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: ReadonlySet<string>, chooses: Chooser): "which" | "ask" | null {
+function stopNote(done: ToolCallDone[], ctx: TurnContext, before: { codes: ReadonlySet<string>; keys: ReadonlySet<string> }, picked: (code: string) => boolean): Stop | null {
   if (!done.length || done.some((call) => call.name !== "update_enquiry" || !call.error)) return null;
-  const fields = (call: ToolCallDone) => call.input as { action?: unknown; stock_id?: unknown; quantity?: unknown };
-  const code = (call: ToolCallDone) => {
-    const { stock_id: stockId } = fields(call);
-    return typeof stockId === "string" ? stockId.trim().toLowerCase() : "";
-  };
-  if (done.every((call) => WHICH_ERRORS.has(call.error ?? "") && refusedBefore.has(code(call)))) return "which";
-  // Quantity 0 fails the input check before the pick check: "how many?" is only asked about a product the customer picked.
-  const chosen = (call: ToolCallDone) => chooses(code(call), null, ctx.lines.map((line) => line.code));
+  const judged = done.some((call) => call.error !== "SWAP_NOT_DONE") ? done.filter((call) => call.error !== "SWAP_NOT_DONE") : done;
+  const stuck = judged.map((call) => (before.codes.has(updateCode(call.input)) && STUCK[call.error!])
+    || (before.keys.has(refusalKey(updateFields(call.input))) && BY_KEY[call.error!]) || null);
+  if (stuck.every((stop) => stop !== null)) return stuck.includes("which") ? "which" : stuck.includes("keep") ? "keep" : "answer";
+  // "How many?" only about a product the customer picked (a tap, an enquiry line or a sure check): r2 c03-B idx 5 "Recommend" with
+  // Claude's own number, and round 4's quantity-0 calls on GST questions, asked it about products nobody picked.
   const needsNumber = (call: ToolCallDone) => {
-    const { action, quantity } = fields(call);
+    const { action, quantity } = updateFields(call.input);
     const noNumber = !(Number.isInteger(quantity) && (quantity as number) > 0);
-    return (action === "add" || action === "set") && code(call) !== ""
-      && (call.error === "QTY_NOT_STATED" || ((call.error === "MISSING_FIELDS" || call.error === "INVALID_INPUT") && noNumber && chosen(call)));
+    return (action === "add" || action === "set") && updateCode(call.input) !== "" && picked(updateCode(call.input))
+      && (call.error === "QTY_NOT_STATED" || ((call.error === "MISSING_FIELDS" || call.error === "INVALID_INPUT") && noNumber));
   };
-  return done.every(needsNumber) && !statesAnyQuantity(ctx.customerTexts) ? "ask" : null;
+  return judged.every(needsNumber) && !statesAnyQuantity(ctx.customerTexts) ? "ask" : null;
 }
 
 export async function runAgentTurn(input: {
@@ -316,8 +335,6 @@ export async function runAgentTurn(input: {
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const recent = recentCustomerTexts(request);
   const picks = pickEvidence(request.history, request.event);
-  // Every pick check this turn shares one cache: the permission checks try each product with every typed number.
-  const chooses = turnChooser(picks);
   const currentText = request.event.type === "text" && !request.event.chip ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   // "same qty" reuses the one number typed a few messages back, so every quantity check sees it (owner question 4).
   const sameQty = sameQuantityText(currentText, picks.texts.filter((text) => !text.chip).map((text) => text.text));
@@ -364,42 +381,53 @@ export async function runAgentTurn(input: {
       { role: "user", content: await beforeDeadline(eventContent(request, ctx, verified.notes), deadline) },
     ];
     const toolNames: string[] = [];
+    // Each update_enquiry call as action:error, for the turn log: the real mix of proposals (round 4's log couldn't show it).
+    const updateResults: string[] = [];
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
-    // At most 8, the newest text's first: each one is a pick check, run in every review (real turns had at most 10).
-    const typedNumbers = [...new Set(ctx.customerTexts.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => n > 0 && n <= 100_000).slice(0, 8);
-    // A product the customer picked, with or without one of the numbers they typed: a permission question about it is the ruled-out confirm step.
-    const picked = (code: string) => [null, ...typedNumbers].some((quantity) => chooses(code, quantity, ctx.lines.map((line) => line.code)));
+    // A product the customer picked: tapped this turn, on the enquiry, or a sure pick by the check. A permission question about it is
+    // the ruled-out confirm step, and "how many?" may be asked about it.
+    const picked = (code: string) => (ctx.tapped !== null && same(ctx.tapped, code)) || ctx.lines.some((line) => same(line.code, code)) || ctx.checkPick.picked(code);
     // The nudge is decided before attachEarlierCards looks up a re-attached card, and a reply may name an earlier card without
     // attaching it, so the nudge and the review both get the earlier replies' cards: an unknown card would count as the confirm
     // step (exam 3, c09-stress T1).
     const earlierCards = picks.replies.flatMap((reply) => reply.cards);
     const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused, picked, earlierCards, unchecked: ctx.uncheckedCodes });
+    // A product the reply names but Claude never proposed, checked as an add with no number (from this turn's lookups or an earlier card).
+    const checkNamed = (code: string) => {
+      const product = [...ctx.seen.values()].find((item) => same(item.product.stock_id, code))?.product;
+      const card = earlierCards.findLast((item) => same(item.code, code));
+      return ctx.checkPick({
+        code: product?.stock_id ?? card?.code ?? code, name: product?.name ?? card?.name ?? code, price: product?.list_price ?? card?.price ?? null,
+        uom: product?.uom_id.trim() ?? "", action: "add", quantity: null, requested: null, unit: "uom",
+      });
+    };
     let nudged = false;
     // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
     const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
       && !(/^\s*ok/i.test(request.event.text) && picks.replies.at(-1)?.cards.length === 1);
     const listTurn = listItemCount(searchText ?? "") > LIST_ITEMS_PER_TURN;
     // Why the tool rounds stopped before time or the round cap did: the one place that turns tools off, with its note.
-    let stopped: "which" | "ask" | "list" | "thanks" | null = thanksTurn ? "thanks" : null;
+    let stopped: Stop | "list" | "thanks" | null = thanksTurn ? "thanks" : null;
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       if (!stopped && listTurn && round > 0 && toolNames.length > 0) stopped = "list";
       // The first call is never out of time; after a tool round, a nearly spent budget means answer now.
       const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= lastCallMs);
       const forceAnswer = stopped !== null || outOfTime;
-      const note = stopped === "which" ? WHICH_NOTE : stopped === "ask" ? ASK_NOTE : stopped === "list" ? LIST_NOTE
-        : outOfTime && round < MAX_TOOL_ROUNDS ? TIME_NOTE : null;
+      const note = stopped === "which" ? WHICH_NOTE : stopped === "ask" ? ASK_NOTE : stopped === "answer" ? ANSWER_NOTE : stopped === "keep" ? KEEP_NOTE
+        : stopped === "list" ? LIST_NOTE : outOfTime && round < MAX_TOOL_ROUNDS ? TIME_NOTE : null;
       if (!stopped && outOfTime && round < MAX_TOOL_ROUNDS) forcedEarly = true;
       // After the tool results (or the nudge): every user message this loop sends has array content.
       if (note) (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: note });
       rounds += 1;
       const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", deadline);
       if (response.stop_reason === "tool_use") {
-        const refusedBefore = new Set(ctx.refused.map((code) => code.toLowerCase()));
+        const before = { codes: new Set([...ctx.refused, ...ctx.kept].map((code) => code.toLowerCase())), keys: new Set(ctx.refusedKeys) };
         const { results, done } = await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline);
+        updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
-        stopped = stopped ?? stopNote(done, ctx, refusedBefore, chooses);
+        stopped = stopped ?? stopNote(done, ctx, before, picked);
         continue;
       }
       const final = readFinal(response);
@@ -408,6 +436,12 @@ export async function runAgentTurn(input: {
       // customer typed a number: without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer.
       // Safe only because update_enquiry checks the pick and the typed number.
       const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused.length;
+      // A permission question about the one product the customer named but Claude never proposed: one check says whether they
+      // picked it, i.e. whether this is the confirm step the owner ruled out (r4 c02-persona idx 8; about 1 in 700 round-4 turns).
+      if (final && toolsLeft && statesAnyQuantity(ctx.customerTexts)) {
+        const about = permissionCodes(final, ctx.seen, earlierCards).filter((code) => !picked(code));
+        if (about.length === 1) await beforeDeadline(checkNamed(about[0]), deadline).catch(() => undefined);
+      }
       const nudge = !final || !toolsLeft ? null
         : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
         : asksConfirmStep(final, ctx.seen, picked, earlierCards) && statesAnyQuantity(ctx.customerTexts) ? PERMISSION_NUDGE : null;
@@ -504,7 +538,8 @@ export async function runAgentTurn(input: {
     // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).
     console.info("[api/agent] turn", {
       ms: Math.round(performance.now() - started), session: request.sessionId.slice(-8), rounds, forcedEarly, stopped, repaired, repairCauses,
-      repairSkipped: repairCauses.length > 0 && !repaired, repairFailed, tools: toolNames,
+      repairSkipped: repairCauses.length > 0 && !repaired, repairFailed, tools: toolNames, updates: updateResults,
+      picks: ctx.checkPick.settled.map((v) => `${v.action}:${v.verdict}${v.sure ? "" : "?"}:${v.ms}`), pickFast: ctx.pickFast,
       cards: review.cards.map((card) => `${card.stock_id}:${card.stock_status}:${card.available_quantity ?? "?"}`),
     });
     return {

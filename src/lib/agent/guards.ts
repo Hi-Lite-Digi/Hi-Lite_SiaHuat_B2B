@@ -603,16 +603,20 @@ const asksPermissionToAdd = (sentence: string) => asksToConfirmAdd.test(sentence
 function confirmStepAsks(message: string, replyCards: readonly ShownCard[], knownCards: readonly ShownCard[], picked?: (code: string) => boolean) {
   return sentences(message).filter(asksPermissionToAdd).filter((sentence) => {
     if (!picked) return true;
-    const named = pointedBy(sentence, [...replyCards, ...knownCards]);
-    const about = named.length ? named : replyCards.length ? replyCards : pointedBy(message, [...knownCards]);
+    const about = questionCards(sentence, message, replyCards, knownCards);
     return !about.length || about.some((card) => picked(card.code));
   });
 }
+/** The cards a permission question is about: those it names, else the reply's cards, else the products the reply names. */
+function questionCards(sentence: string, message: string, replyCards: readonly ShownCard[], knownCards: readonly ShownCard[]) {
+  const named = pointedBy(sentence, [...replyCards, ...knownCards]);
+  return named.length ? named : replyCards.length ? [...replyCards] : pointedBy(message, [...knownCards]);
+}
 /**
- * The same for an answer: its cards, the products looked up this turn, and the cards of earlier replies, which a question can name
- * without attaching or looking them up (exam 3, c09-stress T1: an unknown product counted as the confirm step).
+ * An answer's cards and the cards its words can name: the products looked up this turn, and the cards of earlier replies, which a
+ * question can name without attaching or looking them up (exam 3, c09-stress T1: an unknown product counted as the confirm step).
  */
-export function asksConfirmStep(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, picked?: (code: string) => boolean, earlierCards: readonly ShownCard[] = []) {
+function answerCards(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, earlierCards: readonly ShownCard[]) {
   const looked = seenCards(seen);
   const known = [...looked, ...earlierCards.filter((card) => !looked.some((item) => same(item.code, card.code)))];
   const replyCards = answer.card_ids.flatMap((id) => {
@@ -620,7 +624,21 @@ export function asksConfirmStep(answer: FinalAnswer, seen: ReadonlyMap<string, C
     if (found) return [asCard(found.product)];
     return earlierCards.filter((card) => same(card.code, id)).slice(0, 1);
   });
+  return { known, replyCards };
+}
+/** confirmStepAsks for an answer. */
+export function asksConfirmStep(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, picked?: (code: string) => boolean, earlierCards: readonly ShownCard[] = []) {
+  const { known, replyCards } = answerCards(answer, seen, earlierCards);
   return confirmStepAsks(answer.message, replyCards, known, picked).length > 0;
+}
+/**
+ * The codes of the products the answer's permission-to-add questions are about. The loop checks a named product Claude never
+ * proposed before deciding the nudge (r4 c02-persona idx 8: "shall I add 2 of the MX1000" after the customer had named it).
+ */
+export function permissionCodes(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, earlierCards: readonly ShownCard[] = []) {
+  const { known, replyCards } = answerCards(answer, seen, earlierCards);
+  const codes = sentences(answer.message).filter(asksPermissionToAdd).flatMap((sentence) => questionCards(sentence, answer.message, replyCards, known).map((card) => card.code));
+  return [...new Map(codes.map((code) => [code.toLowerCase(), code])).values()];
 }
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";
