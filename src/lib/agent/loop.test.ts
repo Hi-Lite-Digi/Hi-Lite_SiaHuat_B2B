@@ -1221,6 +1221,18 @@ test("an unbacked completeness claim is repaired once, then removed", async () =
   assert.equal(reply.message, "Anything else?");
 });
 
+test("an answer the fixers empty with no card left gets a next step", async () => {
+  // r6: every sentence removed used to end on "Sia Huat sales can help", with nothing the customer could do here.
+  const claim = answer({ message: "That covers our torch range." });
+  const { client, bodies } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), claim, claim]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 3);
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).");
+  assert.equal(reply.showContact, true);
+});
+
 test("a completeness claim backed by a complete category search is sent without a repair", async () => {
   const lighters = [
     product({ stock_id: "GL1", name: "COOKING TORCH", third_category: "Gas lighters" }),
@@ -1319,14 +1331,15 @@ test("a card whose link the customer says doesn't open is dropped in code, with 
   const pointing = await brokenTurn(fakeClient([answer({ message: `${message} The card below has the same details.`, card_ids: ["E910076"] })]).client);
   assert.deepEqual(pointing.cards, []);
   assert.equal(pointing.message, message);
+  // With nothing left after the drop, a next step: ask about it here, or sales (r6: not a dead end).
+  const brokenLink = "Sorry, that link isn't opening for you. Tell me what you'd like to know about it, or Sia Huat sales can help (details below).";
   const onlyPointing = await brokenTurn(fakeClient([answer({ message: "The card below has the same details.", card_ids: ["E910076"] })]).client);
   assert.equal(onlyPointing.showContact, true);
-  assert.match(onlyPointing.message, /Sia Huat sales can help/);
-  // A cards-only answer with nothing left after the drop points to sales instead.
+  assert.equal(onlyPointing.message, brokenLink);
   const cardsOnly = await brokenTurn(fakeClient([answer({ message: "", card_ids: ["E910076"] })]).client);
   assert.deepEqual(cardsOnly.cards, []);
   assert.equal(cardsOnly.showContact, true);
-  assert.match(cardsOnly.message, /Sia Huat sales can help/);
+  assert.equal(cardsOnly.message, brokenLink);
 });
 
 const choice = (body: Anthropic.MessageCreateParamsNonStreaming) => (body.tool_choice as { type: string }).type;

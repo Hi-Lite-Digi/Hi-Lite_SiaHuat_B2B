@@ -121,7 +121,8 @@ export function AgentChat() {
       if (sessionId.current !== session) return;
       setItems((current) => [...current, {
         id: nextId.current++, role: "assistant", time: timeLabel(), showContact: true, pdf: enquiryRef.current.lines.length > 0,
-        text: `Sorry, something went wrong on my side. Please try again, or reach Sia Huat sales at ${SALES_CONTACT.phone} or ${SALES_CONTACT.email}.`,
+        // No error tone (owner, 2026-09-30: a reply that gives up looks like a broken system): ask for a resend; the contact block shows below.
+        text: "Sorry, my reply didn't come through. Could you send that again? Sia Huat sales can also help (details below).",
       }]);
     } finally {
       if (sessionId.current === session) {

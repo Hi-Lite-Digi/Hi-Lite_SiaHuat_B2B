@@ -67,7 +67,10 @@ const finalAnswerSchema = z.object({
 });
 const CARDS_ONLY_MESSAGE = "Here are some options.";
 const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty message, card_ids, chips and show_contact. Answer with that JSON only.";
-const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
+// Every sentence was unconfirmed and removed: say so and give a next step, not a dead end (r6).
+const NOTHING_LEFT_MESSAGE = "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).";
+// The answer was only the card whose link the customer says doesn't open (exam 4, c08).
+const BROKEN_LINK_MESSAGE = "Sorry, that link isn't opening for you. Tell me what you'd like to know about it, or Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
 // A cut with nothing looked up: 2 rescues in a local check said "Sia Huat does carry griddles" from no lookup, and one said
 // "Sorry, got it: 2 ..." for an add that never ran (r6 skeptic).
@@ -543,7 +546,7 @@ export async function runAgentTurn(input: {
       const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
       // With every card dropped, the words pointing at them go too (r3 c08-stress idx 5: "the card below carries the same details").
       const message = answer.card_ids.length && !kept.length ? withoutCardPointers(answer.message) : answer.message;
-      if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: NOTHING_LEFT_MESSAGE, show_contact: true };
+      if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: BROKEN_LINK_MESSAGE, show_contact: true };
       return withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused);
     };
     let final = result.final && await withEarlierCards(trimCards(result.final));
