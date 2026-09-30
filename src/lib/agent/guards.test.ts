@@ -673,6 +673,9 @@ test("the removal line replaces only a removal whose line is still on the enquir
     "That change isn't on your enquiry yet.");
   assert.equal(withoutEnquiryClaims("I've removed it and I'll add 2 more plates now.", { lines: [line("RS-J1009-7", 2)], changes: [{ action: "remove", code: "BTS-8026D" }], seen: shop }),
     "That change isn't on your enquiry yet.");
+  // A clear that ran this turn removed every line, so a line added back afterwards isn't "still on" the enquiry.
+  assert.equal(withoutEnquiryClaims("Removed the Safico torch.", { lines: [line("BTS-8026D", 2)], changes: [{ action: "clear", code: null }, added("BTS-8026D")], seen: shop }),
+    "That change isn't on your enquiry yet.");
 });
 
 test("sums, GST, questions about what the customer wants and promises that wait are not enquiry claims", () => {

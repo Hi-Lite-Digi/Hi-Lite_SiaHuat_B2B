@@ -496,9 +496,10 @@ function fixedLine(claim: string, facts: ClaimFacts, unclaimed: string) {
     const alone = removals.length === parts.length && !addWording.test(claim) && !onEnquiryWording.test(claim);
     // Every named line, not one: "Removed the HET-4 and set the HET-6 to 3" stays one clause, and the HET-6 on the enquiry
     // doesn't keep the HET-4 that was removed. A removal that ran for an item the claim doesn't name may be the one it means
-    // ("Removed it and set the HET-6 to 3"), so it rules the removal line out too.
+    // ("Removed it and set the HET-6 to 3"), so it rules the removal line out too, and so does a clear, which removed them all.
     const named = removals.flatMap((clause) => pointedBy(clause, claimCards(facts)));
-    const unnamedRemoval = facts.changes.some(({ action, code }) => action === "remove" && code !== null && !named.some((card) => same(card.code, code)));
+    const unnamedRemoval = facts.changes.some(({ action, code }) => action === "clear"
+      || (action === "remove" && code !== null && !named.some((card) => same(card.code, code))));
     const kept = named.length > 0 && !unnamedRemoval && named.every((card) => facts.lines.some((line) => same(line.code, card.code)));
     return alone && kept ? NOT_REMOVED_LINE : NOT_ON_ENQUIRY;
   }
