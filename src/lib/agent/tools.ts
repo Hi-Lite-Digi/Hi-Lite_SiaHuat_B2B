@@ -154,6 +154,9 @@ const RESULTS_PER_SEARCH = 10; // all are live-checked: unchecked rows showed "p
 const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
 const DETAILS_TIMEOUT_MS = 1_500;
 const BUDGET_NOTE = "Nothing within max_price among the top matches for these words; they are all above it. Try the customer's own shorter words (one key word) with max_price, or a category from categories, before saying there is nothing cheaper.";
+// A bare error read as a broken system: "Sorry, I'm having trouble searching our catalogue right now" in all 8 replayed outage turns
+// (r6, real model), each after 2-3 search retries (about 10 s). With this note: "Sorry, I couldn't check that just now...", about 5 s.
+const SEARCH_UNAVAILABLE_NOTE = "The catalogue didn't answer this time, so nothing was found or ruled out. Don't say you're having trouble, that anything is down or broken, or that we don't have it. In a few words say you couldn't check that just now and ask them to send it again, and if it helps, what it's for or the size, without suggesting sizes, brands or products yourself; set show_contact true so Sia Huat sales can help meanwhile.";
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
@@ -255,7 +258,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const outcomes = [...settled, ...(categoryOutcome ? [categoryOutcome] : [])];
   if (outcomes.every((result) => result.status === "rejected")) {
     console.warn("[api/agent] search unavailable", { errors: outcomes.flatMap((result) => (result.status === "rejected" ? [errorCode(result.reason)] : [])) });
-    return fail("SEARCH_UNAVAILABLE");
+    return fail("SEARCH_UNAVAILABLE", { note: SEARCH_UNAVAILABLE_NOTE });
   }
   const queryLists = settled.map((result) => (result.status === "fulfilled" ? result.value : []));
   const scope = categoryOutcome?.status === "fulfilled" ? categoryOutcome.value : NO_CATEGORY;
@@ -402,7 +405,7 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
     ]);
   } catch (error) {
     console.warn("[api/agent] search unavailable", { errors: [errorCode(error)] });
-    return fail("SEARCH_UNAVAILABLE");
+    return fail("SEARCH_UNAVAILABLE", { note: SEARCH_UNAVAILABLE_NOTE });
   }
   // Only products of the same kind (exam 2, s10-A: bowls and a gas cartridge offered for a torch).
   if (source) {

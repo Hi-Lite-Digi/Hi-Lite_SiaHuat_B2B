@@ -120,6 +120,13 @@ test("details already known this turn are kept and not looked up again", async (
   assert.equal(deps.calls.some((call) => call.startsWith("details:")), false);
 });
 
+// r6 (real model, 8 of 8 outage turns): a bare error became "Sorry, I'm having trouble searching our catalogue right now".
+function assertOutageNote(outcome: ToolOutcome) {
+  const note = (JSON.parse(outcome.content) as { note?: string }).note ?? "";
+  assert.match(note, /couldn't check that just now/);
+  assert.match(note, /without suggesting sizes, brands or products yourself/);
+}
+
 test("search outage is reported as a tool error", async (t) => {
   t.mock.method(console, "warn", () => undefined);
   const deps = fakeDeps([blowtorch]);
@@ -127,6 +134,7 @@ test("search outage is reported as a tool error", async (t) => {
   const outcome = await runTool("search_catalogue", { queries: ["torch"] }, context(deps));
   assert.equal(outcome.isError, true);
   assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
+  assertOutageNote(outcome);
 });
 
 test("a search outage logs error codes only", async (t) => {
@@ -528,6 +536,7 @@ test("search is unavailable only when every query failed after its retry", async
   const outcome = await runTool("search_catalogue", { queries: ["torch", "blow torch"] }, context(deps));
   assert.equal(outcome.isError, true);
   assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
+  assertOutageNote(outcome);
   assert.deepEqual(Object.fromEntries(attempts), { torch: 2, "blow torch": 2 });
 });
 
@@ -546,6 +555,7 @@ test("find_alternatives retries once before reporting the search as unavailable"
   attempts = 0;
   const outcome = await runTool("find_alternatives", { stock_id: "970S" }, context(deps));
   assert.match(outcome.content, /SEARCH_UNAVAILABLE/);
+  assertOutageNote(outcome);
   assert.equal(attempts, 2);
 });
 
