@@ -1121,7 +1121,9 @@ test("a 'we don't have it' needs two searches and a found category, and is only 
   assert.deepEqual(unbacked.safety, []);
   assert.equal(unbacked.style.filter((issue) => issueCode(issue) === "ABSENCE").length, 1);
   assert.deepEqual(absenceOf(boxed, [search({ queries: ["dining set", "cutlery set"], category: "table-setting sets", categoryFound: true })]), []);
-  assert.equal(absenceOf("I'm not finding the GN pan trolley.").length, 1);
+  // A search-scoped wording reports this turn's search (see the r6 area N test below). runs-new2 s05-A: a known false absence (Cambro
+  // UGNPR11F18-480 exists) that the tools-off repair couldn't fix anyway.
+  assert.deepEqual(absenceOf("I'm not finding the GN pan trolley."), []);
   assert.deepEqual(absenceOf("Sorry, we don't sell mangoes - we're a kitchen and F&B equipment supplier."), []);
   assert.equal(absenceOf("We don't sell F&B-grade vacuum sealers of that size.").length, 1);
   const torch = claimReview("Mastrad torch is out of stock, no direct substitute for it.");
@@ -1133,6 +1135,41 @@ test("'specifically' is not read as 'spec': the 'we don't have it' is still chec
   // runs-new3 c03-stress T1 slipped through this way.
   assert.equal(absenceOf("We don't have a tawa specifically.").length, 1);
   assert.deepEqual(absenceOf("I don't have a spec on that."), []);
+});
+
+test("'I couldn't find X' and 'we don't carry X by that name' are not repaired as unbacked, but a range 'we don't carry X' still is (r6 area N)", () => {
+  // The area-N baseline: 8 of 13 ABSENCE repairs only reworded "I couldn't find X in our catalogue" to "I couldn't find X among what
+  // I found", a Claude round each, and the prompt's "we don't list anything by that name" was repaired when said with 'carry'.
+  for (const message of [
+    "Sorry, we don't list anything called a 'prata pan'.",
+    "We don't list anything called 'tawa' by name, but these crepe pans do the same flat-pan job.",
+    "We don't list anything under 'chapati press' by that name.",
+    "I couldn't find a kueh tutu mould - our closest match is the chui kuay mould.",
+    "I couldn't find a standalone takoyaki pan, but I did find the Iwatani takoyaki cooker.",
+    "I couldn't find a kueh tutu mould specifically in our catalogue.",
+    "I haven't found an actual Japan-made knife brand in our catalogue.",
+    "We don't carry a dedicated 'idli steamer' by that name.",
+    "We don't have a jar labelled 'kaya jar' specifically.",
+  ]) assert.deepEqual(absenceOf(message), [], message);
+  for (const message of [
+    // 'list' is checked like 'carry', and a name in another clause doesn't scope it.
+    "We don't list tandoor ovens specifically.",
+    // proto1 takoyaki T0: false (1209-01 CAST IRON OCTOPUS BALL PLATE), and no guard saw it.
+    "We don't list a standalone takoyaki pan/plate, but we do have the Iwatani Entako II Cassette Gas Takoyaki Cooker.",
+    // base2 angkukueh T1: false (161 ALUM CHUI KUAY MOULD is a traditional kueh mould).
+    "We don't list an ang ku kueh mould specifically - no traditional kueh mould in our catalogue.",
+    "We don't carry tandoor ovens, or anything called 'tandoor'.",
+    // A range summary beside it (base2 murtabak T1 draft; base1 mooncake T1 draft; runs-new3 c03-stress T1; runs-new5 c05-B T6).
+    "I couldn't find a dedicated gas griddle in the results - the griddles we carry (PA10313, PA10301) are all electric.",
+    "I couldn't find a wooden mooncake mould in our catalogue - our cake/pastry moulds are mainly silicone or aluminium.",
+    "We don't have a knife specifically labeled 'Damascus' pattern in stock - our chef knives are German steel 1.4116 blades (Atlantic Chef brand).",
+    "I couldn't find a bundled plate+bowl+glass 'dining set' - dinnerware here is sold piece by piece.",
+    "We don't carry tandoor ovens.",
+    "We don't carry tandoor ovens, and I couldn't find one.",
+    "I couldn't find a tandoor, so no substitute either.",
+  ]) assert.equal(absenceOf(message).length, 1, message);
+  // Backed by two queries and a found category, a range 'we don't list' passes.
+  assert.deepEqual(absenceOf("We don't list tandoor ovens specifically.", [search({ queries: ["tandoor oven", "clay oven"], category: "ovens", categoryFound: true })]), []);
 });
 
 test("an out-of-stock claim needs every product it points at checked live as out of stock", () => {
@@ -1256,8 +1293,7 @@ test("range wordings the round-4 guard missed need a backing search (exam 4)", (
   for (const [message, expected] of [
     // c03-A idx 8: "all our" with six words before "are".
     ["All our in-stock chef knives right now are Taiwan (Atlantic Chef) or Germany (Giesser) brands.", "safety CLAIM"],
-    // c03-A idx 6 and c03-persona idx 4: "haven't found", "don't have anything".
-    ["I haven't found an actual Japan-made knife brand in our catalogue.", "style ABSENCE"],
+    // c03-persona idx 4: "don't have anything". c03-A idx 6's "haven't found" is search-scoped: a Japan brand seen disproves it (below).
     ["I don't have anything actually made in Japan in the catalogue - we do have the Atlantic Chef 'Japanese Chef Knife' style (German steel 1.4116, POM handle), but Atlantic Chef is a Taiwan brand, so the 'Japanese' in the name refers to the knife style, not its origin.", "style ABSENCE"],
     // c04-persona idx 3, s09-B idx 1, c07-stress idx 4: rankings of the range, reworded but never removed.
     ["That's the one for home use we've got - the Kenwood Lite is actually quite versatile: 5 speeds plus pulse, and comes with both beaters and a dough kneader attachment, so it handles both baking (cakes, cream) and cooking tasks (batters, light dough).", "style CLAIM"],
@@ -1331,6 +1367,9 @@ test("a 'we don't have it' that a product seen this turn disproves names that pr
   assert.match(disproved("I haven't found an actual Japan-made knife brand in our catalogue.", global).join(" "), /GF-34 \(CHEF'S KNIFE\) came up/);
   assert.equal(issueCode(disproved("I haven't found an actual Japan-made knife brand in our catalogue.", global)[0]), "ABSENCE");
   assert.equal(removeClaims("I haven't found an actual Japan-made knife brand in our catalogue.", [], global), "I haven't found an actual Japan-made knife brand in our catalogue.");
+  // A product seen still disproves a name-scoped or search-scoped wording (r6 area N).
+  assert.equal(disproved("We don't list anything called a 'rice dispenser'.", rice).length, 1);
+  assert.equal(disproved("We don't carry anything called a 'rice dispenser'.", rice).length, 1);
   const chef = originSeen([{ stock_id: "GC-1", name: "CHEF KNIFE 20CM", available_quantity: 3 }, "JAPAN"]);
   assert.equal(disproved("I couldn't find a Japanese chef knife in our range.", chef).length, 1);
   assert.equal(disproved("I don't have a Japan-made chef knife available right now.", chef).length, 1);
