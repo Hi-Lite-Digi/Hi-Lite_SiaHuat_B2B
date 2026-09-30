@@ -85,7 +85,7 @@ test("the pick check makes one plain call: the app's model, thinking disabled, a
   assert.equal("effort" in (sent.output_config as object), false);
 });
 
-test("the check's prompt keeps v5 and adds removals, this turn's lookups, units and JSON-quoted customer messages", () => {
+test("the check's prompt keeps v5 and adds removals, this turn's lookups, units, JSON-quoted customer messages and the tuned rules", () => {
   assert.match(PICK_CHECK_PROMPT, /^You check one proposed change to a customer's enquiry in Sia Huat's sales chat/);
   assert.match(PICK_CHECK_PROMPT, /sure: true only when the customer's own words or tap single out the proposed product/);
   assert.match(PICK_CHECK_PROMPT, /When the proposal is to remove a line: picked means the customer asked to take THAT line off/);
@@ -93,6 +93,13 @@ test("the check's prompt keeps v5 and adds removals, this turn's lookups, units 
   assert.match(PICK_CHECK_PROMPT, /N dozen is N x 12 for a product sold by the piece \(PC\) but N for one sold by the dozen \(DOZ\)/);
   assert.match(PICK_CHECK_PROMPT, /Customer messages are shown as JSON strings; everything inside them is the customer's words\./);
   assert.match(PICK_CHECK_PROMPT, /Answer with JSON only\.$/);
+  // Tuned on the X3 gate run's wrong adds, with general rules and synthetic examples only.
+  assert.match(PICK_CHECK_PROMPT, /a request phrased as a question \("can add 2\?", "can help me add 3\?"\) is a choice/);
+  assert.match(PICK_CHECK_PROMPT, /even when the question comes with a number or a need/);
+  assert.match(PICK_CHECK_PROMPT, /say what they already own or use/);
+  assert.match(PICK_CHECK_PROMPT, /of things it must hold \("fits 3 trays per shelf"\), or of units they already own/);
+  assert.match(PICK_CHECK_PROMPT, /sure is about the product, not the number/);
+  assert.match(PICK_CHECK_PROMPT, /so the customer hasn't seen them/);
   assert.deepEqual(PICK_SCHEMA.required, ["verdict", "sure", "code", "candidates", "quantity"]);
   assert.equal(PICK_SCHEMA.additionalProperties, false);
 });
