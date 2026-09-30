@@ -29,6 +29,10 @@ export const MAX_TOOL_ROUNDS = 3;
 export const AGENT_EFFORT = "low" as const;
 const TURN_DEADLINE_MS = 45_000;
 const FALLBACK_RESERVE_MS = 10_000;
+// The backup reply alone: its search and live checks took 1-2 s. The rest of the reserve goes to the call that answers (owner's chat,
+// 2026-09-30: "prata pan maybe" got the backup reply when a slow answer call was cut at 35 s with 10 s still held for it). It assumes
+// the backup reply makes no Claude call: if one is ever added there, this must grow.
+const STAND_IN_MS = 4_000;
 // Enquiry re-checks get at least this long even when the work budget is smaller. The time comes out of the
 // backup reply's reserve; with a nearly spent budget the turn runs slightly over rather than time out every line.
 const VERIFY_FLOOR_MS = 1_000;
@@ -311,8 +315,10 @@ export async function runAgentTurn(input: {
   model: string;
   /** The whole turn's remaining time, backup reply included. */
   deadlineMs?: number;
-  /** The last part of deadlineMs, kept back for the backup reply. */
+  /** The last part of deadlineMs, kept back from lookups for the answer call and the backup reply. */
   fallbackReserveMs?: number;
+  /** The last part of the reserve, kept for the backup reply alone. */
+  standInMs?: number;
   /** With this little work time left after a tool round, the next Claude call must answer without tools. */
   lastCallMs?: number;
   /** The pick check update_enquiry asks (tests pass a fake); by default the app's own model through this turn's client. */
@@ -332,6 +338,10 @@ export async function runAgentTurn(input: {
   const workMs = Math.max(1, Math.floor(deadlineMs - fallbackReserveMs));
   const deadline = AbortSignal.timeout(workMs);
   const timeLeft = () => workMs - (performance.now() - started);
+  // The call that answers (a forced answer, the repair) may run on into the reserve, up to here.
+  const answerMs = Math.max(workMs, Math.floor(deadlineMs - Math.min(input.standInMs ?? STAND_IN_MS, fallbackReserveMs)));
+  const answerBy = AbortSignal.timeout(answerMs);
+  const answerLeft = () => answerMs - (performance.now() - started);
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const recent = recentCustomerTexts(request);
   const picks = pickEvidence(request.history, request.event);
@@ -427,7 +437,7 @@ export async function runAgentTurn(input: {
       // After the tool results (or the nudge): every user message this loop sends has array content.
       if (note) (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: note });
       rounds += 1;
-      const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", deadline);
+      const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", forceAnswer ? answerBy : deadline);
       if (response.stop_reason === "tool_use") {
         const before = { codes: new Set([...ctx.refused, ...ctx.kept].map((code) => code.toLowerCase())), keys: new Set(ctx.refusedKeys) };
         const { results, done } = await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline);
@@ -467,7 +477,7 @@ export async function runAgentTurn(input: {
     const triedCodes = new Set<string>();
     // Run before `allowed` is read; a lookup cut short by the deadline leaves the answer as it was.
     const withEarlierCards = (answer: FinalAnswer) => beforeDeadline(
-      attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, timeLeft, triedCodes), deadline,
+      attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, answerLeft, triedCodes), answerBy,
     ).catch(() => answer);
     // Dropped before the lookup and the review, so no re-check, REPEAT or LINK repair is spent on them: a card whose link the customer
     // says doesn't open (exam 4, c08), a changed item's card they've seen (exam 3, c02-A T18) and a set shown twice (exam 4). A
@@ -525,7 +535,7 @@ export async function runAgentTurn(input: {
         role: "user",
         content: `[Context from the system, not the customer] Your reply was not sent. Fix these problems and answer again in the same JSON format without calling tools:\n- ${problems.join("\n- ")}`,
       });
-      final = await callClaude(client, model, messages, "none", deadline)
+      final = await callClaude(client, model, messages, "none", answerBy)
         .then((response) => readFinal(response) ?? Promise.reject(new Error("AGENT_INVALID_ANSWER")))
         .catch((error: unknown) => {
           if (!tidiedFirst) throw error;
