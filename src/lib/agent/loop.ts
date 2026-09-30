@@ -579,10 +579,10 @@ export async function runAgentTurn(input: {
     let repairCauses: string[] = [];
     let repaired = false;
     let repairFailed: string | null = null;
-    if (final && review && (review.safety.length || review.style.length) && !unfixable(review.safety, fixers).length && timeLeft() < STYLE_REPAIR_MIN_MS) {
+    if (fixable && review && timeLeft() < STYLE_REPAIR_MIN_MS) {
       // No time for a repair, which the deadline would cut off for the backup reply: code fixes the answer and it is sent.
       repairCauses = [...review.safety, ...review.style].map(issueCode);
-      final = finish(final, review); // review (cards, chips) stays
+      final = finish(fixable, review); // review (cards, chips) stays
     } else if (!final || !review || review.safety.length || review.style.length) {
       const problems = review ? [...review.safety, ...review.style] : [INVALID_ANSWER_ISSUE];
       repairCauses = review ? problems.map(issueCode) : ["INVALID_ANSWER"];

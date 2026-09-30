@@ -141,6 +141,56 @@ test("the customer's item words drop filler and quantities", () => {
   assert.deepEqual(askedItem("hi got blender ah"), { label: "blender", naming: ["blender"] });
   assert.deepEqual(askedItem("need 2 commercial blenders pls"), { label: "commercial blenders", naming: ["blender"] });
   assert.deepEqual(askedItem("need damascus chef knife 3pcs"), { label: "damascus chef knife", naming: ["damascus", "chef", "knife"] });
+  // A size typed with a space keeps its number, and chat words ("I'll", "recommendations", "for my shop") name nothing (review D5+D6).
+  assert.deepEqual(askedItem("frying pan 24 cm"), { label: "frying pan 24cm", naming: ["frying", "pan", "24cm"] });
+  assert.deepEqual(askedItem("I'll need a crepe pan").naming, ["crepe", "pan"]);
+  assert.deepEqual(askedItem("I want some recommendations for plates").naming, ["plate"]);
+  assert.deepEqual(askedItem("ok. got wok? need 4 for zichar").naming, ["wok"]);
+  assert.deepEqual(askedItem("got cordless 3 in 1 blender").naming, ["cordless", "blender"]); // "3 in 1" is no 3-inch size
+});
+
+test("'stock' and 'delivery' name products too: 'stock pot' is no chilli pot, and 'got stock?' is still shop talk (review D5+D6)", async () => {
+  const stockPot = product({ stock_id: "SP-30", name: "Stainless Steel Stock Pot", third_category: "Stock pots" });
+  const chilliPot = product({ stock_id: "K197", name: "PLC CHILLI POT", third_category: "Condiment pots" });
+  const canvasBag = product({ stock_id: "30351", name: "ROUND CANVAS BAG", third_category: "Bags" });
+  for (const searchText of ["stock pot", "got stock pot?"]) {
+    const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([stockPot, chilliPot]) });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["SP-30"], searchText);
+  }
+  const bag = await buildFallbackReply({ searchText: "delivery bag", lines: [], deps: rankedDeps([canvasBag]) });
+  assert.deepEqual(bag.cards, []);
+  for (const searchText of ["blow torch got stock?", "blow torch in stock?", "blow torch can delivery?"]) {
+    const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([torch]) });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"], searchText);
+  }
+});
+
+test("a size typed with a space, or a word about the shop, still finds the item (review D5+D6)", async () => {
+  const crepe = product({ stock_id: "CR-24", name: "Crepe Pan Ø24cm", third_category: "Crepe pans" });
+  for (const searchText of ["24 cm crepe pan", "crepe pan for my shop pls", "I'll need a crepe pan"]) {
+    const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([crepe]) });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["CR-24"], searchText);
+  }
+});
+
+test("a brand word counts only when the whole brand is typed: 'chef knife' is no Atlantic Chef oyster opener (review D5+D6)", async () => {
+  const oyster = product({ stock_id: "9100G15", name: "Atlantic Chef Oyster Opener/Knife", brand: "ATLANTIC CHEF", third_category: "Oyster knives" });
+  const chefKnife = product({ stock_id: "1201F05", name: "Atlantic Chef Chef Knife 21cm", brand: "ATLANTIC CHEF", third_category: "Chef knives" });
+  const reply = await buildFallbackReply({ searchText: "chef knife", lines: [], deps: rankedDeps([oyster, chefKnife]) });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["1201F05"]);
+  const branded = await buildFallbackReply({ searchText: "atlantic chef knife", lines: [], deps: rankedDeps([oyster]) });
+  assert.deepEqual(branded.cards.map((card) => card.stock_id), ["9100G15"]);
+});
+
+test("a message about Claire is no product ask: 'you are a tool' shows no leaf tool (review D5+D6)", async () => {
+  const leafTool = product({ stock_id: "CH3", name: "STAINLESS STEEL LEAF TOOL", third_category: "Garnishing tools" });
+  for (const searchText of ["you are a tool", "you're a tool", "u r a tool"]) {
+    const deps = rankedDeps([leafTool]);
+    const reply = await buildFallbackReply({ searchText, lines: [], deps });
+    assert.deepEqual(deps.calls, [], searchText);
+    assert.deepEqual(reply.cards, [], searchText);
+    assert.doesNotMatch(reply.message, /tool/i, searchText);
+  }
 });
 
 test("an item asked for in other words never gets 'couldn't find', and an insult is never named back (r6 skeptic a)", async () => {
@@ -167,10 +217,12 @@ test("'want' is not a no: a wanted item is searched, 'dont want' and 'didn't add
 });
 
 test("'or not' asks about the item before it; 'added or not' and a GST ask search nothing (r6 skeptic c)", async () => {
-  const deps = rankedDeps([torch]);
-  const reply = await buildFallbackReply({ searchText: "hi got blow torch or not?", lines: [], deps, seen: checked(torch) });
-  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
-  assert.deepEqual(deps.calls, []);
+  for (const searchText of ["hi got blow torch or not?", "blow torch or not ah?"]) {
+    const deps = rankedDeps([torch]);
+    const reply = await buildFallbackReply({ searchText, lines: [], deps, seen: checked(torch) });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"], searchText);
+    assert.deepEqual(deps.calls, [], searchText);
+  }
   for (const searchText of ["added or not", "got gst inside or not"]) {
     const quiet = rankedDeps([torch]);
     const none = await buildFallbackReply({ searchText, lines: [], deps: quiet });

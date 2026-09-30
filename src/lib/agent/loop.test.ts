@@ -230,6 +230,26 @@ test("an answer code can fix whose repair fails is sent fixed, not as the backup
   assert.equal(reply.message, "That one is the listed price. Which size do you need?");
 });
 
+test("an answer code can fix whose repair brings a made-up card is sent fixed (r6 T-R4)", async () => {
+  const { client } = fakeClient([answer({ message: "That one is $99. Which size do you need?" }), answer({ message: "Try this.", card_ids: ["FAKE-1"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "That one is the listed price. Which size do you need?");
+  assert.deepEqual(reply.cards, []);
+});
+
+test("an answer code can fix whose repair is cut by the answer deadline is sent fixed (r6 T-R4)", async () => {
+  // Work time 9 s, 1 s over the repair's 8 s floor, so the repair is tried; it hangs until the answer deadline at 10 s cuts it.
+  const started = performance.now();
+  const reply = await within(runAgentTurn({
+    request: request({}), deps: deps(), client: answersThenHangs([answer({ message: "That one is $99. Which size do you need?" })]),
+    model: "claude-sonnet-5", deadlineMs: 14_000, fallbackReserveMs: 5_000,
+  }), 12_000);
+  assert.ok(performance.now() - started >= 9_500, "the repair was not tried");
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "That one is the listed price. Which size do you need?");
+});
+
 test("a made-up card next to a style problem still gets the backup reply after the repair", async () => {
   const { client } = fakeClient([
     answer({ message: "Noted. Try this.", card_ids: ["FAKE-1"] }),
