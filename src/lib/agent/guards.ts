@@ -646,8 +646,10 @@ const CLAIM_FIXES = {
   budget: "No search this turn listed a whole priced category. Say what you found under the budget so far and offer to check the whole range.",
   stock: "Its stock wasn't checked live this turn, or the check says it's in stock. Describe stock only as the tool result says.",
 };
-// The old wording ("in the searches you ran") invited search narration (exam 4, s03-B idx 4).
-const ABSENCE_FIX = "First check this turn's results for it. If it isn't there, say you couldn't find it (without describing your searches) rather than that Sia Huat doesn't carry it; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead.";
+// The old wording ("in the searches you ran") invited search narration (exam 4, s03-B idx 4). "Say you couldn't find it" left bare
+// "I couldn't find it" replies (owner's chat, 2026-09-30: "When the AI gives up so easily it looks like the system is broken"); the
+// name-scoped wording is what the prompt asks for and what the absence check lets through (r6 area N).
+const ABSENCE_FIX = "First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it: say we don't list anything called '<the customer's words>' (without describing your searches), and keep the closest products you showed; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead.";
 
 // Country words as the catalogue's 'Country of Brand Origin' spells them ("china" is left out: bone china is a material).
 const COUNTRIES: Record<string, string> = {

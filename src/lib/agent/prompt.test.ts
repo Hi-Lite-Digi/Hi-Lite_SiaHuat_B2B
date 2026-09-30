@@ -52,6 +52,18 @@ test("Claire never claims an item isn't carried, nothing fits a budget or a list
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /\(total_found\)/);
 });
 
+test("equipment named in words the catalogue may not use gets the closest products and one question, or sales (r6 area N)", () => {
+  // Owner's chat, 2026-09-30: "if it searches and cannot find something similar to a prata pan, it can apologise and ask for more
+  // description." In the area-N runs 4-5 of 10 first replies to such names had no card and a bare "I couldn't find it".
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- Equipment the customer names in words the catalogue may not use")) ?? "";
+  for (const words of ["not food, which Sia Huat doesn't sell", "the item's usual English name", "Don't search their words again",
+    "search once more with other words for the job", "we don't list anything called '<their exact words>'",
+    "closest products that do the same job as cards with a one-line reason each", "one short question about one thing", "set show_contact true",
+    "source it", "Never reply with only 'I couldn't find it'", "show them now"]) {
+    assert.ok(line.includes(words), words);
+  }
+});
+
 test("Claire searches with the customer's words and size before saying there is no substitute", () => {
   const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.includes("use find_alternatives")) ?? "";
   assert.ok(line.includes("If find_alternatives returns nothing close, search with the product type and size in the customer's words (e.g. 'stock pot 12L') before saying there is no substitute. Check size and capacity against what the customer needs."));

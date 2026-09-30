@@ -1451,8 +1451,10 @@ test("find_alternatives backs 'no substitute' (exam 4, s03-B idx 1: repaired aft
   assert.deepEqual(absenceOf("No close substitute, and I couldn't find a replacement either.", [search({ queries: [], alternativesFor: "F46700" })]), []);
 });
 
-test("the absence repair asks Claude to check this turn's results first and not to describe its searches", () => {
-  assert.match(absenceOf("We don't carry boxed dining sets.")[0], /First check this turn's results for it\. If it isn't there, say you couldn't find it \(without describing your searches\) rather than that Sia Huat doesn't carry it/);
+test("the absence repair asks Claude to check this turn's results first, then to say we don't list anything by the customer's name and keep the closest products", () => {
+  assert.ok(absenceOf("We don't carry boxed dining sets.")[0].endsWith(" First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it: say we don't list anything called '<the customer's words>' (without describing your searches), and keep the closest products you showed; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead."));
+  // The wording it asks for is name-scoped, so the repaired reply isn't flagged again (r6 area N).
+  assert.deepEqual(absenceOf("Sorry, we don't list anything called a 'boxed dining set'."), []);
 });
 
 // r4 c03-stress idx 7: the P-16HD (35 in stock) was in the results, but the reply's card was the 13103-1601 (2 left).
