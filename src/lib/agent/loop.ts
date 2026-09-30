@@ -5,7 +5,7 @@ import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
 import { CHIP_PREFIX, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
-import { enquiryTotals, listItemCount, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
+import { enquiryTotals, gstWords, listItemCount, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, errorCode, keepBest, lookupDetails, refusalKey, runTool, startPickCheck, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, keepBest, lookupDetails, refusalKey, runTool, startPickCheck, totalsForClaude, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 import { modelPickCheck, pickCheckCache, pickView, type PickCheck } from "./verify";
 
 export type AgentClient = {
@@ -123,7 +123,7 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
   const unchecked = uncheckedNote(ctx.uncheckedCodes);
   // The lines the browser still holds, as the customer has them (exam 3, c08-stress T12: Claude took one for a removal).
   const uncheckedLines = request.enquiry.filter((line) => ctx.uncheckedCodes.some((code) => same(code, line.stockId))).map((line) => ({ code: line.stockId, quantity: line.quantity }));
-  const enquiry = { lines: ctx.lines, totals: enquiryTotals(ctx.lines), ...(uncheckedLines.length ? { unchecked_lines: uncheckedLines } : {}) };
+  const enquiry = { lines: ctx.lines, totals: totalsForClaude(ctx), ...(uncheckedLines.length ? { unchecked_lines: uncheckedLines } : {}) };
   blocks.push({
     type: "text",
     text: `[Context from the system, not the customer] Current enquiry: ${JSON.stringify(enquiry)}${unchecked ? `\n${unchecked}` : ""}${notes.length ? `\nEnquiry changes since last turn: ${notes.join(" ")}` : ""}\nItem codes already shown as cards: ${shown}`,
@@ -359,6 +359,8 @@ export async function runAgentTurn(input: {
     kept: [],
     refusedKeys: new Set(),
     pickFast: 0,
+    // This text or the one before it: a follow-up ("ard 37 like that correct anot") comes right after the GST ask.
+    gstAsked: recent.some((text) => gstWords.test(text)),
   };
   // It must leave the last Claude call its time: with less than a second to spare it makes no call and update_enquiry asks.
   const check = input.pickCheck?.(ctx) ?? modelPickCheck({
@@ -454,7 +456,8 @@ export async function runAgentTurn(input: {
     }
     if (!result) throw new Error("AGENT_NO_ANSWER");
 
-    const currentAllowed = () => allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal);
+    // Read when called: removing an unchecked line mid-turn makes the whole enquiry checked, so its total with GST is allowed again.
+    const currentAllowed = () => allowedCents(ctx.seen, ctx.lines, enquiryTotals(ctx.lines).grandTotal, !ctx.uncheckedCodes.length);
     const previousCodes = picks.replies.at(-1)?.cards.map((card) => card.code) ?? [];
     const triedCodes = new Set<string>();
     // Run before `allowed` is read; a lookup cut short by the deadline leaves the answer as it was.

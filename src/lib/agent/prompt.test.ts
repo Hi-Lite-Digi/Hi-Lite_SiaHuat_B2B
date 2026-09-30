@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
+import { withGstCents } from "./enquiry";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 
 test("Claire's agent prompt carries the sales voice and the hard rules", () => {
@@ -16,16 +17,22 @@ test("Claire summarises the enquiry in one line instead of listing it", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("When asked what's in the enquiry, give a one-line summary (item count and total from the context); the enquiry bar shows the lines, so don't list them."));
 });
 
-test("Claire quotes the enquiry totals from the context, says they are before GST and never works out a GST amount", () => {
-  // exam 3, c09-persona T9-T12 and c10-stress T8-T10: the total with GST was refused again and again. Until the owner approves
-  // a computed estimate, Claire says the checkout shows it, once.
+test("Claire quotes the enquiry totals from the context, unless it lists unchecked lines", () => {
   // Not while it lists unchecked lines: those totals leave them out (the unchecked note says not to quote a total).
   assert.ok(CLAIRE_AGENT_PROMPT.includes("that a tool did not return in this turn; the totals in the Current enquiry context count, so quote them without a tool call, unless it lists unchecked lines."));
+});
+
+test("asked for an amount with GST, Claire gives code's estimate and never works one out herself", () => {
+  // Owner decision 2: exam 4, 18 of the 19 chats that asked about GST were refused. The own-figure wording cut MONEY repairs on
+  // r4 c09-stress idx 13 from 2 of 3 to 0 of 4; the last clause keeps "There's an unchecked line" from the customer.
   const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- GST:")) ?? "";
-  assert.ok(line.startsWith("- GST: prices, line totals and the enquiry total are before GST; 9% GST is added at checkout."));
-  assert.ok(line.includes("Don't work out an amount with GST yourself"));
-  assert.ok(line.includes("If they ask again, don't repeat the refusal"));
-  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /grandTotalWithGst/);
+  assert.ok(line.startsWith("- GST: prices, line totals and the enquiry total are before GST; 9% GST is added at checkout. Asked for an amount with GST, give the system's estimate straight away"));
+  for (const words of ["grandTotalWithGst", "gstOnTotal", "price_with_gst", "never write it back", "Never work out a GST amount yourself", "without mentioning checks or unchecked lines"]) {
+    assert.ok(line.includes(words), words);
+  }
+  // The example's figures are code's own for a neutral $50.00 total.
+  assert.ok(line.includes(`'About $${(withGstCents(50) / 100).toFixed(2)} with GST (GST $${((withGstCents(50) - 5000) / 100).toFixed(2)}); the checkout or Sia Huat's quote shows the exact amount.'`));
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /Don't work out an amount with GST yourself/);
 });
 
 test("the update_enquiry errors Claude must explain are named in the prompt, clearing and the pick check's included", () => {

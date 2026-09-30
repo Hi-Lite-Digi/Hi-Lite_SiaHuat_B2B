@@ -1528,6 +1528,68 @@ test("a code on the customer's enquiry that fits the phone pattern is never take
   assert.equal(reply.message, "3500-0018 is still on your enquiry. Yes, each product's store page has Add to Cart.");
 });
 
+// Owner decision 2: code works out the GST estimate (exam 4: 18 of the 19 chats that asked about GST were refused).
+const otherThing = product({ stock_id: "OTHER-1", name: "OTHER THING", list_price: 5 });
+const saficoTwo = [{ stockId: "BTS-8026D", quantity: 2 }];
+const ESTIMATE = "About $50.92 with GST (GST $4.20); the checkout or Sia Huat's quote shows the exact amount.";
+
+test("asked for the total with GST, Claude gets code's estimate in the context and the answer goes out after 1 call", async () => {
+  const { client, bodies } = fakeClient([answer({ message: ESTIMATE })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "total with gst how much" }, enquiry: saficoTwo }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.match(contextText(bodies[0]), /"grandTotalWithGst":50\.92,"gstOnTotal":4\.2/);
+  assert.equal(bodies.length, 1);
+  assert.equal(reply.message, ESTIMATE);
+  // The enquiry bar, the PDF and the backup reply keep the totals before GST.
+  assert.deepEqual(Object.keys(reply.enquiry.totals).sort(), ["grandTotal", "lineCount", "quantitiesByUom"]);
+});
+
+test("a follow-up to a GST question still gets the estimate; a total question two messages on does not", async () => {
+  const history = [{ role: "user" as const, content: "total with gst how much" }, { role: "assistant" as const, content: ESTIMATE }];
+  const followUp = fakeClient([answer({ message: "Yes, that's close: about $50.92 with GST." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: "ard 51 like that correct anot" }, history, enquiry: saficoTwo }), deps: deps(), client: followUp.client, model: "claude-sonnet-5" });
+  assert.match(contextText(followUp.bodies[0]), /"grandTotalWithGst":50\.92,"gstOnTotal":4\.2/);
+  const later = fakeClient([answer({ message: "It's $46.72 before GST." })]);
+  const laterHistory = [...history, { role: "user" as const, content: "ok noted" }, { role: "assistant" as const, content: "Anything else?" }];
+  await runAgentTurn({ request: request({ event: { type: "text", text: "total how much now" }, history: laterHistory, enquiry: saficoTwo }), deps: deps(), client: later.client, model: "claude-sonnet-5" });
+  assert.doesNotMatch(contextText(later.bodies[0]), /grandTotalWithGst/);
+});
+
+test("while a line is unchecked, a total with GST is sent back for a repair that names it", async () => {
+  // P3 eval: 2 of 3 drafts gave a figure with GST for the checked line only.
+  const fixed = "The checkout or Sia Huat's quote shows the exact amount with GST.";
+  const { client, bodies } = fakeClient([answer({ message: ESTIMATE }), answer({ message: fixed })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "total with gst how much" }, enquiry: [...saficoTwo, { stockId: "OTHER-1", quantity: 1 }] }),
+    deps: fakeDeps([safico, otherThing], { "OTHER-1": "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.doesNotMatch(contextText(bodies[0]), /grandTotalWithGst/);
+  assert.equal(bodies.length, 2);
+  assert.match(lastMessage(bodies[1]), /\$50\.92/);
+  assert.equal(reply.message, fixed);
+});
+
+test("an estimate given earlier goes out again on a plain total question", async () => {
+  // P3 eval, r4 c09-stress: "ok so final total how much ah, i tell boss" two turns after the estimate.
+  const message = "Total is $46.72 before GST, about $50.92 with GST (GST $4.20).";
+  const { client, bodies } = fakeClient([answer({ message })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "ok so final total how much ah" }, enquiry: saficoTwo }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 1);
+  assert.equal(reply.message, message);
+});
+
+test("removing the only unchecked line mid-turn allows the estimate afterwards", async () => {
+  const message = `Removed the other thing. ${ESTIMATE}`;
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", { action: "remove", stock_id: "OTHER-1" }), answer({ message })]);
+  const reply = await checkedTurn({
+    request: request({ event: { type: "text", text: "remove the other thing. then total with gst how much" }, enquiry: [...saficoTwo, { stockId: "OTHER-1", quantity: 1 }] }),
+    deps: fakeDeps([safico, otherThing], { "OTHER-1": "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.match(lastMessage(bodies[1]), /grandTotalWithGst\\":50\.92,\\"gstOnTotal\\":4\.2/);
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+  assert.equal(reply.enquiry.unchecked, undefined);
+});
+
 test("without an injected check, update_enquiry asks the turn's client: pickModel, thinking disabled, the check's prompt", async () => {
   const verdict = (value: Record<string, unknown>) => ({ ...answer({ message: "" }), id: "msg_check", content: [{ type: "text", text: JSON.stringify(value) }] }) as unknown as Anthropic.Message;
   const { client, bodies } = fakeClient([

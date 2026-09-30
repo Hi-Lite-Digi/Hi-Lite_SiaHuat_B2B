@@ -33,6 +33,27 @@ test("only live-checked prices and enquiry totals may appear as amounts", () => 
   assert.equal(removeAmounts("It's $99 now.", ["$99"]), "It's the listed price now.");
 });
 
+test("code's GST estimates may appear as amounts: a live-checked price and the enquiry total with GST, and the total's GST part", () => {
+  // Owner decision 2. Allowed whether or not the customer's words asked: "ok so final total how much ah, i tell boss", two turns after
+  // an estimate, had its right figure repaired away in 3 of 3 runs when the allowance waited on GST words.
+  assert.deepEqual(unverifiedAmounts("About $50.92 with GST (GST $4.20); the checkout or Sia Huat's quote shows the exact amount.", allowed), []);
+  assert.deepEqual(unverifiedAmounts("About $25.46 each with GST.", allowed), []);
+  // A cent off, and the unchecked $99 with GST, are not code's figures.
+  assert.deepEqual(unverifiedAmounts("About $50.93 with GST.", allowed), ["$50.93"]);
+  assert.deepEqual(unverifiedAmounts("That one is about $107.91 with GST.", allowed), ["$107.91"]);
+});
+
+test("while a line is unchecked, no total with GST is allowed, but a price with GST is", () => {
+  // The total leaves the unchecked line out, so its figure with GST would be for part of the enquiry (P3 eval: 2 of 3 drafts).
+  const partial = allowedCents(seen, lines, 46.72, false);
+  assert.deepEqual(unverifiedAmounts("About $50.92 with GST (GST $4.20), $25.46 each.", partial), ["$50.92", "$4.20"]);
+});
+
+test("a GST sum is not an enquiry claim", () => {
+  const facts = { lines, changes: [], seen };
+  assert.deepEqual(enquiryClaimIssues("Adding 9% GST, it comes to about $50.92.", facts), []);
+});
+
 test("amounts in SGD, dollars and 元 are checked like $ amounts", () => {
   for (const text of ["S$46.72", "SGD 23.36", "46.72 dollars", "23.36元"]) assert.deepEqual(unverifiedAmounts(text, allowed), [], text);
   for (const text of ["SGD 50.00", "50 dollars", "50元", "新币 50"]) assert.deepEqual(unverifiedAmounts(text, allowed), [text], text);

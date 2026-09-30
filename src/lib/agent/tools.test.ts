@@ -981,6 +981,26 @@ test("while a line is unchecked, update_enquiry results tell Claude not to quote
   assert.equal(removed.unchecked, undefined);
 });
 
+test("after a GST question, update_enquiry's totals and the product facts carry code's estimate with GST; otherwise neither does", async () => {
+  // Owner decision 2: code works out the amount with GST, so Claude never does the sum.
+  for (const gstAsked of [true, false]) {
+    const { ctx } = checked({}, { customerTexts: ["2 please, total wif gst how much"], gstAsked });
+    const totals = bodyOf(await addSafico(ctx)).totals as Record<string, unknown>;
+    const fact = bodyOf(await runTool("get_product", { stock_id: "BTS-8026D" }, ctx)).product as Record<string, unknown>;
+    const estimate = [totals.grandTotal, totals.grandTotalWithGst, totals.gstOnTotal, fact.price_with_gst];
+    assert.deepEqual(estimate, gstAsked ? [46.72, 50.92, 4.2, 25.46] : [46.72, undefined, undefined, undefined], String(gstAsked));
+  }
+});
+
+test("while a line is unchecked, update_enquiry's totals have no estimate with GST, but a product's price with GST stays", async () => {
+  // The totals leave the unchecked line out, so a total with GST would be for part of the enquiry.
+  const { ctx } = checked({}, { customerTexts: ["2 please, total wif gst how much"], gstAsked: true, uncheckedCodes: ["F46700"] });
+  const totals = bodyOf(await addSafico(ctx)).totals as Record<string, unknown>;
+  assert.deepEqual([totals.grandTotal, "grandTotalWithGst" in totals, "gstOnTotal" in totals], [46.72, false, false]);
+  const fact = bodyOf(await runTool("get_product", { stock_id: "BTS-8026D" }, ctx)).product as Record<string, unknown>;
+  assert.equal(fact.price_with_gst, 25.46);
+});
+
 test("a line that could not be re-checked is still on the enquiry, and the tool says so", async () => {
   // exam 3, c08-stress T12: a bare STOCK_UNVERIFIED on an unchecked line led to retries and a "removed" claim.
   const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["BTS-8026D"] });

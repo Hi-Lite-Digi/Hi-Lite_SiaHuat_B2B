@@ -24,6 +24,22 @@ export function enquiryTotals(lines: EnquiryReceiptLine[]) {
   return { ...totals, grandTotal: Math.round(totals.grandTotal * 100) / 100 };
 }
 
+/** Singapore GST in percent: every store price is before GST and the checkout adds it (owner decision 2: Claire gives an estimate). */
+export const GST_PERCENT = 9;
+/** The amount with GST in whole cents, rounded half-up (37.34 gives 4070); exact for every amount up to $200,000. */
+export const withGstCents = (amount: number) => Math.round((Math.round(amount * 100) * (100 + GST_PERCENT)) / 100);
+// A customer text about GST ("wif gst how much", "9% only also cannot count meh", "37.34x1.09", 含税多少): replayed over the 2,043 typed
+// texts of exams 2-4, the same 70 GST asks and nothing else. "19% cheaper?" and "11.09 one" aren't.
+export const gstWords = /\b(?:gst|tax(?:es)?)\b|(?<![\d.])(?:9\s?(?:%|percent\b)|1\.09\b)|税/i;
+
+/** The enquiry totals plus code's estimate with GST and its GST part, so Claude never does the sum (exam 4: 18 of 19 GST chats refused). */
+export function totalsWithGst(lines: EnquiryReceiptLine[]) {
+  const totals = enquiryTotals(lines);
+  if (!lines.length) return totals;
+  const cents = withGstCents(totals.grandTotal);
+  return { ...totals, grandTotalWithGst: cents / 100, gstOnTotal: (cents - Math.round(totals.grandTotal * 100)) / 100 };
+}
+
 const numberWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
 // A number right after one of these is a label, not a quantity ("option 2", "size 2", "#2", "第2个", "选项2", "型号2").
 const labelBefore = String.raw`(?<!(?:\b(?:option|opt|choice|item|no\.?|number|size|model|type|tier|level|layer|deck|burner|door|outlet|branch|table|page|step)|#|第|选项|型号)\s*)`;

@@ -5,6 +5,7 @@ import { honestManualHandoff } from "@/lib/honest-handoff";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
+import { withGstCents } from "./enquiry";
 import type { CheckedProduct } from "./facts";
 import { codePattern, hits, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -33,15 +34,24 @@ const toCents = (match: RegExpMatchArray) => {
   return Number(whole.replace(/,/g, "")) * 100 + Number((fraction ?? "0").padEnd(2, "0"));
 };
 
-/** Amounts Claire may mention: live-checked prices, enquiry line prices and totals. */
-export function allowedCents(seen: Map<string, CheckedProduct>, lines: EnquiryReceiptLine[], grandTotal: number) {
+/**
+ * Amounts Claire may mention: live-checked prices, enquiry line prices and totals, and code's GST estimates (a live-checked price
+ * with GST; the enquiry total with GST and its GST part). Not gated on GST words: "ok so final total how much ah, i tell boss", two
+ * turns after an estimate, had its right figure repaired away in 3 of 3 runs. No total with GST while a line is unchecked: the
+ * total leaves it out, and a sum Claude worked out on part of the enquiry would pass (P3 eval: 2 of 3 drafts).
+ */
+export function allowedCents(seen: Map<string, CheckedProduct>, lines: EnquiryReceiptLine[], grandTotal: number, allLinesChecked = true) {
   const cents = new Set<number>();
-  for (const { product, verified } of seen.values()) if (verified) cents.add(Math.round(product.list_price * 100));
+  for (const { product, verified } of seen.values()) if (verified) cents.add(Math.round(product.list_price * 100)).add(withGstCents(product.list_price));
   for (const line of lines) {
     cents.add(Math.round(line.pricePerItem * 100));
     cents.add(Math.round(line.total * 100));
   }
   cents.add(Math.round(grandTotal * 100));
+  if (lines.length && allLinesChecked) {
+    const withGst = withGstCents(grandTotal);
+    cents.add(withGst).add(withGst - Math.round(grandTotal * 100));
+  }
   return cents;
 }
 

@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  QTY_NOTICE, applyEnquiryAction, enquiryTotals, firstListItem, inPieces, listItemCount, quantityStated, sameQuantityText, statesAnyQuantity, typedQuantities,
-  verifyEnquiry,
+  QTY_NOTICE, applyEnquiryAction, enquiryTotals, firstListItem, gstWords, inPieces, listItemCount, quantityStated, sameQuantityText, statesAnyQuantity, totalsWithGst,
+  typedQuantities, verifyEnquiry, withGstCents,
 } from "./enquiry";
 import { allowedCents } from "./guards";
 import { fakeDeps, product } from "./testing";
@@ -199,6 +199,23 @@ test("totals are rounded to cents", () => {
     { item: "b", code: "B", pricePerItem: 0.2, quantity: 1, total: 0.2, uom: "PC" },
   ]);
   assert.equal(totals.grandTotal, 0.3);
+});
+
+test("an amount with GST is worked out in whole cents, rounded half-up", () => {
+  // Owner decision 2: code gives the estimate (exam 4: 18 of the 19 chats that asked about GST were refused).
+  const cases: Array<[number, number]> = [[37.34, 4070], [34.14, 3721], [712.06, 77615], [1307.4, 142507], [73.3, 7990], [9.91, 1080], [0.5, 55], [1.5, 164], [50, 5450]];
+  for (const [amount, cents] of cases) assert.equal(withGstCents(amount), cents, String(amount));
+});
+
+test("the totals with GST add the estimate and its GST part; an empty enquiry has no estimate", () => {
+  const lines = [{ item: "Torch", code: "BTS-8026D", pricePerItem: 23.36, quantity: 2, total: 46.72, uom: "PC" }];
+  assert.deepEqual(totalsWithGst(lines), { ...enquiryTotals(lines), grandTotalWithGst: 50.92, gstOnTotal: 4.2 });
+  assert.deepEqual(totalsWithGst([]), enquiryTotals([]));
+});
+
+test("GST words: gst, tax, 9%, 9 percent, x1.09 and 税; not 19%, 11.09, a 9-piece order or a plain total question", () => {
+  for (const text of ["wif gst how much", "incl gst?", "9% only also cannot count meh", "37.34x1.09", "含税多少", "after tax", "9 percent"]) assert.ok(gstWords.test(text), text);
+  for (const text of ["ard 37 like that correct anot", "19% cheaper?", "11.09 one", "take 9 pcs", "total how much now"]) assert.equal(gstWords.test(text), false, text);
 });
 
 test("numbers inside item codes and GN fractions are not quantities", () => {

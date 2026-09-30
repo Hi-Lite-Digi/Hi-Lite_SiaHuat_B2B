@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
-import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, typedQuantities, unitStated } from "./enquiry";
+import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
 import { liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
 import { codePattern, same } from "./picks";
 import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
@@ -50,6 +50,8 @@ export type TurnContext = {
   refusedKeys: Set<string>;
   /** Adds and sets a tap this turn picked with no check. */
   pickFast: number;
+  /** The customer's last two typed texts ask about GST: the totals and product facts Claude sees then carry code's estimate with GST. */
+  gstAsked?: boolean;
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -225,7 +227,9 @@ export function lookupDetails(ctx: TurnContext, codes: string[], limitMs = DETAI
 export const withDetails = (checked: CheckedProduct, found: Details): CheckedProduct => ({ ...checked, details: storeDetails(found.get(checked.product.stock_id)) ?? null });
 
 function remember(ctx: TurnContext, checked: CheckedProduct) {
-  return productFact(keepBest(ctx, checked), ctx.shownIds.has(checked.product.stock_id));
+  const fact = productFact(keepBest(ctx, checked), ctx.shownIds.has(checked.product.stock_id));
+  // One product's price with GST ("46.70 is with GST?"), from a live-checked price only (owner question 4).
+  return ctx.gstAsked && fact.price_ex_gst !== null ? { ...fact, price_with_gst: withGstCents(fact.price_ex_gst) / 100 } : fact;
 }
 
 async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: TurnContext) {
@@ -435,8 +439,14 @@ export function uncheckedNote(codes: string[]) {
     : undefined;
 }
 
+/**
+ * The enquiry totals Claude sees: with code's estimate with GST only after a GST question, and never while a line is unchecked
+ * (these totals leave it out, so the estimate would be for part of the enquiry).
+ */
+export const totalsForClaude = (ctx: TurnContext) => (ctx.gstAsked && !ctx.uncheckedCodes.length ? totalsWithGst(ctx.lines) : enquiryTotals(ctx.lines));
+
 function enquiryState(ctx: TurnContext) {
-  return { lines: ctx.lines, totals: enquiryTotals(ctx.lines), unchecked: uncheckedNote(ctx.uncheckedCodes) };
+  return { lines: ctx.lines, totals: totalsForClaude(ctx), unchecked: uncheckedNote(ctx.uncheckedCodes) };
 }
 
 const REFUSED_LOOKUP_MS = 2_000; // like an earlier card's check: the question about it shouldn't wait longer
