@@ -613,6 +613,11 @@ test("the removal line replaces only a removal whose line is still on the enquir
   assert.equal(withoutEnquiryClaims("I'll remove the Safico torch now.", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That line is still on your enquiry.");
   // An add or status beside the removal in the same clause is not a removal alone.
   assert.equal(withoutEnquiryClaims("Removed the HET-4 so the HET-6 is now on your enquiry.", { lines: [het6Line], changes: [], seen: toasters }), "That change isn't on your enquiry yet.");
+  // Y4 re-check: the removal ran and the other half ("set", "I'll add") stayed in its clause; that item being on the enquiry doesn't
+  // make the removed line still there.
+  assert.equal(withoutEnquiryClaims("Removed the HET-4 and set the HET-6 to 3.", { ...removedHet4, lines: [{ ...het6Line, quantity: 1, total: 250 }] }), "That change isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("I've removed the torch and I'll add 2 more plates now.", { lines: [line("RS-J1009-7", 2)], changes: [{ action: "remove", code: "BTS-8026D" }], seen: shop }),
+    "That change isn't on your enquiry yet.");
 });
 
 test("sums, GST, questions about what the customer wants and promises that wait are not enquiry claims", () => {

@@ -458,9 +458,9 @@ function saysEachNotMade(unclaimed: string, claims: string[], cards: ShownCard[]
 
 const addWording = /\b(?:added|adding|updated|updating|put|noted down)\b|已(?:添加|加入|更新)|加好了|帮你加了/i;
 /**
- * The fixed line for a false claim. NOT_REMOVED_LINE only for a claim that only removes (or promises to), naming a line the enquiry
- * still holds; a removal beside an add, or of nothing on the enquiry, gets the bare NOT_ON_ENQUIRY, true of any false change (X7
- * review: exam 3, c11-stress T4 replayed, where the swap's removal ran and its add didn't). An add or change asks what is still
+ * The fixed line for a false claim. NOT_REMOVED_LINE only for a claim that only removes (or promises to), every line it names still
+ * on the enquiry; a removal beside an add, or of anything not on the enquiry, gets the bare NOT_ON_ENQUIRY, true of any false change
+ * (X7 review: exam 3, c11-stress T4 replayed, where the swap's removal ran and its add didn't). An add or change asks what is still
  * needed, unless the rest of the reply already asks its own question.
  */
 function fixedLine(claim: string, facts: ClaimFacts, unclaimed: string) {
@@ -468,7 +468,10 @@ function fixedLine(claim: string, facts: ClaimFacts, unclaimed: string) {
   const removals = parts.filter((clause) => removalWord.test(clause) || /\bremove\b/i.test(clause));
   if (removals.length) {
     const alone = removals.length === parts.length && !addWording.test(claim) && !onEnquiryWording.test(claim);
-    const kept = removals.some((clause) => pointedBy(clause, claimCards(facts)).some((card) => facts.lines.some((line) => same(line.code, card.code))));
+    // Every named line, not one: "Removed the HET-4 and set the HET-6 to 3" stays one clause, and the HET-6 on the enquiry
+    // doesn't keep the HET-4 that was removed (Y4 re-check).
+    const named = removals.flatMap((clause) => pointedBy(clause, claimCards(facts)));
+    const kept = named.length > 0 && named.every((card) => facts.lines.some((line) => same(line.code, card.code)));
     return alone && kept ? NOT_REMOVED_LINE : NOT_ON_ENQUIRY;
   }
   return sentences(unclaimed).some((sentence) => /[?？]$/.test(sentence) && !genericAsk.test(sentence)) ? NOT_ON_ENQUIRY : NOT_ADDED_LINE;
