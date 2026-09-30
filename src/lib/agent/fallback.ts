@@ -16,8 +16,8 @@ const declines = /\b(?:no need|don['’]?t need|not needed|nvm|never mind|cancel
 // apostrophe, so "want" is not a no (r6 skeptic); "dont" and "didnt" are listed.
 const FOLLOW_UP = /\b(?:no|not|never|without|other|others|else|besides|except|instead|same|this|that|these|those|cheaper|bigger|smaller|longer|shorter|lighter|better|more|add|change|update|swap|switch|replace|increase|reduce|remove|cancel|delete|minus|keep|take|dun|dont|didnt|doesnt|cant|wont|isnt|arent|havent)\b|n['’]t\b/i;
 // A message about Claire asks for no product: "you are a tool" showed leaf tools (review D5+D6). "thank you so much! got crepe
-// pan?" is a product question (D5+D6 recheck).
-const ABOUT_CLAIRE = /(?<!\bthanks?\s+)\b(?:you|u)\s+(?:are|r|so)\b|\byou['’]?re\b/i;
+// pan?" is a product question (D5+D6 recheck), and so is "thx u so much, got crepe pan?".
+const ABOUT_CLAIRE = /(?<!\b(?:thanks?|thx|ty|tq)\s+)\b(?:you|u)\s+(?:are|r|so)\b|\byou['’]?re\b/i;
 // Words that name no product: chat filler, question words, shop talk, Singlish particles, and talk about the chat and the order
 // ("I tap already", "link cannot open", "total how much"). Over exams 2-5, the backup's search of the raw text showed cards for
 // 60 of 174 sampled texts, most unrelated ("ok": cutlery, "2 pcs": a thermometer, "tap where??": a tapered rolling pin).

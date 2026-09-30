@@ -201,7 +201,7 @@ test("a message about Claire is no product ask: 'you are a tool' shows no leaf t
   }
   // A thank-you before a product question is no talk about Claire (review D5+D6 recheck).
   const crepe = product({ stock_id: "CR-24", name: "Crepe Pan Ø24cm", third_category: "Crepe pans" });
-  for (const searchText of ["thank you so much! got crepe pan?", "thank u so much, got crepe pan?"]) {
+  for (const searchText of ["thank you so much! got crepe pan?", "thank u so much, got crepe pan?", "thx u so much, got crepe pan?", "tq u so much got crepe pan"]) {
     const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([crepe]) });
     assert.deepEqual(reply.cards.map((card) => card.stock_id), ["CR-24"], searchText);
   }
