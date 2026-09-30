@@ -221,8 +221,9 @@ function failureCode(error: unknown, deadline: AbortSignal) {
   const code = errorCode(error);
   if (!(error instanceof Error) || code !== error.name) return code;
   const status = (error as { status?: unknown }).status;
-  return deadline.aborted ? "AGENT_DEADLINE"
-    : typeof status === "number" ? `API_${status}`
+  // A status first: the forced answer and the repair run on past the 35 s deadline, and an API error there is not a deadline cut.
+  return typeof status === "number" ? `API_${status}`
+    : deadline.aborted ? "AGENT_DEADLINE"
     : /timed out/i.test(error.message) ? "API_TIMEOUT"
     : /aborted/i.test(error.message) ? "CLIENT_ABORT" : code;
 }
@@ -464,14 +465,16 @@ export async function runAgentTurn(input: {
       // without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer. Safe only because
       // update_enquiry checks the pick and the typed number. A nudged round must fit at this turn's speed, or its call is forced to
       // answer and the nudge can't be acted on; an un-nudged claim is fixed by the ENQUIRY_CLAIM fixer or the tool-less repair.
-      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > Math.max(CLAIM_NUDGE_MIN_MS, roundNeedMs()) && !ctx.refused.length && !ctx.finalRefusal;
+      const nudgeFits = () => timeLeft() > Math.max(CLAIM_NUDGE_MIN_MS, roundNeedMs());
+      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && nudgeFits() && !ctx.refused.length && !ctx.finalRefusal;
       // A permission question about the one product the customer named but Claude never proposed: one check says whether they
       // picked it, i.e. whether this is the confirm step the owner ruled out (r4 c02-persona idx 8; about 1 in 700 round-4 turns).
       if (final && toolsLeft && typedAny) {
         const about = permissionCodes(final, ctx.seen, earlierCards).filter((code) => !picked(code));
         if (about.length === 1) await beforeDeadline(checkNamed(about[0]), deadline).catch(() => undefined);
       }
-      const nudge = !final || !toolsLeft ? null
+      // The check above is a model call (1-3 s): the nudged round must still fit after it.
+      const nudge = !final || !toolsLeft || !nudgeFits() ? null
         : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
         : asksConfirmStep(final, ctx.seen, picked, earlierCards) && typedAny ? PERMISSION_NUDGE : null;
       if (nudge) {

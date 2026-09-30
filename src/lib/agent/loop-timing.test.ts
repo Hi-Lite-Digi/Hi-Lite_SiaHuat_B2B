@@ -111,29 +111,31 @@ test.before(async () => {
 test("a slow last search still leaves the answer call its time", async (t) => {
   const log = quiet(t);
   const { client, bodies } = timedClient([
-    { ms: 2.5 * S, reply: toolUse(search("t1", "griddle")) },
-    { ms: 2.5 * S, reply: either(toolUse(search("t2", "crepe pan")), GOOD) },
-    { ms: 2.5 * S, reply: either(toolUse(search("t3", "pan")), GOOD) },
-    { ms: 2.5 * S, reply: GOOD },
+    { ms: 2 * S, reply: toolUse(search("t1", "griddle")) },
+    { ms: 2 * S, reply: either(toolUse(search("t2", "crepe pan")), GOOD) },
+    { ms: 2 * S, reply: either(toolUse(search("t3", "pan")), GOOD) },
+    { ms: 6 * S, reply: GOOD },
   ]);
-  // The third search ends at about 33.5 s; the forced answer lands at about 36 s, past the 35 s work deadline.
-  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([6 * S, 6 * S, 14 * S]), client, model: "claude-sonnet-5", ...TIMES });
+  // The third search ends at about 30 s (31.5 s with timer drift, which is about 0.2 s a timer on Windows); the forced answer lands
+  // at about 36 s, past the 35 s work deadline.
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([6 * S, 6 * S, 12 * S]), client, model: "claude-sonnet-5", ...TIMES });
   assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
   assert.equal(toolChoice(bodies.at(-1)!), "none");
 });
 
-test("a made-up card in an answer that lands at 33.5 s still gets its repair", async (t) => {
+test("a made-up card in an answer that lands at 32.5 s still gets its repair", async (t) => {
   const log = quiet(t);
+  // The first answer lands at about 33 s with start-up and timer drift; the repair ends at about 37 s.
   const { client } = timedClient([
-    { ms: 33.5 * S, reply: answer({ message: "Try this one.", card_ids: ["FAKE-1"] }) },
-    { ms: 3 * S, reply: answer({ message: "Is the pan for home or for a shop?" }) },
+    { ms: 32.5 * S, reply: answer({ message: "Try this one.", card_ids: ["FAKE-1"] }) },
+    { ms: 4 * S, reply: answer({ message: "Is the pan for home or for a shop?" }) },
   ]);
   const reply = await runAgentTurn({ request: prata(), deps: slowSearches([]), client, model: "claude-sonnet-5", ...TIMES });
   assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
   assert.equal(reply.message, "Is the pan for home or for a shop?");
 });
 
-test("when the answer call hangs too, the backup reply still comes within the turn's time", async (t) => {
+test("when the first call hangs, the backup reply still comes within the turn's time", async (t) => {
   const log = quiet(t);
   const { client, bodies } = timedClient([{ ms: HANG, reply: GOOD }, { ms: HANG, reply: GOOD }]);
   const started = performance.now();
@@ -143,6 +145,29 @@ test("when the answer call hangs too, the backup reply still comes within the tu
   assert.ok(took <= 45.5, `took ${took.toFixed(1)} s`);
   assert.ok(bodies.length <= 2);
   assert.deepEqual(log.fallbacks().map((line) => line.reason), ["AGENT_DEADLINE"]);
+});
+
+test("when the forced answer hangs, the backup reply still comes within the turn's time", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([{ ms: 12.5 * S, reply: toolUse(search("t1", "griddle")) }, { ms: HANG, reply: GOOD }]);
+  const started = performance.now();
+  // The forced answer may run to 41 s; the backup reply then has the last 4 s.
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([1.5 * S]), client, model: "claude-sonnet-5", ...TIMES });
+  const took = (performance.now() - started) / S;
+  assert.equal(reply.provider, "fallback");
+  assert.deepEqual(bodies.map(toolChoice), ["auto", "none"]);
+  assert.ok(took <= 45.5, `took ${took.toFixed(1)} s`);
+  assert.deepEqual(log.fallbacks().map((line) => line.reason), ["AGENT_DEADLINE"]);
+});
+
+test("an API error in the forced answer after 35 s logs its status, not AGENT_DEADLINE", async (t) => {
+  const log = quiet(t);
+  const overloaded = Object.assign(new Error("Overloaded"), { status: 529 });
+  const { client } = timedClient([{ ms: 12.5 * S, reply: toolUse(search("t1", "griddle")) }, { ms: 22 * S, reply: overloaded }]);
+  // The forced answer fails at about 36.5 s, inside the time it may run to.
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([1.5 * S]), client, model: "claude-sonnet-5", ...TIMES });
+  assert.equal(reply.provider, "fallback");
+  assert.deepEqual(log.fallbacks().map((line) => line.reason), ["API_529"]);
 });
 
 test("the prata timeline: a 10 s and an 11 s call end in the answer, not the backup reply", async (t) => {

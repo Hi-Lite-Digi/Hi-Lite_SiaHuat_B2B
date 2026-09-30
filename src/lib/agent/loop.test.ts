@@ -1816,6 +1816,25 @@ test("a permission question about a product the customer named but Claude never 
   }
 });
 
+test("no permission nudge when the pick check leaves too little time for the nudged round", async () => {
+  // The check is a model call (1-3 s): a round that fitted before it may not fit after, and a nudge its forced call can't act on
+  // only contradicts the time note.
+  const sure = fakePickCheck({ quantity: 2 });
+  const slow: PickCheck = (p) => new Promise((resolve) => setTimeout(resolve, 1_000)).then(() => sure(p));
+  const { client, bodies } = fakeClient([
+    answer({ message: "The Safico runs on gas. Want me to add 2 of the Safico?" }),
+    answer({ message: "The Safico runs on gas. I can't add it right now, please try again in a moment." }),
+  ]);
+  // 16.5 s of work time: the check starts with about 16.5 s left and ends with about 15.5 s, under the 16 s a round needs.
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "the safico one, need 2" }, history: [{ role: "user", content: "torch" }, twoCardsShown] }),
+    deps: deps(), client, model: "claude-sonnet-5", pickCheck: () => slow, deadlineMs: 26_500, lastCallMs: 16_000,
+  });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(sure.calls.length, 1);
+  assert.ok(!bodies.some((body) => PERMISSION_NUDGE.test(JSON.stringify(body.messages))));
+});
+
 /** A client whose pick-check calls never answer until aborted; Claire's own calls get the scripted responses. */
 function checksHang(responses: Array<Anthropic.Message | Error>) {
   const { client, bodies } = fakeClient(responses);
