@@ -15,8 +15,9 @@ const declines = /\b(?:no need|don['’]?t need|not needed|nvm|never mind|cancel
 // knife", "cheaper one", "change the torch to 3"): its words don't say what to show, so no cards are shown for it. "n't" needs its
 // apostrophe, so "want" is not a no (r6 skeptic); "dont" and "didnt" are listed.
 const FOLLOW_UP = /\b(?:no|not|never|without|other|others|else|besides|except|instead|same|this|that|these|those|cheaper|bigger|smaller|longer|shorter|lighter|better|more|add|change|update|swap|switch|replace|increase|reduce|remove|cancel|delete|minus|keep|take|dun|dont|didnt|doesnt|cant|wont|isnt|arent|havent)\b|n['’]t\b/i;
-// A message about Claire asks for no product: "you are a tool" showed leaf tools (review D5+D6).
-const ABOUT_CLAIRE = /\b(?:you|u)\s+(?:are|r|so)\b|\byou['’]?re\b/i;
+// A message about Claire asks for no product: "you are a tool" showed leaf tools (review D5+D6). "thank you so much! got crepe
+// pan?" is a product question (D5+D6 recheck).
+const ABOUT_CLAIRE = /(?<!\bthanks?\s+)\b(?:you|u)\s+(?:are|r|so)\b|\byou['’]?re\b/i;
 // Words that name no product: chat filler, question words, shop talk, Singlish particles, and talk about the chat and the order
 // ("I tap already", "link cannot open", "total how much"). Over exams 2-5, the backup's search of the raw text showed cards for
 // 60 of 174 sampled texts, most unrelated ("ok": cutlery, "2 pcs": a thermometer, "tap where??": a tapered rolling pin).
@@ -33,8 +34,9 @@ const FILLER = new Set(("a an the and or but if so of to in on at by for from wi
   + "invoice call email phone dollar dollars bucks sgd first last next above below under over earlier before after time times dozen dozens "
   + "carton cartons ctn ctns packet packets pkt pkts ll re ve recommendation recommendations").split(" "));
 // "Stock" and "delivery" name products ("stock pot", "delivery bag": as filler words they showed a chilli pot and canvas bags,
-// review D5+D6), so only shop talk about them goes: "in stock", "got stock?", "stock left", "can delivery?".
-const SHOP_TALK = /\b(?:in|got|any|have|has|no|many|enough|can|out\s+of)\s+(?:stock|delivery)\b(?!\s+pots?\b)|\b(?:stock|delivery)\s+(?:left|available|status|count|charges?|fees?)\b/gi;
+// review D5+D6), so only shop talk about them goes: "in stock", "got stock?", "stock left", "can delivery?". "got delivery bag?"
+// asks for a delivery bag, not any bag (D5+D6 recheck).
+const SHOP_TALK = /\b(?:in|got|any|have|has|no|many|enough|can|out\s+of)\s+(?:stock|delivery)\b(?!\s+(?:pots?|bags?|box(?:es)?)\b)|\b(?:stock|delivery)\s+(?:left|available|status|count|charges?|fees?)\b/gi;
 // Words about a product's use or grade that names rarely carry ("commercial", "home", "cheap", "big"): a card needn't carry them,
 // and a message made only of them names nothing. Kind words (electric, gas, stainless) still count.
 const DESCRIBING = new Set(("commercial home household domestic restaurant cafe heavy duty industrial professional handheld big small large "

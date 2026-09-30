@@ -157,12 +157,20 @@ test("'stock' and 'delivery' name products too: 'stock pot' is no chilli pot, an
     const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([stockPot, chilliPot]) });
     assert.deepEqual(reply.cards.map((card) => card.stock_id), ["SP-30"], searchText);
   }
-  const bag = await buildFallbackReply({ searchText: "delivery bag", lines: [], deps: rankedDeps([canvasBag]) });
-  assert.deepEqual(bag.cards, []);
+  const zipperBags = product({ stock_id: "922.68", name: "VACUUM ZIPPER BAGS", third_category: "Bags" });
+  // "got delivery bag?" asks for a delivery bag, which no bag card is (review D5+D6 recheck).
+  for (const searchText of ["delivery bag", "got delivery bag?", "any delivery bags?"]) {
+    const bag = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([canvasBag, zipperBags]) });
+    assert.deepEqual(bag.cards, [], searchText);
+  }
   for (const searchText of ["blow torch got stock?", "blow torch in stock?", "blow torch can delivery?"]) {
     const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([torch]) });
     assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"], searchText);
   }
+  const deps = rankedDeps([torch, canvasBag]);
+  const delivery = await buildFallbackReply({ searchText: "Got delivery?", lines: [], deps });
+  assert.deepEqual(deps.calls, []);
+  assert.deepEqual(delivery.cards, []);
 });
 
 test("a size typed with a space, or a word about the shop, still finds the item (review D5+D6)", async () => {
@@ -184,12 +192,18 @@ test("a brand word counts only when the whole brand is typed: 'chef knife' is no
 
 test("a message about Claire is no product ask: 'you are a tool' shows no leaf tool (review D5+D6)", async () => {
   const leafTool = product({ stock_id: "CH3", name: "STAINLESS STEEL LEAF TOOL", third_category: "Garnishing tools" });
-  for (const searchText of ["you are a tool", "you're a tool", "u r a tool"]) {
+  for (const searchText of ["you are a tool", "you're a tool", "u r a tool", "you so stupid"]) {
     const deps = rankedDeps([leafTool]);
     const reply = await buildFallbackReply({ searchText, lines: [], deps });
     assert.deepEqual(deps.calls, [], searchText);
     assert.deepEqual(reply.cards, [], searchText);
     assert.doesNotMatch(reply.message, /tool/i, searchText);
+  }
+  // A thank-you before a product question is no talk about Claire (review D5+D6 recheck).
+  const crepe = product({ stock_id: "CR-24", name: "Crepe Pan Ø24cm", third_category: "Crepe pans" });
+  for (const searchText of ["thank you so much! got crepe pan?", "thank u so much, got crepe pan?"]) {
+    const reply = await buildFallbackReply({ searchText, lines: [], deps: rankedDeps([crepe]) });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["CR-24"], searchText);
   }
 });
 
