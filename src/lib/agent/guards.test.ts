@@ -2,11 +2,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
+import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode, keptLineClaims,
-  noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
+  type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -153,13 +155,15 @@ test("tidyMessage drops an unfinished last sentence and a sentence with a bare $
 test("a card set already shown twice is flagged unless the customer asks for it again", () => {
   const answer = { message: "The Safico one is lighter.", card_ids: ["BTS-8026D"], chips: [], show_contact: false };
   const earlier = { cardSets: [["BTS-8026D"], ["OLD", "BTS-8026D"], ["bts-8026d"]], previousMessage: "Here you go.", currentText: "any others?" };
-  assert.match(reviewAnswer(answer, seen, allowed, earlier).style.join(" "), /You've already shown these same cards twice\. Show different options, or none\./);
+  // The repair runs with tools off, so it can't show different options (round-5 plan X7).
+  assert.match(reviewAnswer(answer, seen, allowed, earlier).style.join(" "), /You've already shown this same set of cards twice\. Don't attach the whole set again \(you can name them, and attach only the one you recommend\)\. Answer what the customer just said, recommend one if they are choosing, and don't ask again a question you already asked\./);
   assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, currentText: "show me those again" }).style, []);
   assert.deepEqual(reviewAnswer(answer, seen, allowed, { ...earlier, cardSets: [["BTS-8026D"], ["OLD", "BTS-8026D"]] }).style, []);
 });
 
-test("a card update_enquiry refused, or the one card a question names, is not a repeat", () => {
+test("a card update_enquiry refused is not a repeat; a question naming the one card no longer exempts it", () => {
   // exam 3, c08-persona T8: the confirm card had been shown alone twice, REPEAT stripped it, and the next "yes" had no card to point at.
+  // Since round 5 the pick check reads the chat, so a yes or a number no longer needs the card on screen.
   const scissors = new Map<string, CheckedProduct>([
     ["E910076", { product: product({ stock_id: "E910076", name: "Zyliss Stainless Steel Household Scissors", list_price: 29.27 }), verified: true }],
     ["E910077", { product: product({ stock_id: "E910077", name: "Zyliss Polypropylene Basic Household Scissors Basic, Gray", list_price: 22.84 }), verified: true }],
@@ -170,10 +174,11 @@ test("a card update_enquiry refused, or the one card a question names, is not a 
   ).style.some((issue) => issueCode(issue) === "REPEAT");
   assert.equal(repeats("This one is stainless steel.", ["E910076"]), true);
   assert.equal(repeats("This one is stainless steel.", ["E910076"], { refused: ["e910076"] }), false);
-  assert.equal(repeats("Is it the Zyliss E910076?", ["E910076"]), false);
-  assert.equal(repeats("You mean the Zyliss scissors? How many do you need?", ["E910076"]), false);
-  // The card named in the sentence before a how-many question (exam 3: c11-stress T7, c04-B T5).
-  assert.equal(repeats("The Zyliss scissors are in stock. How many do you need?", ["E910076"]), false);
+  // exam 4: 8 of 14 same-set third showings were re-attached to "Just to confirm?", "Want me to add it?" or "How many?".
+  assert.equal(repeats("Is it the Zyliss E910076?", ["E910076"]), true);
+  assert.equal(repeats("You mean the Zyliss scissors? How many do you need?", ["E910076"]), true);
+  assert.equal(repeats("Is it the Zyliss E910076?", ["E910076"], { refused: ["E910076"] }), false);
+  assert.equal(repeats("The Zyliss scissors are in stock. How many do you need?", ["E910076"]), true);
   assert.equal(repeats("Here are the Zyliss scissors again.", ["E910076"]), true);
   // A generic closer doesn't need the card.
   assert.equal(repeats("Here are the Zyliss scissors again. Need anything else?", ["E910076"]), true);
@@ -338,7 +343,7 @@ test("re-showing cards is allowed when the customer asks to see or tap them", ()
   for (const text of ["where the product?? show me then i tap la", "ok show me the card, i tap", "show me that one", "tap what?? u nvr show anything", "i cant see the card", "you never showed me"]) {
     assert.deepEqual(styleFor(text), [], text);
   }
-  for (const text of ["hello police?", "any others?", "wah still nvr ans how much", "dont show me tongs"]) assert.match(styleFor(text).join(" "), /already shown these same cards twice/, text);
+  for (const text of ["hello police?", "any others?", "wah still nvr ans how much", "dont show me tongs"]) assert.match(styleFor(text).join(" "), /already shown this same set of cards twice/, text);
 });
 
 test("complaints, quantities and picks that use again, same, back or earlier don't count as asking to see cards again", () => {
@@ -352,12 +357,12 @@ test("complaints, quantities and picks that use again, same, back or earlier don
     "Then why did you even ask earlier on", "only 1 of them", "i TAP ALR just now!!", "why need to tap again", "dun give me 3 again",
     "give me 2 of those", "give me 5 of them", "send them to my office",
     "don't show me the same ones", "u say wont send but below still got same link??", "no need show again", "dont need to show them again",
-  ]) assert.match(styleFor(text), /already shown these same cards twice/, text);
+  ]) assert.match(styleFor(text), /already shown this same set of cards twice/, text);
   for (const text of [
     "show me those again", "can see the earlier ones?", "send the same cards again", "give me those again",
     "ok ok show the 2 again i tap", "tap where?? nothing to tap here leh", "where the product?? show me then i tap la",
     "u nvr show anything", "i cant see the card", "the previous options pls", "go back to the knives", "what were the options again?",
-  ]) assert.doesNotMatch(styleFor(text), /already shown these same cards twice/, text);
+  ]) assert.doesNotMatch(styleFor(text), /already shown this same set of cards twice/, text);
 });
 
 test("an add or change confirmation leaves off a card the customer has already seen", () => {
@@ -374,6 +379,19 @@ test("an add or change confirmation leaves off a card the customer has already s
     assert.deepEqual(withoutChangedCards(answerWith(message, ["970S"]), added, shown, "ok 2").card_ids, ["970S"], message);
   }
   assert.deepEqual(withoutChangedCards(answerWith(got, ["970S"]), added, shown, "show me those again").card_ids, ["970S"]);
+});
+
+test("a card set shown twice already is dropped unless the customer asks for it, the message points at it, or a card was refused", () => {
+  // exam 4: 14 same-set third showings, most re-attached to "Just to confirm?", "Want me to add it?" or "How many?".
+  const earlier = { cardSets: [["UT16HR"], ["ut16hr"]], previousMessage: null, currentText: "ya lah that one, 6pcs" };
+  const ask: FinalAnswer = { message: "How many of the locking-ring tong do you need?", card_ids: ["UT16HR"], chips: [], show_contact: false };
+  assert.deepEqual(withoutRepeatedSet(ask, earlier, []).card_ids, []);
+  assert.deepEqual(withoutRepeatedSet(ask, { ...earlier, cardSets: [["UT16HR"]] }, []).card_ids, ["UT16HR"]);
+  assert.deepEqual(withoutRepeatedSet(ask, { ...earlier, currentText: "show me that one again" }, []).card_ids, ["UT16HR"]);
+  assert.deepEqual(withoutRepeatedSet({ ...ask, message: "Tap it to add." }, earlier, []).card_ids, ["UT16HR"]);
+  assert.deepEqual(withoutRepeatedSet(ask, earlier, ["ut16hr"]).card_ids, ["UT16HR"]);
+  // Another set is a new showing.
+  assert.deepEqual(withoutRepeatedSet({ ...ask, card_ids: ["UT16HR", "UT12HR"] }, earlier, []).card_ids, ["UT16HR", "UT12HR"]);
 });
 
 const checked = (stock_id: string, name: string, list_price: number): [string, CheckedProduct] => [stock_id, { product: product({ stock_id, name, list_price }), verified: true }];
@@ -534,10 +552,12 @@ test("honest or conditional wording is not a claim", () => {
 
 test("a false claim is replaced by one plain line where the first one was", () => {
   const facts = { lines: [line("RS-J1009-7", 4)], changes: [added("RS-J1009-7")], seen: shop };
-  assert.equal(withoutEnquiryClaims("Plate qty 4 done. Let me add the bowl too. Anything else?", facts), "Plate qty 4 done. That change isn't on your enquiry yet. Anything else?");
-  assert.equal(withoutEnquiryClaims("Added the spoons. Added the rice bowls too.", { ...facts, seen: shop }), "That change isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("Plate qty 4 done. Let me add the bowl too. Anything else?", facts), "Plate qty 4 done. That change isn't on your enquiry yet. Which item and how many would you like? Anything else?");
+  assert.equal(withoutEnquiryClaims("Added the spoons. Added the rice bowls too.", { ...facts, seen: shop }), "That change isn't on your enquiry yet. Which item and how many would you like?");
   // The torch is on the enquiry at 2, so the line must not say it isn't there at all.
-  assert.equal(withoutEnquiryClaims("Updated: 5 Safico torches now.", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That change isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("Updated: 5 Safico torches now.", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That change isn't on your enquiry yet. Which item and how many would you like?");
+  // A false removal: the line is still there, and no number is asked for.
+  assert.equal(withoutEnquiryClaims("Removed the Safico torch. Anything else?", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That line is still on your enquiry. Anything else?");
   assert.equal(withoutEnquiryClaims("Here you go.", facts), "Here you go.");
 });
 
@@ -634,10 +654,10 @@ test("the fixed line answers only a change the customer asked for, and only once
   // exam 3, c06-persona T8: the reply already says the add didn't go through, so no second line.
   assert.equal(withoutEnquiryClaims("Sorry, that skimmer add didn't go through on my end. You said 2 - noted, adding 2 now.", facts, true), "Sorry, that skimmer add didn't go through on my end.");
   // A change was asked and nothing says it failed: the line stays, where the claim was.
-  assert.equal(withoutEnquiryClaims("Got it: 2 torches added. Anything else?", facts, true), "That change isn't on your enquiry yet. Anything else?");
+  assert.equal(withoutEnquiryClaims("Got it: 2 torches added. Anything else?", facts, true), "That change isn't on your enquiry yet. Which item and how many would you like? Anything else?");
   // "not made in Japan" doesn't say the change failed.
   assert.equal(withoutEnquiryClaims("Added 1 Kenwood Hand Mixer. Kenwood is a UK brand, though it's not made in Japan.", facts, true),
-    "That change isn't on your enquiry yet. Kenwood is a UK brand, though it's not made in Japan.");
+    "That change isn't on your enquiry yet. Which item and how many would you like? Kenwood is a UK brand, though it's not made in Japan.");
   // A claim that was the whole reply to an advice question leaves nothing; the loop sends its cards-only or backup line instead.
   assert.equal(withoutEnquiryClaims("I'll add 3 pcs of the 21cm for you.", facts, false), "");
   // "That one hasn't been added yet" about the claim's own product (or naming none) says it failed.
@@ -645,11 +665,11 @@ test("the fixed line answers only a change the customer asked for, and only once
   // exam 3, c10-stress T5 (replayed): the other tong "hasn't been added yet" doesn't say the steak tong add failed.
   const tongs = { lines: [], changes: [], seen: new Map([checked("ST-15", "Stainless Steel Steak Tong 15\"", 12.48), checked("2564L", "Stainless Steel Utility Tong 16\"", 3.85)]) };
   const otherTong = "For the 16″ tong, is it the Utility Tong 16″ (2564L)? That one hasn't been added yet, just confirm and I'll add 3 for you.";
-  assert.equal(withoutEnquiryClaims(`Got it: 3 Stainless Steel Steak Tong 15″ added. ${otherTong}`, tongs, true), `That change isn't on your enquiry yet. ${otherTong}`);
+  assert.equal(withoutEnquiryClaims(`Got it: 3 Stainless Steel Steak Tong 15″ added. ${otherTong}`, tongs, true), `That change isn't on your enquiry yet. Which item and how many would you like? ${otherTong}`);
   // Nor does a GST note, another product, or a sentence that isn't about a change.
   for (const note of [
     "Note GST is not added to these prices yet.", "The Rooster Series Round Plate is not in your enquiry.", "Prices are not final on your enquiry until sales confirms.",
-  ]) assert.equal(withoutEnquiryClaims(`Added 2 Safico torches. ${note}`, facts, true), `That change isn't on your enquiry yet. ${note}`, note);
+  ]) assert.equal(withoutEnquiryClaims(`Added 2 Safico torches. ${note}`, facts, true), `That change isn't on your enquiry yet. Which item and how many would you like? ${note}`, note);
 });
 
 test("asking permission to add is a style issue", () => {
@@ -1156,7 +1176,26 @@ test("a link the customer says doesn't open is not typed again, and their browse
   assert.deepEqual(linkStyle("It loads fine here; try an incognito window.", "Same link. Still not working"), [LINK_BLAME_ISSUE]);
   assert.deepEqual(linkStyle("Sorry about that. It's item BTS-8026D; you can search that code on the store.", "torch link cannot open leh"), []);
   assert.deepEqual(linkStyle(`Here it is again: ${torchLink}`, "send the torch link again"), []);
+  // A page that opens without a photo is no broken link (c04-stress: the only texts the no-photo branch ever matched).
+  assert.deepEqual(linkStyle(`Sorry! Here it is again: ${torchLink}`, "got pic or not? i open the link also no picture leh"), []);
   assert.equal(issueCode(BROKEN_LINK_ISSUE), "LINK");
+});
+
+test("brokenLinkCodes gives the linked cards the customer says don't open: those named in the last reply, else anywhere, else all the last reply's", () => {
+  const zyliss: ShownCard = { code: "E910076", name: "Zyliss Stainless Steel Household Scissors", price: 29.27, link: "https://store.siahuat.com/product/14717370014" };
+  const zylissBasic: ShownCard = { code: "E910077", name: "Zyliss Polypropylene Basic Household Scissors Basic, Gray", price: 22.84, link: "https://store.siahuat.com/product/14717370015" };
+  const shibazi: ShownCard = { code: "SB3038", name: "Stainless Steel Household Kitchen Scissors L21cm, Shibazi", price: 7.25, link: "https://store.siahuat.com/product/14717605813" };
+  const detachable: ShownCard = { code: "SB3027", name: "Stainless Steel Detachable Household Kitchen Scissors L20.5cm, Shibazi", price: 10, link: "https://store.siahuat.com/product/14717605800" };
+  const shown = (...sets: ShownCard[][]) => sets.map((cards) => ({ cards }));
+  assert.deepEqual(brokenLinkCodes("Zyliss link not working", shown([zyliss, shibazi])), ["E910076"]);
+  assert.deepEqual(brokenLinkCodes("same link la!! still cannot open", shown([zyliss, shibazi])), ["E910076", "SB3038"]);
+  // r4 c08-stress idx 5: the code typed.
+  assert.deepEqual(brokenLinkCodes("u say wont send but the card below still same link lor. i search E910076 on ur website also nothing come out", shown([zyliss])), ["E910076"]);
+  // r3 c08-persona idx 4: the Zyliss card was two replies back.
+  assert.deepEqual(brokenLinkCodes("I want the Zyliss one not these. Link still doesn't open", shown([zyliss, shibazi], [detachable])), ["E910076"]);
+  assert.deepEqual(brokenLinkCodes("zyliss link cannot open leh", shown([zyliss, zylissBasic])), ["E910076", "E910077"]);
+  assert.deepEqual(brokenLinkCodes("link can open la, just no photo", shown([zyliss])), []);
+  assert.deepEqual(brokenLinkCodes("the zyliss one, 2 pcs", shown([zyliss])), []);
 });
 
 test("a reply saying a line the browser still holds was removed is flagged, and fixed with one whole sentence", () => {

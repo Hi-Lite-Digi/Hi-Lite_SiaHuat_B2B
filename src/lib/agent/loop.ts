@@ -9,9 +9,9 @@ import { enquiryTotals, listItemCount, sameQuantityText, statesAnyQuantity, veri
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, customerMessage, dropRepeatedPitch,
-  enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts, withoutChangedCards,
-  withoutEnquiryClaims, withoutKeptLineClaims,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
+  dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
+  withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -461,9 +461,15 @@ export async function runAgentTurn(input: {
     const withEarlierCards = (answer: FinalAnswer) => beforeDeadline(
       attachEarlierCards(answer, ctx, previousCodes, unverifiedAmounts(answer.message, currentAllowed()).length > 0, timeLeft, triedCodes), deadline,
     ).catch(() => answer);
-    // Dropped before the lookup and the review, so no re-check or REPEAT repair is spent on it (exam 3, c02-A T18). A cards-only
-    // answer keeps its cards: they are all it says.
-    const trimCards = (answer: FinalAnswer) => (answer.message === CARDS_ONLY_MESSAGE ? answer : withoutChangedCards(answer, ctx.changes, ctx.shownIds, earlier.currentText));
+    // Dropped before the lookup and the review, so no re-check, REPEAT or LINK repair is spent on them: a card whose link the customer
+    // says doesn't open (exam 4, c08), a changed item's card they've seen (exam 3, c02-A T18) and a set shown twice (exam 4). A
+    // cards-only answer keeps its other cards: they are all it says.
+    const brokenCodes = brokenLinkCodes(earlier.currentText, picks.replies);
+    const trimCards = (answer: FinalAnswer): FinalAnswer => {
+      const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
+      if (answer.message === CARDS_ONLY_MESSAGE) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: NOTHING_LEFT_MESSAGE, show_contact: true };
+      return withoutRepeatedSet(withoutChangedCards({ ...answer, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused);
+    };
     let final = result.final && await withEarlierCards(trimCards(result.final));
     let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());

@@ -162,6 +162,9 @@ test("Claire attaches an earlier card only when it's needed, not again for an it
   // exam 3: re-shown cards rose from 170 to 472, and 61 of 87 add confirmations re-sent the card.
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Don't attach an earlier card just because your message mentions it"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("already seen (shown_before true) for the item you changed"));
+  // exam 4: a how-many question re-attached a card shown twice; the pick check reads the chat, so the card isn't needed.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("To ask how many of a product, name it; don't attach its card again."));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("ask about one product (whether it's the one they mean, or how many)"));
 });
 
 test("Claire only reports enquiry changes that happened, never promises them, and paces a list", () => {

@@ -6,7 +6,7 @@ import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
-import { codePattern, pointedCards, same } from "./picks";
+import { codePattern, hits, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
@@ -121,7 +121,8 @@ const asksAgain = new RegExp([
 ].join("|"), "i");
 const cardSetKey = (codes: string[]) => [...new Set(codes.map((code) => code.toLowerCase()))].sort().join(" ");
 const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, " ").trim();
-const REPEATED_CARDS_ISSUE = "You've already shown these same cards twice. Show different options, or none.";
+// The repair runs with tools off, so it can't show different options.
+const REPEATED_CARDS_ISSUE = "You've already shown this same set of cards twice. Don't attach the whole set again (you can name them, and attach only the one you recommend). Answer what the customer just said, recommend one if they are choosing, and don't ask again a question you already asked.";
 const REPEATED_MESSAGE_ISSUE = "Don't repeat your previous message word for word; move the conversation forward.";
 // A closing offer to do something, or a push for a pick or a quantity (exam 2, c05-A: "Want me to add 4 of each?" two replies running).
 const offerPattern = /\b(?:want (?:me to|to (?:add|go|take|order))|shall (?:i|we)|should i|would you like (?:me to|to (?:add|go|order))|how many\b|go ahead|add (?:it|them|this|these|one|either|any|\d+)\b)/i;
@@ -218,7 +219,7 @@ export function unknownStoreLinks(message: string, seen: ReadonlyMap<string, Che
 
 // "zyliss link cannot open leh", "Same link. Still not working", "the link got nothing inside" (exam 2, c03 and c08).
 const linkWord = /\b(?:link|url|page|website|site)s?\b|链接|网页/i;
-const linkFails = /\b(?:not (?:work|open|load)\w*|(?:can ?not|can't|cant|couldn't|won't|wont|doesn't|doesnt|didn't|dun|don't|never) (?:open|load|work)\w*|broken|dead|empty|nothing (?:inside|there|come|show)\w*|no (?:photo|picture|pic|image)s?|error|not found|still no|still not|same link)\b|打不开|无法打开/i;
+const linkFails = /\b(?:not (?:work|open|load)\w*|(?:can ?not|can't|cant|couldn't|won't|wont|doesn't|doesnt|didn't|dun|don't|never) (?:open|load|work)\w*|broken|dead|empty|nothing (?:inside|there|come|show)\w*|error|not found|still no|still not|same link)\b|打不开|无法打开/i;
 const choosing = /\d|\b(?:add|take|tap|buy|order|show)\b/i;
 const blamesCustomer = /\b(?:browser|network|connection|cach(?:e|ing)|incognito|private window|on your (?:side|end))\b/i;
 export const BROKEN_LINK_ISSUE = "The customer says a link you sent doesn't open. Don't send that link again. Give the item code and the facts from the tools, and offer Sia Huat sales for photos (show_contact true) or a similar product.";
@@ -231,6 +232,21 @@ function brokenLinkIssues(message: string, cards: Product[], earlier: EarlierTur
   const retyped = storeLinks(message).some((link) => previous.has(linkKey(link)));
   const onCard = !choosing.test(earlier.currentText) && cards.some((card) => card.source_url && previous.has(linkKey(card.source_url)));
   return [...(retyped || onCard ? [BROKEN_LINK_ISSUE] : []), ...(blamesCustomer.test(message) ? [LINK_BLAME_ISSUE] : [])];
+}
+
+/**
+ * The codes of the linked cards whose link the customer says doesn't open, which the loop drops from the reply in code: those the
+ * text names (code, words, size or price) in Claire's last reply, else in any earlier reply (r3 c08-persona idx 4: the Zyliss card
+ * was two replies back), else every linked card of the last reply ("same link la!! still cannot open"). Exam 4, c08: 3 replies
+ * re-sent the Zyliss card right after the customer said its link doesn't open.
+ */
+export function brokenLinkCodes(currentText: string, replies: readonly { cards: readonly ShownCard[] }[]) {
+  if (!linkWord.test(currentText) || !linkFails.test(currentText)) return [];
+  const linked = (cards: readonly ShownCard[]) => cards.filter((card) => card.link);
+  const named = (cards: readonly ShownCard[]) => linked(cards).filter((card) => codePattern(card.code).test(currentText) || hits(card, currentText).size > 0);
+  const previous = replies.at(-1)?.cards ?? [];
+  const found = named(previous).length ? named(previous) : named(replies.flatMap((reply) => reply.cards));
+  return [...new Set((found.length ? found : linked(previous)).map((card) => card.code))];
 }
 
 export const NO_CARD_PREFIX = "No card attached";
@@ -254,6 +270,20 @@ export function withoutChangedCards(answer: FinalAnswer, changes: EnquiryChange[
   const shown = new Set([...shownIds].map((id) => id.toLowerCase()));
   const changed = new Set(changes.flatMap((change) => (change.code && (change.action === "add" || change.action === "set") ? [change.code.toLowerCase()] : [])));
   return { ...answer, card_ids: answer.card_ids.filter((id) => !(changed.has(id.toLowerCase()) && shown.has(id.toLowerCase()))) };
+}
+// Words that send the customer to the cards: without them the cards would leave the words pointing at nothing.
+const pointsAtCards = /\b(?:tap|click)\b|\bcards?\b|\bbelow\b/i;
+/**
+ * The answer without its cards when that same set was already shown twice (exam 4: 14 third showings, most re-attached to "Just to
+ * confirm?", "Want me to add it?" or "How many?"), unless the customer asked to see it again, the message points at the cards, or
+ * update_enquiry refused one of them this turn (the question about it offers it). The pick check reads the chat, so a yes or a
+ * number no longer needs the card on screen.
+ */
+export function withoutRepeatedSet(answer: FinalAnswer, earlier: EarlierTurns, refused: readonly string[]): FinalAnswer {
+  if (!answer.card_ids.length || asksAgain.test(earlier.currentText) || pointsAtCards.test(answer.message)) return answer;
+  if (answer.card_ids.some((id) => refused.some((code) => same(code, id)))) return answer;
+  const key = cardSetKey(answer.card_ids);
+  return earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2 ? { ...answer, card_ids: [] } : answer;
 }
 const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
 const NO_CARD_SHOW_ISSUE = `${NO_CARD_PREFIX}: you promised to show products but attached none. Attach them now or don't promise.`;
@@ -336,8 +366,11 @@ const claimClauses = (sentence: string) => sentence
     return clauses;
   }, []))
   .map((part) => part.trim()).filter(Boolean);
-// The fixer's line: true for a false add, change or removal, including of an item already on the enquiry.
+// The fixer's lines: true for a false add, change or removal, including of an item already on the enquiry. An add or change asks
+// what is still needed, never for an item code and never with "I'll"; exam-numbers counts the first sentence.
 const NOT_ON_ENQUIRY = "That change isn't on your enquiry yet.";
+const NOT_ADDED_LINE = `${NOT_ON_ENQUIRY} Which item and how many would you like?`;
+const NOT_REMOVED_LINE = "That line is still on your enquiry.";
 /** The products a reply's words can point at: those looked up this turn and the enquiry's lines. */
 const claimCards = (facts: ClaimFacts): ShownCard[] => [
   ...seenCards(facts.seen),
@@ -422,7 +455,7 @@ function saysEachNotMade(unclaimed: string, claims: string[], cards: ShownCard[]
 
 /**
  * The message without its false enquiry claims. Only when the customer asked for a change, and the rest of the reply doesn't already
- * say each one wasn't made, does one NOT_ON_ENQUIRY line take the first claim's place.
+ * say each one wasn't made, does one fixed line take the first claim's place: NOT_REMOVED_LINE for a removal, else NOT_ADDED_LINE.
  */
 export function withoutEnquiryClaims(message: string, facts: ClaimFacts, askedChange = true) {
   const claims = falseEnquiryClaims(message, facts);
@@ -430,7 +463,7 @@ export function withoutEnquiryClaims(message: string, facts: ClaimFacts, askedCh
   if (!first) return message;
   const unclaimed = removeSentences(message, (sentence) => claims.includes(sentence));
   if (!askedChange || saysEachNotMade(unclaimed, claims, claimCards(facts))) return unclaimed;
-  return removeSentences(message.replace(first, NOT_ON_ENQUIRY), (sentence) => rest.includes(sentence));
+  return removeSentences(message.replace(first, removalWord.test(first) ? NOT_REMOVED_LINE : NOT_ADDED_LINE), (sentence) => rest.includes(sentence));
 }
 
 export const KEPT_LINE_PREFIX = "This line is still on the enquiry";
@@ -695,14 +728,10 @@ export function reviewAnswer(
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
   if (danglingCurrency.test(answer.message)) style.push(DANGLING_CURRENCY_ISSUE);
   if (said.some((s) => claims(s, reservationWords))) style.push(RESERVATION_ISSUE);
-  // A card the reply needs is not a loop: one update_enquiry refused as not picked, or the one card a question names ("Is it the
-  // Zyliss E910076?", "How many of the HET-4?"); the customer's yes or number picks it only while it is shown (exam 3: c08-persona T8,
-  // c11-stress T7-T8, c02-B T13). The card may be named in the sentence before ("The HET-4 is in stock. How many do you need?", c04-B
-  // T5), but a generic "Anything else?" doesn't ask about it, so it doesn't need the card a third time.
+  // A card update_enquiry refused is not a loop: the question about it offers it. A question naming one card no longer needs it a
+  // third time: the pick check reads the chat (exam 4: most same-set third showings were one such card).
   const refused = turn.refused ?? [];
-  const needed = cards.some((card) => refused.some((code) => same(code, card.stock_id)))
-    || (cards.length === 1 && pointedBy(answer.message, [asCard(cards[0])]).length > 0
-      && said.some((s) => /[?？]$/.test(s) && !genericAsk.test(s)));
+  const needed = cards.some((card) => refused.some((code) => same(code, card.stock_id)));
   style.push(...repetitionIssues(answer.message, cards, earlier, Boolean(turn.changes?.length), needed));
   style.push(...brokenLinkIssues(answer.message, cards, earlier));
   return { safety, style, cards, chips };

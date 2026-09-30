@@ -263,11 +263,12 @@ test("the history's card notes and previous message feed the repetition checks",
     answer({ message: "That's the only blow torch in stock. Want a gas torch instead?" }),
   ]);
   const reply = await runAgentTurn({
-    request: request({ event: { type: "text", text: "any other?" }, history: [{ role: "user", content: "blow torch" }, shown, { role: "user", content: "hmm" }, shown] }),
+    request: request({ event: { type: "text", text: "any other?" }, history: [{ role: "user", content: "blow torch" }, shown, { role: "user", content: "hmm" }, shown], shownProductIds: ["970S"] }),
     deps: deps(), client, model: "claude-sonnet-5",
   });
   const repair = JSON.stringify(bodies[2].messages.at(-1));
-  assert.match(repair, /already shown these same cards twice/);
+  // The card set the notes show twice is dropped in code before the review, so only the repeated words need the repair.
+  assert.doesNotMatch(repair, /already shown this same set of cards twice/);
   assert.match(repair, /Don't repeat your previous message word for word/);
   assert.equal(reply.provider, "anthropic");
   assert.deepEqual(reply.cards, []);
@@ -793,7 +794,10 @@ test("an add confirmation keeps a card the customer hasn't seen, and a cards-onl
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
     answer({ message: "Got it: 2 blow torches.", card_ids: ["970S"] }),
   ]);
-  const shownNever = await checkedTurn({ request: torchShownTwice([]), deps: deps(), client: firstShowing.client, model: "claude-sonnet-5" });
+  const shownNever = await checkedTurn({
+    request: { ...torchShownTwice([]), history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "Which kind of torch do you need?" }, { role: "user", content: "how much ah" }] },
+    deps: deps(), client: firstShowing.client, model: "claude-sonnet-5",
+  });
   assert.deepEqual(shownNever.cards.map((card) => card.stock_id), ["970S"]);
   const cardsOnly = fakeClient([
     toolCall("t1", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
@@ -835,6 +839,22 @@ test("a refused add, then 'Is it the X?' with X shown twice before, is sent with
     const log = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").at(-1)!.arguments[1] as Record<string, unknown>;
     assert.deepEqual(log.repairCauses, [], message);
   }
+});
+
+test("a how-many question re-attaching a card shown twice goes out without the card and without a repair", async (t) => {
+  // exam 4: 14 same-set third showings, most re-attached to "Just to confirm?", "Want me to add it?" or "How many?".
+  const info = t.mock.method(console, "info", () => undefined);
+  const { client, bodies } = fakeClient([answer({ message: "How many of the Safico torch do you need?", card_ids: ["BTS-8026D"] })]);
+  const shownTwice = { role: "assistant" as const, content: `This one runs on gas.${cardsNote([safico])}` };
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "ok the safico one" }, history: [{ role: "user", content: "gas torch" }, shownTwice, { role: "user", content: "how much ah" }, shownTwice], shownProductIds: ["BTS-8026D"] }),
+    deps: deps(), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "How many of the Safico torch do you need?");
+  const log = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").at(-1)!.arguments[1] as Record<string, unknown>;
+  assert.deepEqual(log.repairCauses, []);
 });
 
 test("customer texts exclude taps and include the current message", () => {
@@ -964,7 +984,7 @@ test("a false add claim that survives the nudge and the repair is replaced", asy
   assert.equal(bodies.length, 3);
   assert.equal(reply.provider, "anthropic");
   assert.doesNotMatch(reply.message, /added/i);
-  assert.equal(reply.message, "That change isn't on your enquiry yet. Anything else?");
+  assert.equal(reply.message, "That change isn't on your enquiry yet. Which item and how many would you like? Anything else?");
 });
 
 test("no nudge when little time is left: the repair runs instead", async () => {
@@ -981,7 +1001,7 @@ test("a 'Noted: 2 torches' claim with no update is replaced after the repair", a
   const { client } = fakeClient([claim, claim, claim]);
   const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(reply.provider, "anthropic");
-  assert.equal(reply.message, "That change isn't on your enquiry yet.");
+  assert.equal(reply.message, "That change isn't on your enquiry yet. Which item and how many would you like?");
 });
 
 test("a false promise answering a recommendation request is dropped without the fixed line", async () => {
@@ -1046,7 +1066,7 @@ test("a comma list that claims an add which failed is repaired, then replaced", 
   assert.equal(bodies.length, 4);
   assert.match(JSON.stringify(bodies[3].messages.at(-1)), /The enquiry didn't change/);
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]]);
-  assert.equal(reply.message, "That change isn't on your enquiry yet. Anything else?");
+  assert.equal(reply.message, "That change isn't on your enquiry yet. Which item and how many would you like? Anything else?");
 });
 
 test("a true removal reply that names the item left is sent as it is", async () => {
@@ -1213,6 +1233,34 @@ test("a link from a tool result or already in the chat is sent as it is", async 
   const again = await runAgentTurn({ request: askedAgain("got photo?"), deps: deps(), client, model: "claude-sonnet-5" });
   assert.equal(bodies.length, 1);
   assert.equal(again.message, fromChat);
+});
+
+test("a card whose link the customer says doesn't open is dropped in code, with no link repair", async (t) => {
+  // exam 4, c08: the Zyliss card went out again with the link the customer had just said doesn't open.
+  const info = t.mock.method(console, "info", () => undefined);
+  const zyliss = product({ stock_id: "E910076", name: "Zyliss Stainless Steel Household Scissors", list_price: 29.27 });
+  const shibazi = product({ stock_id: "SB3038", name: "Stainless Steel Household Kitchen Scissors L21cm, Shibazi", list_price: 7.25 });
+  const message = "Sorry that link isn't opening. It's item E910076: you can search that code on the store.";
+  const brokenTurn = (client: AgentClient) => runAgentTurn({
+    request: request({
+      event: { type: "text", text: "Zyliss link not working" },
+      history: [{ role: "user", content: "household scissors" }, { role: "assistant", content: `Two options.${cardsNote([zyliss, shibazi])}` }],
+      shownProductIds: ["E910076", "SB3038"],
+    }),
+    deps: fakeDeps([zyliss, shibazi]), client, model: "claude-sonnet-5",
+  });
+  const { client, bodies } = fakeClient([answer({ message, card_ids: ["E910076"] })]);
+  const reply = await brokenTurn(client);
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, message);
+  const log = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").at(-1)!.arguments[1] as Record<string, unknown>;
+  assert.deepEqual(log.repairCauses, []);
+  // A cards-only answer with nothing left after the drop points to sales instead.
+  const cardsOnly = await brokenTurn(fakeClient([answer({ message: "", card_ids: ["E910076"] })]).client);
+  assert.deepEqual(cardsOnly.cards, []);
+  assert.equal(cardsOnly.showContact, true);
+  assert.match(cardsOnly.message, /Sia Huat sales can help/);
 });
 
 const choice = (body: Anthropic.MessageCreateParamsNonStreaming) => (body.tool_choice as { type: string }).type;
