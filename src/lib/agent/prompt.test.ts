@@ -130,7 +130,7 @@ test("Claire adds a product the customer picked from any card in the chat, witho
 test("after a pick-check refusal Claire stops retrying and does what its code says, never mentioning the check", () => {
   // exam 3, c08-persona T8 and c11-stress T7: the refused add was retried, then asked about without its card.
   const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- update_enquiry checks each add")) ?? "";
-  assert.ok(line.startsWith("- update_enquiry checks each add, change and removal against the chat. PICKED_OTHER: the customer picked that product instead: add it with picked.quantity."));
+  assert.ok(line.startsWith("- update_enquiry checks each add, change and removal against the chat. PICKED_OTHER: the customer picked that product instead: send the same change for it, with picked.quantity."));
   assert.ok(line.includes("NOT_PICKED: they haven't asked for it: answer what they said, don't add it and don't ask them to confirm it."));
   assert.ok(line.includes("PICK_UNCLEAR: attach the fitting cards and ask which one, naming them (X or Y?)."));
   assert.ok(line.includes("ask one short question naming the product with its code ('Is it the <name> <code>?') with its card; a yes or a tap then adds it."));

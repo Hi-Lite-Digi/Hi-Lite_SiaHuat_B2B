@@ -49,8 +49,9 @@ const sizeOrPartWords = String.raw`tiers?|levels?|layers?|decks?|burners?|doors?
 const notQuantityAfter = String.raw`(?![-\s]*(?:${sizeOrPartWords})\b|[-\s]*%|\s*pcs?\s*(?:\/|per\b)|\s*[号款]|\+|(?:\s+more)?\s+times?\b|\s+too\b|\s*(?:"|″|”|'')(?!\w)|\s*(?:or|to)\s*\d+[-\s]*(?:${sizeOrPartWords})\b)`;
 // A guess or a rate is a need, not an order: "maybe about 200" (exams 2-4, c02, 13 times), "abt 200 cup a day each outlet", "1 unit
 // per outlet opening" (s04, 6 times), GST guesses like "roughly 80". Replayed over 2,043 customer texts: 22 numbers, no right add blocked.
-// "how about 3" offers a number, so it isn't a guess. The rate word starts after a space: "2 for Sentosa outlet" is no rate.
-const guessBefore = String.raw`(?<!\b(?<!\b(?:how|what)\s+)(?:maybe|about|abt|around|approx(?:imately)?|roughly)\s+)`;
+// "how about 3" offers a number, so it isn't a guess. The rate word starts after a space: "2 for Sentosa outlet" is no rate. "ard" is
+// Singlish for around (r4 c09-stress idx 13, "ard 37 like that correct anot", a guess at the total with GST).
+const guessBefore = String.raw`(?<!\b(?<!\b(?:how|what)\s+)(?:maybe|about|abt|around|ard|approx(?:imately)?|roughly)\s+)`;
 const notRateAfter = String.raw`(?!(?:\s+[a-z]+){0,2}?(?:\s+(?:a|per|each|every)\s*|\s*\/\s*)(?:day|daily|week|month|outlet|branch|shop|opening|person|pax)\b)`;
 // "one" as a quantity: at the start (also after "ok"/"yes"), after a buying word, before a count word, or "one each / one of each";
 // never "that one", "one of them", "one of those" opening the text, or "one more thing / one question / one sec".
@@ -155,9 +156,8 @@ export function typedQuantities(customerTexts: string[]) {
 
 /** True when the customer's texts state any quantity (a digit, a number word or a Chinese numeral used as a count). */
 export function statesAnyQuantity(customerTexts: string[]) {
-  const numbers = new Set([...customerTexts.join(" ").matchAll(/\d+/g)].map((match) => Number(match[0])).filter((n) => n > 0 && n <= 100_000));
-  for (let n = 1; n <= 100; n += 1) numbers.add(n);
-  return [...numbers].some((n) => quantityStated(n, customerTexts));
+  // Past the digits: number words, Chinese numerals and dozens read as pieces ("two", 两个, "4 dozen" states 48).
+  return typedQuantities(customerTexts).length > 0 || Array.from({ length: 100 }, (_, index) => index + 1).some((n) => quantityStated(n, customerTexts));
 }
 
 // "same qty" only (owner question 4): "same as before" often means the product, not the number. Either apostrophe: phone
@@ -172,7 +172,7 @@ const sameQuantity = /(?<!\b(?:not|no|dun|don['’]?t|diff\w*)\s+(?:the\s+)?)\bs
 export function sameQuantityText(currentText: string | null, typedTexts: string[]) {
   if (!currentText || !sameQuantity.test(currentText)) return null;
   const newest = typedTexts.slice(0, 4);
-  const typed = [...new Set(newest.flatMap((text) => text.match(/\d+/g) ?? []).map(Number))].filter((n) => quantityStated(n, newest));
+  const typed = typedQuantities(newest);
   return typed.length === 1 ? newest.find((text) => quantityStated(typed[0], [text])) ?? null : null;
 }
 
@@ -213,6 +213,9 @@ export function unitStated(quantity: number, unit: "uom" | "carton" | "packet", 
 // "this", "the whole list", "out everything"), or bare only at the start or after pls/can (u)/just/ok/help/to.
 const clearRequest = /(?<!\b(?:not|don['’]?t|dont|dun|no|never)\s+(?:\w+\s+)?(?:to\s+)?)(?:\bclear\s+(?:(?:out|up|off)\s+)?(?:all|everything|it|them|this|that|these|those|my|the\s+(?:(?:whole|entire)\s+)?(?:enquiry|list|cart|lot|order|quote|items?|basket|thing)|enquiry|list|cart|order|quote)\b|(?:^\s*|\b(?:pls|please|can|just|ok|okay|help|to)\s+(?:(?:u|you)\s+)?)clear\b(?=\s*(?:$|[.!?,]|(?:la|lah|lor|pls|please)\b))|\b(?:start over|reset|remove all|delete all|cancel all|cancel everything)\b)|清空|全部取消|重新开始/i;
 
+/** An item sold by the dozen, by its unit (DOZ, DZ, DOZEN). */
+export const soldByDozen = (uom: string) => /^(?:doz|dz|dozen)s?$/i.test(uom.trim());
+
 // exam 4, c09-persona T12: a bare error made Claire say she was "hitting an issue" and ask for a typed code.
 export const QTY_NOTICE = "That number isn't one the customer typed for this item. If they gave cartons or packets, send that count with unit; otherwise ask how many in a few words. Don't say anything failed or ask them to type a code.";
 
@@ -252,7 +255,7 @@ export async function applyEnquiryAction(
   if (resolved.quantity === null) return { ok: false, error: "PACK_SIZE_UNKNOWN", notice: resolved.notice, product: checked };
   const { product } = checked;
   // "4 dozen" is 4 of an item sold by the dozen and 48 of one sold by the piece.
-  const byDozen = /^(?:doz|dz|dozen)s?$/i.test(product.uom_id.trim());
+  const byDozen = soldByDozen(product.uom_id);
   if (!quantityStated(action.quantity, customerTexts, byDozen ? "dozens" : "pieces")) {
     return { ok: false, error: "UNIT_MISMATCH", notice: byDozen ? "This item is sold by the dozen: use the number of dozens the customer typed." : "The customer typed dozens: 1 dozen = 12 pieces.", product: checked };
   }

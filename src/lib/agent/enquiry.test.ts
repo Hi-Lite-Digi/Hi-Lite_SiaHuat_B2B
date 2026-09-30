@@ -467,7 +467,7 @@ test("an item sold by the dozen takes the dozens typed, one sold by the piece ta
   assert.deepEqual(four.ok ? null : [four.error, four.notice], ["UNIT_MISMATCH", "The customer typed dozens: 1 dozen = 12 pieces."]);
   const plain = await add(spoon, 2, "2 pls");
   assert.equal(plain.ok && plain.lines[0].quantity, 2);
-  // "N dozen of": 24 plates, not 2 (review of X2).
+  // "N dozen of": 24 plates, not 2.
   const of = await add(plate, 24, "2 dozen of the plates");
   assert.equal(of.ok && of.lines[0].quantity, 24);
   const two = await add(plate, 2, "2 dozen of the plates");
@@ -486,6 +486,10 @@ test("a guessed number or a rate is never a quantity", () => {
   assert.equal(quantityStated(1, ["1 unit per outlet opening"]), false);
   assert.equal(quantityStated(200, ["abt 200 cup a day each outlet"]), false);
   assert.equal(quantityStated(80, ["roughly 80 like that correct anot"]), false);
+  // "ard" is Singlish for around: r4 c09-stress idx 13's GST follow-up (a price guess) turned on the permission check.
+  const guess = ["i just need rough number tell my boss. ard 37 like that correct anot", "aiyo 9% only also cannot count? roughly lah"];
+  assert.deepEqual([quantityStated(37, guess), statesAnyQuantity(guess)], [false, false]);
+  assert.equal(quantityStated(3, ["hard 3 pcs"]), true);
   assert.equal(quantityStated(2, ["mika can tahan 200 cup a day meh? change to the waring 1.2k one la, same 2"]), true);
   assert.equal(quantityStated(200, ["mika can tahan 200 cup a day meh? change to the waring 1.2k one la, same 2"]), false);
   assert.equal(quantityStated(50, ["need 50 pcs"]), true);
@@ -493,7 +497,7 @@ test("a guessed number or a rate is never a quantity", () => {
   for (const [quantity, text] of [[20, "20 pcs everyday"], [200, "200 cups/day"], [2, "2 pc a day"], [1, "1 for each outlet"], [2, "2 per pax"]] as const) {
     assert.equal(quantityStated(quantity, [text]), false, text);
   }
-  // A shop or outlet name ending in "a" or "per" is not a rate word (review of X2).
+  // A shop or outlet name ending in "a" or "per" is not a rate word.
   for (const text of ["need 2 for Sentosa outlet", "2 for boba shop", "2 for pasta shop", "2 for paper shop"]) assert.equal(quantityStated(2, [text]), true, text);
   // "how about 3" offers a number; it isn't a guess.
   assert.equal(quantityStated(3, ["ok how about 3"]), true);

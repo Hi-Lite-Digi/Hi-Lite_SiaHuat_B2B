@@ -38,7 +38,7 @@ const toCents = (match: RegExpMatchArray) => {
  * Amounts Claire may mention: live-checked prices, enquiry line prices and totals, and code's GST estimates (a live-checked price
  * with GST; the enquiry total with GST and its GST part). Not gated on GST words: "ok so final total how much ah, i tell boss", two
  * turns after an estimate, had its right figure repaired away in 3 of 3 runs. No total with GST while a line is unchecked: the
- * total leaves it out, and a sum Claude worked out on part of the enquiry would pass (P3 eval: 2 of 3 drafts).
+ * total leaves it out, and a sum Claude worked out on part of the enquiry would pass (2 of 3 GST replay drafts did).
  */
 export function allowedCents(seen: Map<string, CheckedProduct>, lines: EnquiryReceiptLine[], grandTotal: number, allLinesChecked = true) {
   const cents = new Set<number>();
@@ -486,8 +486,8 @@ const addWording = /\b(?:added|adding|updated|updating|put|noted down)\b|已(?:�
 /**
  * The fixed line for a false claim. NOT_REMOVED_LINE only for a claim that only removes (or promises to), every line it names still
  * on the enquiry and no removal of anything else made this turn; a removal beside an add, or of anything not on the enquiry, gets the
- * bare NOT_ON_ENQUIRY, true of any false change (X7 review: exam 3, c11-stress T4 replayed, where the swap's removal ran and its add
- * didn't). An add or change asks what is still needed, unless the rest of the reply already asks its own question.
+ * bare NOT_ON_ENQUIRY, true of any false change (exam 3, c11-stress T4 replayed: the swap's removal ran and its add didn't). An add
+ * or change asks what is still needed, unless the rest of the reply already asks its own question.
  */
 function fixedLine(claim: string, facts: ClaimFacts, unclaimed: string) {
   const parts = claimClauses(claim).filter((clause) => changeClaim.test(clause) || promiseChange.test(clause));
@@ -495,8 +495,8 @@ function fixedLine(claim: string, facts: ClaimFacts, unclaimed: string) {
   if (removals.length) {
     const alone = removals.length === parts.length && !addWording.test(claim) && !onEnquiryWording.test(claim);
     // Every named line, not one: "Removed the HET-4 and set the HET-6 to 3" stays one clause, and the HET-6 on the enquiry
-    // doesn't keep the HET-4 that was removed (Y4 re-check). A removal that ran for an item the claim doesn't name may be the one
-    // it means ("Removed it and set the HET-6 to 3"), so it rules the removal line out too (Y4 second re-check).
+    // doesn't keep the HET-4 that was removed. A removal that ran for an item the claim doesn't name may be the one it means
+    // ("Removed it and set the HET-6 to 3"), so it rules the removal line out too.
     const named = removals.flatMap((clause) => pointedBy(clause, claimCards(facts)));
     const unnamedRemoval = facts.changes.some(({ action, code }) => action === "remove" && code !== null && !named.some((card) => same(card.code, code)));
     const kept = named.length > 0 && !unnamedRemoval && named.every((card) => facts.lines.some((line) => same(line.code, card.code)));
@@ -588,7 +588,7 @@ const RANKING = new RegExp([
   String.raw`\bthe\s+(?:only\s+)?one\b[^.!?,]{0,30}?(?<!\bfrom\s+what\s+)\b(?:we|I)(?:['’]ve\s+got|\s+(?:have|carry|stock))\b(?!\s+in\s+mind)`,
   String.raw`^(?:(?:only|just)\s+)?(?:two|three|four|[2-4])\s+(?:options?|choices|models|versions)\b${NEXT_STEP}`,
   String.raw`${COUNTED}\s+(?!(?:[\w-]+\s+)?(?:types|kinds|categories|lines|styles|ways|things|steps|questions|reasons|items|units|differences)\b|(?:units?|pcs?|pieces|sets?|pkts?|cartons?|left|in\s+stock|available|more)\b)(?:[\w-]+\s+){0,2}?[a-z-]+s\b(?!\s+(?:left|available|in\s+stock|on\s+(?:hand|your)))${NEXT_STEP}`,
-  // A bare count: "We have two: the Giesser 28cm ... and a smaller ... one" (X11 live check, s09-B idx 1); not "We have 2 left".
+  // A bare count: "We have two: the Giesser 28cm ... and a smaller ... one" (r4 s09-B idx 1, replayed); not "We have 2 left".
   String.raw`${COUNTED}(?=\s*(?::|[-–—]\s|[.!?]?$))${NEXT_STEP}`,
 ].join("|"), "i");
 const PRICE_RANK = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b|\bnext\s+up\s+in\s+price\b/i;
@@ -644,8 +644,9 @@ const originOf = (details?: Record<string, string> | null) => {
 // catalogue" names a knife).
 const ITEM_END = new Set(["in", "at", "for", "from", "with", "that", "which", "by", "on", "of", "or", "and", "but", "to", "available", "right", "now", "here", "yet", "currently", "we", "i"]);
 const NOT_ITEM = new Set(["made", "brand", "brands", "style", "actual", "actually", "genuine", "real", "item", "items", "product", "products", "one", "ones", "option", "options"]);
-const singular = (word: string) => word.replace(/ives$/, "ife").replace(/(?<=\p{L}{3})s$/u, "");
-const nameWords = (text: string) => (text.toLowerCase().match(/\p{L}{3,}/gu) ?? []).map(singular);
+// An item's words for "we don't have it", singular ("knives" is "knife"): looser than picks.ts's nameWords, which drops short and stop words.
+const itemWord = (word: string) => word.replace(/ives$/, "ife").replace(/(?<=\p{L}{3})s$/u, "");
+const itemWords = (text: string) => (text.toLowerCase().match(/\p{L}{3,}/gu) ?? []).map(itemWord);
 const soldOutProduct = ({ product }: CheckedProduct) => product.stock_status === "out_of_stock" || product.available_quantity === 0;
 
 /**
@@ -666,16 +667,16 @@ function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>
   const countries = new Set(words.flatMap((word) => (COUNTRIES[word] ? [COUNTRIES[word]] : [])));
   const countryAt = words.findIndex((word) => COUNTRIES[word]);
   const end = words.findIndex((word, index) => index > countryAt && ITEM_END.has(word));
-  const item = countryAt < 0 ? [] : words.slice(countryAt + 1, end < 0 ? undefined : end).filter((word) => /^\p{L}{3,}$/u.test(word) && !NOT_ITEM.has(word)).map(singular);
+  const item = countryAt < 0 ? [] : words.slice(countryAt + 1, end < 0 ? undefined : end).filter((word) => /^\p{L}{3,}$/u.test(word) && !NOT_ITEM.has(word)).map(itemWord);
   // A quote opens after a space or bracket, so the apostrophe of "couldn't" never starts one.
-  const quoted = !quotes ? [] : [...clause.matchAll(/(?<![\p{L}\p{N}])['‘“"]([^'’”"]{3,40})['’”"](?![\p{L}\p{N}])/gu)].map((match) => nameWords(match[1])).filter((quote) => quote.length >= 2);
+  const quoted = !quotes ? [] : [...clause.matchAll(/(?<![\p{L}\p{N}])['‘“"]([^'’”"]{3,40})['’”"](?![\p{L}\p{N}])/gu)].map((match) => itemWords(match[1])).filter((quote) => quote.length >= 2);
   const inStockAsked = /\bin[- ]stock\b|\bavailable\b/i.test(clause);
   return [...seen.values()].filter((checked) => {
     const code = checked.product.stock_id;
     if (codePattern(code).test(sentence) || sources.some((source) => same(source, code))) return false;
     const origin = originOf(checked.details);
     if ((inStockAsked && soldOutProduct(checked)) || (countries.size && origin && !countries.has(origin))) return false;
-    const name = new Set(nameWords(checked.product.name));
+    const name = new Set(itemWords(checked.product.name));
     return quoted.some((quote) => quote.every((word) => name.has(word)))
       || (countries.has(origin) && item.length > 0 && item.every((word) => name.has(word)));
   }).map(({ product }) => product);
@@ -697,7 +698,7 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
   const cards = seenCards(seen);
   const soldOut = (card: ShownCard) => {
     const item = seen.get(card.code);
-    return !!item?.verified && (item.product.stock_status === "out_of_stock" || item.product.available_quantity === 0);
+    return !!item?.verified && soldOutProduct(item);
   };
   // Each part that says "out of stock" is judged on its subject: the products that part points at; with a plural subject
   // since the last stock talk ("GF-33, GS-7 and XXGS-9 are out of stock"), also those of the parts before it; with "it" or a
@@ -750,7 +751,7 @@ export const STOCK_NUMBER_PREFIX = "These stock numbers";
 const STOCK_COUNT = /(?:\b(?:only|just)\s+)?(?<![\p{L}\p{N}.,$-])(\d{1,3}(?:,\d{3})+|\d{1,5})\s*(?:(pcs?|pieces?|units?|sets?|pkts?|packets?)\s+)?(?:available|left|in\s+stock)(?:\s+in\s+stock)?(?![\w-])/giu;
 // "over 30 available" is no count to check.
 const APPROX_BEFORE = /\b(?:over|more\s+than|at\s+least|about|around|up\s+to|under|nearly|almost)\b[^.!?\n]{0,15}$/i;
-// A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item (P4 regression probe).
+// A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item.
 const UNIT_UOMS: Array<[RegExp, string[]]> = [[/^(?:pcs?|pieces?|units?)$/i, ["PC", "UNIT"]], [/^sets?$/i, ["SET"]], [/^(?:pkts?|packets?)$/i, ["PKT"]]];
 const unitFits = (unit: string, uom: string) => UNIT_UOMS.some(([words, uoms]) => words.test(unit) && uoms.includes(uom.trim().toUpperCase()));
 // A message's parts: sentence ends, line breaks, and commas, semicolons, dashes, "and" and "or" outside brackets, so "16in Iron Wok
@@ -808,31 +809,41 @@ const HAS_BEFORE = new RegExp(String.raw`\b(?:only\s+)?(has|have)\s+${QUALIFIER}
  * product.
  */
 export function withoutWrongStockCounts(message: string, cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>) {
-  // Last first, so each index still points at its own count.
-  return wrongStockCounts(message, cards, seen).reverse().reduce((text, { said, index, code }) => {
-    const before = text.slice(0, index);
-    const after = text.slice(index + said.length);
-    if (/\([^()]*$/.test(before) && /^[^()]*\)/.test(after)) {
-      const open = before.lastIndexOf("(");
-      const close = index + said.length + after.indexOf(")");
-      const pieces = `${text.slice(open + 1, index)}${text.slice(index + said.length, close)}`.split(PIECE_BREAK);
-      let inside = "";
-      for (let at = 0; at < pieces.length; at += 2) {
-        const piece = pieces[at].trim();
-        if (piece && !COVERAGE_PIECE.test(piece)) inside += inside ? `${joint(pieces[at - 1])}${piece}` : piece;
-      }
-      return inside ? `${text.slice(0, open + 1)}${inside}${text.slice(close)}` : `${text.slice(0, open).replace(/\s+$/, "")}${text.slice(close + 1)}`;
+  // Last first, found again after each fix: rewriting a bracket moves or drops the counts before it in that bracket. Each fix takes
+  // its count's digits out, and there are never more fixes than wrong counts to begin with.
+  let text = message;
+  for (let left = wrongStockCounts(message, cards, seen).length; left > 0; left -= 1) {
+    const wrong = wrongStockCounts(text, cards, seen).at(-1);
+    if (!wrong) break;
+    text = withoutStockCount(text, wrong, seen);
+  }
+  return text;
+}
+
+/** The message with this one wrong count dropped from its bracket, or said as "in stock" or "out of stock". */
+function withoutStockCount(text: string, { said, index, code }: ReturnType<typeof wrongStockCounts>[number], seen: ReadonlyMap<string, CheckedProduct>) {
+  const before = text.slice(0, index);
+  const after = text.slice(index + said.length);
+  if (/\([^()]*$/.test(before) && /^[^()]*\)/.test(after)) {
+    const open = before.lastIndexOf("(");
+    const close = index + said.length + after.indexOf(")");
+    const pieces = `${text.slice(open + 1, index)}${text.slice(index + said.length, close)}`.split(PIECE_BREAK);
+    let inside = "";
+    for (let at = 0; at < pieces.length; at += 2) {
+      const piece = pieces[at].trim();
+      if (piece && !COVERAGE_PIECE.test(piece)) inside += inside ? `${joint(pieces[at - 1])}${piece}` : piece;
     }
-    const rest = after.slice(COVERAGE_AFTER.exec(after)?.[0].length ?? 0);
-    const status = soldOutProduct(seen.get(code)!) ? "out of stock" : "in stock";
-    const withCount = WITH_BEFORE.exec(before);
-    if (withCount) return `${before.slice(0, withCount.index)}${rest}`;
-    const weHave = WE_HAVE_BEFORE.exec(before);
-    if (weHave) return `${before.slice(0, weHave.index)}${/^[A-Z]/.test(weHave[0]) ? "It's" : "it's"} ${status}${rest}`;
-    const verb = HAS_BEFORE.exec(before);
-    if (verb) return `${before.slice(0, verb.index)}${verb[1].toLowerCase() === "has" ? "is" : "are"} ${status}${rest}`;
-    return `${before}${/^[A-Z]/.test(said) ? `${status[0].toUpperCase()}${status.slice(1)}` : status}${rest}`;
-  }, message);
+    return inside ? `${text.slice(0, open + 1)}${inside}${text.slice(close)}` : `${text.slice(0, open).replace(/\s+$/, "")}${text.slice(close + 1)}`;
+  }
+  const rest = after.slice(COVERAGE_AFTER.exec(after)?.[0].length ?? 0);
+  const status = soldOutProduct(seen.get(code)!) ? "out of stock" : "in stock";
+  const withCount = WITH_BEFORE.exec(before);
+  if (withCount) return `${before.slice(0, withCount.index)}${rest}`;
+  const weHave = WE_HAVE_BEFORE.exec(before);
+  if (weHave) return `${before.slice(0, weHave.index)}${/^[A-Z]/.test(weHave[0]) ? "It's" : "it's"} ${status}${rest}`;
+  const verb = HAS_BEFORE.exec(before);
+  if (verb) return `${before.slice(0, verb.index)}${verb[1].toLowerCase() === "has" ? "is" : "are"} ${status}${rest}`;
+  return `${before}${/^[A-Z]/.test(said) ? `${status[0].toUpperCase()}${status.slice(1)}` : status}${rest}`;
 }
 const stockNumberIssue = (wrong: ReturnType<typeof wrongStockCounts>) => `${STOCK_NUMBER_PREFIX} don't match the live stock: ${wrong.map(({ said, count, code, live, alsoMatches }) => `"${said}" for ${code} (live ${live})${alsoMatches.length
   ? `; ${count} matches ${alsoMatches.slice(0, 2).map((item) => `${item.stock_id} ${item.name.replace(/"/g, "″")}`).join(", ")}: if you meant that product, attach its card instead` : ""}`).join("; ")}. Give each product's available_quantity, or leave the number out; never say stock changed.`;

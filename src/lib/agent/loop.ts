@@ -16,7 +16,7 @@ import {
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
-import { agentTools, errorCode, keepBest, lookupDetails, refusalKey, runTool, startPickCheck, totalsForClaude, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
+import { agentTools, errorCode, keepBest, lookupDetails, refusalKey, runTool, startPickCheck, totalsForClaude, uncheckedNote, updateCode as codeOf, withDetails, type ToolOutcome, type TurnContext } from "./tools";
 import { modelPickCheck, pickCheckCache, pickView, type PickCheck } from "./verify";
 
 export type AgentClient = {
@@ -227,10 +227,7 @@ function failureCode(error: unknown, deadline: AbortSignal) {
 type ToolCallDone = { name: string; input: unknown; error?: string };
 /** An update_enquiry call's fields as Claude sent them (not yet checked). */
 const updateFields = (input: unknown) => input as { action?: unknown; stock_id?: unknown; quantity?: unknown };
-const updateCode = (input: unknown) => {
-  const { stock_id: stockId } = updateFields(input);
-  return typeof stockId === "string" ? stockId.trim().toLowerCase() : "";
-};
+const updateCode = (input: unknown) => codeOf(updateFields(input));
 /** An update_enquiry call's action for the turn log: one of the four, never other text. */
 const updateAction = (input: unknown) => {
   const { action } = updateFields(input);
@@ -360,6 +357,8 @@ export async function runAgentTurn(input: {
     checkPick: pickCheckCache((p) => check(p)),
     photoMatches: new Map(),
     kept: [],
+    failedAdds: [],
+    finalRefusal: false,
     refusedKeys: new Set(),
     pickFast: 0,
     // This text or the one before it: a follow-up ("ard 37 like that correct anot") comes right after the GST ask.
@@ -409,6 +408,8 @@ export async function runAgentTurn(input: {
       });
     };
     let nudged = false;
+    // The customer's typed texts don't change within the turn.
+    const typedAny = statesAnyQuantity(ctx.customerTexts);
     // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
     const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
       && !(/^\s*ok/i.test(request.event.text) && picks.replies.at(-1)?.cards.length === 1);
@@ -437,19 +438,20 @@ export async function runAgentTurn(input: {
       }
       const final = readFinal(response);
       // One nudge, only while the next round may still use tools, and never after a refusal (a retry is refused again, exam 3,
-      // c08-persona T8) or on a thank-you or a paced list. A permission question is nudged only when it is the confirm step and the
-      // customer typed a number: without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer.
-      // Safe only because update_enquiry checks the pick and the typed number.
-      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused.length;
+      // c08-persona T8; a refused removal or an item with no typed number is answered from the check's cache, r4 c02-A idx 16) or on
+      // a thank-you or a paced list. A permission question is nudged only when it is the confirm step and the customer typed a number:
+      // without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer. Safe only because
+      // update_enquiry checks the pick and the typed number.
+      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused.length && !ctx.finalRefusal;
       // A permission question about the one product the customer named but Claude never proposed: one check says whether they
       // picked it, i.e. whether this is the confirm step the owner ruled out (r4 c02-persona idx 8; about 1 in 700 round-4 turns).
-      if (final && toolsLeft && statesAnyQuantity(ctx.customerTexts)) {
+      if (final && toolsLeft && typedAny) {
         const about = permissionCodes(final, ctx.seen, earlierCards).filter((code) => !picked(code));
         if (about.length === 1) await beforeDeadline(checkNamed(about[0]), deadline).catch(() => undefined);
       }
       const nudge = !final || !toolsLeft ? null
         : enquiryClaimIssues(final.message, { ...turnFacts(), seen: ctx.seen }).length ? CLAIM_NUDGE
-        : asksConfirmStep(final, ctx.seen, picked, earlierCards) && statesAnyQuantity(ctx.customerTexts) ? PERMISSION_NUDGE : null;
+        : asksConfirmStep(final, ctx.seen, picked, earlierCards) && typedAny ? PERMISSION_NUDGE : null;
       if (nudge) {
         nudged = true;
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: [{ type: "text", text: nudge }] });

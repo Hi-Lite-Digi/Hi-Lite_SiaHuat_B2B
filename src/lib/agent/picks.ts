@@ -1,5 +1,5 @@
 // src/lib/agent/picks.ts
-import { CHIP_PREFIX, TAP_PREFIX, customerWords, parseCardsNote, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
+import { CHIP_PREFIX, TAP_PREFIX, customerWords, parseCardsNote, tappedCode, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
 
 /** A card the customer tapped. age: customer messages since (0 = this turn); seen: Claire's replies before it. */
 export type PickTap = { code: string; age: number; seen: number };
@@ -7,12 +7,13 @@ export type PickTap = { code: string; age: number; seen: number };
 export type PickText = { text: string; seen: number; age: number; chip: boolean };
 /** One of Claire's replies: the cards it showed and its message. */
 export type PickReply = { cards: ShownCard[]; text: string };
-/** Everything in the chat that can show which product the customer picked. */
+/** Claire's replies (their cards and text, for the repeat and card checks) and the customer's newest taps and typed texts ("same qty"). */
 export type PickEvidence = { taps: PickTap[]; texts: PickText[]; replies: PickReply[] };
 
-const TAP_EVENTS = 6; // exam 2, c01-stress: a knife tapped at T7 was still the one meant at T12
+// The customer's newest 6 messages, taps included: "same qty" reads the newest 4 typed texts among them (exam 3, c09-stress T7).
+const TAP_EVENTS = 6;
 
-/** The pick evidence in the chat history and this turn's event, newest first. Every customer message counts toward age. */
+/** The chat history and this turn's event as PickEvidence, newest first. Every customer message counts toward age. */
 export function pickEvidence(history: AgentRequest["history"], event: AgentRequest["event"]): PickEvidence {
   const replies: PickReply[] = [];
   const events: Array<{ seen: number; tap?: string; text?: string; chip?: boolean }> = [];
@@ -20,7 +21,7 @@ export function pickEvidence(history: AgentRequest["history"], event: AgentReque
     if (item.role === "assistant") {
       replies.push({ cards: parseCardsNote(item.content), text: withoutCardsNote(item.content) });
     } else if (item.content.startsWith(TAP_PREFIX)) {
-      events.push({ seen: replies.length, tap: item.content.match(/\(code ([^()]+)\)\s*$/)?.[1] });
+      events.push({ seen: replies.length, tap: tappedCode(item.content) ?? undefined });
     } else if (item.content.startsWith(CHIP_PREFIX)) {
       events.push({ seen: replies.length, text: item.content.slice(CHIP_PREFIX.length).trim(), chip: true });
     } else {

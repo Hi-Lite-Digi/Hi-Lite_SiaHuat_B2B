@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
-import { agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, nextEnquiry, parseCardsNote, withoutCardsNote } from "./contract";
+import { agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote } from "./contract";
 import { product } from "./testing";
 
 test("a card tap is a product choice, never text", () => {
@@ -101,4 +101,10 @@ test("'Tap a product' shows only while a card isn't on the enquiry yet", () => {
   assert.equal(cardsToPick([ut09l], [{ code: "UT09L" }]), false);
   assert.equal(cardsToPick([ut09l, other], [{ code: "ut09l" }]), true);
   assert.equal(cardsToPick([], []), false);
+});
+
+test("a card tap's history entry gives its item code", () => {
+  assert.equal(tappedCode("[tap] Picked: Cassette Gas Torch (Safico) (code BTS-8026D)"), "BTS-8026D");
+  assert.equal(tappedCode("[tap] Picked: Blow Torch (code 970S)  "), "970S");
+  assert.equal(tappedCode("[tap] Picked: Blow Torch"), null);
 });

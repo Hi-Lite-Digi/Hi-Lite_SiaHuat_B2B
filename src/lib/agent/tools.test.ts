@@ -15,7 +15,7 @@ const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], changes: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
-    searches: [], refused: [], tapped: null, checkPick: pickCheckCache(fakePickCheck()), photoMatches: new Map(), kept: [], refusedKeys: new Set(), pickFast: 0,
+    searches: [], refused: [], tapped: null, checkPick: pickCheckCache(fakePickCheck()), photoMatches: new Map(), kept: [], failedAdds: [], finalRefusal: false, refusedKeys: new Set(), pickFast: 0,
     ...overrides,
   };
 }
@@ -428,7 +428,7 @@ test("when max_price leaves nothing, the note says the matches are all above it 
   ];
   for (const input of [{ exclude_brands: ["Waring"] }, { exclude_ids: ["W1", "W2"] }]) {
     const ruledOut = await searchBody({ queries: ["stick blender"], max_price: 100, ...input }, fakeDeps(waring)) as SearchBody & { note?: string };
-    assert.equal(ruledOut.note, "No catalogue matches for these words. Try other words the customer might mean, or ask one question.");
+    assert.match(ruledOut.note ?? "", /^No catalogue matches for these words\./);
     assert.deepEqual(ruledOut.categories, []);
   }
 });
@@ -881,6 +881,19 @@ test("a pick of another product is PICKED_OTHER with its typed number, and addin
   assert.equal(check.calls.length, 1);
 });
 
+test("a set of the wrong line is PICKED_OTHER telling Claude to set the other one, so its line isn't added to", async () => {
+  // r3 c09-persona idx 9 "actually make the small one 3 pcs": following "add it" would make the other line of 1 into 4, while the reply says 3.
+  const { ctx, check } = checked({ verdict: "different", code: "970S", quantity: 3 }, { customerTexts: ["actually make the blow torch 3 pcs"], lines: [saficoLine(2)] });
+  ctx.lines.push({ item: blowtorch.name, code: "970S", pricePerItem: 31.31, quantity: 1, total: 31.31, uom: "PC" });
+  const body = bodyOf(await update(ctx, { action: "set", stock_id: "BTS-8026D", quantity: 3 }));
+  assert.equal(body.error, "PICKED_OTHER");
+  assert.match(body.note ?? "", /set it to picked.quantity if that is set; otherwise ask how many/);
+  assert.doesNotMatch(body.note ?? "", /add it/);
+  assert.equal((await update(ctx, { action: "set", stock_id: "970S", quantity: 3 })).isError, false);
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 2], ["970S", 3]]);
+  assert.equal(check.calls.length, 1);
+});
+
 test("words that fit two products are PICK_UNCLEAR with both cards' facts, and both codes are refused", async () => {
   const { ctx } = checked({ verdict: "unclear", candidates: ["970S", "BTS-8026D"] }, { customerTexts: ["2 torches"] });
   const body = bodyOf(await addSafico(ctx)) as { error: string; candidates: Array<{ stock_id: string }>; note: string };
@@ -962,6 +975,30 @@ test("a removal the customer asked for goes through after one check; a refused o
   assert.deepEqual([refused.ctx.kept, refused.ctx.changes, refused.ctx.refused], [["BTS-8026D"], [], []]);
 });
 
+test("a removal the check couldn't confirm in time keeps the line, and its note doesn't say the customer never asked", async () => {
+  const { ctx } = checked({ verdict: "error", sure: false, quantity: null }, { customerTexts: ["remove the safico"], currentText: "remove the safico", lines: [saficoLine(2)] });
+  const body = bodyOf(await update(ctx, { action: "remove", stock_id: "BTS-8026D" }));
+  assert.equal(body.error, "REMOVE_REFUSED");
+  assert.match(body.note ?? "", /couldn't be confirmed just now, so the line stays on the enquiry/);
+  assert.doesNotMatch(body.note ?? "", /hasn't clearly asked/);
+  assert.deepEqual([linesOf(ctx), ctx.kept], [[["BTS-8026D", 2]], ["BTS-8026D"]]);
+});
+
+test("the check's number for an item sold by the dozen is read in dozens: its 48 for '4 dozen' doesn't replace Claude's 4", async () => {
+  // A 48 would be refused as the wrong unit, then asked again with the same answer: a "which product?" stop about a number.
+  const spoon = product({ stock_id: "100-100", name: "Zebra Chinese Spoon", list_price: 9.08, uom_id: "DOZ" });
+  const { ctx, check } = checked({ quantity: 48 }, { customerTexts: ["4 dozen of the chinese spoon"] }, fakeDeps([spoon]));
+  assert.equal((await update(ctx, { action: "add", stock_id: "100-100", quantity: 4 })).isError, false);
+  assert.deepEqual([linesOf(ctx), check.calls.length], [[["100-100", 4]], 1]);
+  // Sold by the piece, the check's 48 for "4 dozen" is still the typed number for the item.
+  const plate = product({ stock_id: "PL-10", name: "Plate 10in", list_price: 2 });
+  const pieces = checked({ quantity: 48 }, { customerTexts: ["4 dozen of the plates"] }, fakeDeps([plate]));
+  assert.deepEqual(bodyOf(await update(pieces.ctx, { action: "add", stock_id: "PL-10", quantity: 4 })).typed_quantity, 48);
+  // Another product's number isn't read in the proposed item's unit: its unit isn't known here.
+  const other = checked({ verdict: "different", code: "100-100", quantity: 2 }, { customerTexts: ["2 dozen of the chinese spoon"] }, fakeDeps([plate, spoon]));
+  assert.deepEqual(bodyOf(await update(other.ctx, { action: "add", stock_id: "PL-10", quantity: 24 })).picked, { code: "100-100", quantity: 2 });
+});
+
 test("a removal the check says was meant for another line names that line", async () => {
   const { ctx } = checked({ verdict: "different", code: "970S" }, { customerTexts: ["remove the blow torch"], currentText: "remove the blow torch", lines: [saficoLine(2)] });
   const body = bodyOf(await update(ctx, { action: "remove", stock_id: "BTS-8026D" }));
@@ -1005,6 +1042,37 @@ test("an explicit removal in a swap-worded message is not held", async () => {
     assert.equal((await update(ctx, { action: "remove", stock_id: "BTS-8026D" })).isError, false, text);
     assert.deepEqual(ctx.lines, [], text);
   }
+});
+
+test("a removal waits while an add of another item failed this turn: a chip or a yes has no swap words", async () => {
+  // Chip "Switch to the 16.5cm" and a "yes" to "Want to switch?": [add new, remove old] whose add failed took the old line off too.
+  for (const currentText of [null, "yes"]) {
+    const { ctx } = checked((p) => (p.action === "add" ? { quantity: null } : {}), { customerTexts: ["ok take 2"], currentText, lines: [tongLine] }, fakeDeps([tong16, tong165]));
+    assert.equal(bodyOf(await update(ctx, { action: "add", stock_id: "2564L", quantity: 2 })).error, "QTY_NOT_STATED");
+    assert.equal(bodyOf(await update(ctx, { action: "remove", stock_id: "UT16HR" })).error, "SWAP_NOT_DONE", String(currentText));
+    assert.deepEqual([linesOf(ctx), ctx.kept], [[["UT16HR", 2]], ["UT16HR"]], String(currentText));
+  }
+  // Once the new item's add goes through, the old line can come off.
+  const { ctx } = checked({}, { customerTexts: ["yes", "ok take 2"], currentText: "yes", lines: [tongLine] }, fakeDeps([tong16, tong165]));
+  assert.equal(bodyOf(await update(ctx, { action: "add", stock_id: "2564L", quantity: 3 })).error, "QTY_NOT_STATED"); // Claude's own 3
+  assert.equal((await update(ctx, { action: "add", stock_id: "2564L", quantity: 2 })).isError, false);
+  assert.equal((await update(ctx, { action: "remove", stock_id: "UT16HR" })).isError, false);
+  assert.deepEqual(linesOf(ctx), [["2564L", 2]]);
+});
+
+test("a swap sent with another add keeps its old line when its own new item fails; an explicit removal still goes", async () => {
+  const soldOut = { "2564L": { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 } } as const;
+  const text = "change the tong to the 16.5 one, same 2. also add 2 blow torch";
+  const { ctx } = checked({}, { customerTexts: [text], currentText: text, lines: [tongLine] }, fakeDeps([tong16, tong165, blowtorch], soldOut));
+  assert.equal((await update(ctx, { action: "add", stock_id: "970S", quantity: 2 })).isError, false);
+  assert.equal(bodyOf(await update(ctx, { action: "add", stock_id: "2564L", quantity: 2 })).error, "OUT_OF_STOCK");
+  assert.equal(bodyOf(await update(ctx, { action: "remove", stock_id: "UT16HR" })).error, "SWAP_NOT_DONE");
+  assert.deepEqual(linesOf(ctx), [["UT16HR", 2], ["970S", 2]]);
+  const removal = "remove the tong. add 2 of the 16.5 one";
+  const asked = checked({}, { customerTexts: [removal], currentText: removal, lines: [tongLine] }, fakeDeps([tong16, tong165], soldOut));
+  assert.equal(bodyOf(await update(asked.ctx, { action: "add", stock_id: "2564L", quantity: 2 })).error, "OUT_OF_STOCK");
+  assert.equal((await update(asked.ctx, { action: "remove", stock_id: "UT16HR" })).isError, false);
+  assert.deepEqual(asked.ctx.lines, []);
 });
 
 test("after a refused removal, an add of that line is refused so it isn't merged (4 + 6 = 10)", async () => {

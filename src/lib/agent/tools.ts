@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
-import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
+import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, soldByDozen, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
 import { houseCode, liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
 import { codePattern, same } from "./picks";
 import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
@@ -49,6 +49,10 @@ export type TurnContext = {
   photoMatches: Map<string, "direct" | "look-alike">;
   /** Lines whose removal update_enquiry refused this turn (REMOVE_REFUSED, SWAP_NOT_DONE): they stay on the enquiry. */
   kept: string[];
+  /** Codes whose add or set failed this turn and hasn't gone through since: a removal of another line waits on them, like a swap's. */
+  failedAdds: string[];
+  /** A pick-check refusal this turn that no retry can change (REMOVE_REFUSED, or no number typed for the item): no nudge back to the tools. */
+  finalRefusal: boolean;
   /** The update_enquiry calls refused this turn, as refusalKey gives them. */
   refusedKeys: Set<string>;
   /** Adds and sets a tap this turn picked with no check. */
@@ -491,9 +495,11 @@ function refusedProduct(code: string, ctx: TurnContext) {
 
 type EnquiryInput = z.infer<typeof enquiryInput>;
 
+/** An update_enquiry call's code as Claude sent it, trimmed and lower-cased; "" when there is none. */
+export const updateCode = (input: { stock_id?: unknown }) => (typeof input.stock_id === "string" ? input.stock_id.trim().toLowerCase() : "");
 /** An update_enquiry call as the loop's stop rules compare them: its code, action and Claude's number. */
 export const refusalKey = (input: { action?: unknown; stock_id?: unknown; quantity?: unknown }) =>
-  `${typeof input.stock_id === "string" ? input.stock_id.trim().toLowerCase() : ""}|${String(input.action)}|${typeof input.quantity === "number" ? input.quantity : 0}`;
+  `${updateCode(input)}|${String(input.action)}|${typeof input.quantity === "number" ? input.quantity : 0}`;
 
 /** A tap this turn is the pick; with two or more typed numbers the check still binds the number to it. */
 const tapPicks = (code: string, ctx: TurnContext) => ctx.tapped !== null && same(ctx.tapped, code) && typedQuantities(ctx.customerTexts).length <= 1;
@@ -540,31 +546,43 @@ export async function startPickCheck(input: unknown, ctx: TurnContext) {
 
 // The refusals whose product the reply may ask about with its card.
 const NOT_PICKED_ERRORS = new Set(["NOT_PICKED", "PICK_UNCLEAR", "PICK_UNCONFIRMED", "PICK_UNCHECKED", "PICKED_OTHER"]);
-const PICKED_OTHER_NOTE = "The customer picked this other product instead: add it with picked.quantity if that is set; otherwise ask how many.";
+// By the refused action: "add it" after a refused set made another line of 1 into 4 while the reply said 3 (r3 c09-persona idx 9).
+const PICKED_OTHER_NOTE = {
+  add: "The customer picked this other product instead: add it with picked.quantity if that is set; otherwise ask how many.",
+  set: "The customer picked this other product instead: set it to picked.quantity if that is set; otherwise ask how many.",
+};
 const QTY_NOT_FOR_ITEM_NOTE = "The customer typed typed_quantity for this item: use that number.";
 const NOT_PICKED_NOTE = "The customer hasn't asked for this product. Don't add it or ask them to confirm it; answer what they said. Never say it was added; if they clearly asked for it, say in a few words it isn't on the enquiry yet.";
 const PICK_UNCLEAR_NOTE = "Two or more products fit their words: attach these cards and ask which one, naming them (X or Y?).";
 const PICK_ASK_NOTE = "Ask one short question naming this product with its code (Is it the <name> <code>?), with its card. Don't call update_enquiry for it again this turn.";
 const REMOVE_REFUSED_NOTE = "The customer hasn't clearly asked to take this line off, so it stays on the enquiry. Don't remove it; answer what they said, and don't tell them they never asked.";
+// A check that timed out (or had no time left) says nothing about what the customer asked.
+const REMOVE_UNCHECKED_NOTE = "The removal couldn't be confirmed just now, so the line stays on the enquiry: say it's still on, and that they can ask again to take it off.";
 
 /**
  * update_enquiry's pick check (owner decision 1: it replaces the word rule): null when the change may go ahead, else the refusal
- * for Claude. A check that fails or runs out of time refuses as PICK_UNCHECKED, so nothing is added or removed unchecked.
+ * for Claude. A check that fails or runs out of time refuses (PICK_UNCHECKED, or REMOVE_REFUSED for a removal), so nothing is added
+ * or removed unchecked.
  */
-export async function pickCheck(input: EnquiryInput, ctx: TurnContext): Promise<ToolOutcome | null> {
+async function pickRefusal(input: EnquiryInput, ctx: TurnContext): Promise<ToolOutcome | null> {
   const p = await pickProposal(input, ctx);
   if (!p) {
     if ((input.action === "add" || input.action === "set") && input.stock_id && tapPicks(input.stock_id, ctx)) ctx.pickFast += 1;
     return null;
   }
-  const outcome = decidePick(await ctx.checkPick(p), p, (quantity) => quantityStated(quantity, ctx.customerTexts));
+  const verdict = await ctx.checkPick(p);
+  // In the proposed item's own unit: a 48 for "4 dozen" of an item sold by the dozen isn't the number typed for it. Another
+  // product's unit isn't known here, so its number is read both ways.
+  const mode = verdict.verdict === "different" ? "both" : soldByDozen(p.uom) ? "dozens" : "pieces";
+  const outcome = decidePick(verdict, p, (quantity) => quantityStated(quantity, ctx.customerTexts, mode));
   if (outcome.ok) return null;
   ctx.refusedKeys.add(refusalKey(input));
+  if (outcome.error === "REMOVE_REFUSED" || outcome.error === "QTY_NOT_STATED") ctx.finalRefusal = true;
   if (NOT_PICKED_ERRORS.has(outcome.error)) {
     for (const code of [p.code, ...(outcome.candidates ?? [])]) if (!ctx.refused.some((item) => same(item, code))) ctx.refused.push(code);
   }
   switch (outcome.error) {
-    case "PICKED_OTHER": return fail(outcome.error, { picked: outcome.other, product: await refusedProduct(outcome.other!.code, ctx), note: PICKED_OTHER_NOTE });
+    case "PICKED_OTHER": return fail(outcome.error, { picked: outcome.other, product: await refusedProduct(outcome.other!.code, ctx), note: PICKED_OTHER_NOTE[input.action === "set" ? "set" : "add"] });
     case "QTY_NOT_FOR_ITEM": return fail(outcome.error, { typed_quantity: outcome.typedQuantity, note: QTY_NOT_FOR_ITEM_NOTE });
     case "QTY_NOT_STATED": return fail(outcome.error, { notice: QTY_NOTICE });
     case "NOT_PICKED": return fail(outcome.error, { note: NOT_PICKED_NOTE });
@@ -572,30 +590,44 @@ export async function pickCheck(input: EnquiryInput, ctx: TurnContext): Promise<
       const candidates = await Promise.all((outcome.candidates ?? []).map((code) => refusedProduct(code, ctx)));
       return fail(outcome.error, { candidates: candidates.filter((item) => item !== null), note: PICK_UNCLEAR_NOTE });
     }
-    case "REMOVE_REFUSED": return fail(outcome.error, { note: REMOVE_REFUSED_NOTE, ...(outcome.other ? { meant: outcome.other.code } : {}) });
+    case "REMOVE_REFUSED": return fail(outcome.error, { note: verdict.verdict === "error" ? REMOVE_UNCHECKED_NOTE : REMOVE_REFUSED_NOTE, ...(outcome.other ? { meant: outcome.other.code } : {}) });
     default: return fail(outcome.error, { product: await refusedProduct(p.code, ctx), note: PICK_ASK_NOTE }); // PICK_UNCONFIRMED, PICK_UNCHECKED
   }
 }
 
 // A swap ("change to the 16.5 one", "instead", "replace", 换) takes the old line off only once the new item is on: r4 c09-persona
 // idx 11 lost the old line while the new one was refused. An explicit "remove / take out / cancel" still goes through (owner question 7).
+// A failed add or set of another item this turn holds a removal whatever the words: a chip "Switch to the 16.5cm" or a "yes" to
+// "Want to switch?" has no swap words, and a swap can come with an add of something else that went through.
 const swapRequest = /\b(?:change|switch|swap)\b(?:[^.!?]|(?<=\d)\.(?=\d))*\bto\b|\binstead\b|\breplace\b|换/i;
 const explicitRemove = /\b(?:remove|delete|cancel|drop|take\s+(?:out|off|away)|forget|skip|exclude|scratch|get\s+rid)\b|不要|取消|删|去掉|拿掉|不用/i;
 const SWAP_NOTE = "Nothing was removed: the old line comes off only once the new item is on the enquiry. Add the new item first (the same response is fine), then remove the old one. If the new item can't be added, say the old one is still on the enquiry and what you still need.";
 
 async function enquiryTool(input: EnquiryInput, ctx: TurnContext) {
+  const outcome = await changeEnquiry(input, ctx);
+  if ((input.action === "add" || input.action === "set") && input.stock_id) {
+    const code = input.stock_id;
+    ctx.failedAdds = ctx.failedAdds.filter((item) => !same(item, code));
+    // ALREADY_ON_ENQUIRY is no failure here: the item is on.
+    if (outcome.isError && outcome.error !== "ALREADY_ON_ENQUIRY") ctx.failedAdds.push(code);
+  }
+  return outcome;
+}
+
+async function changeEnquiry(input: EnquiryInput, ctx: TurnContext) {
   const code = input.stock_id?.toLowerCase();
   if (input.action === "remove" && input.stock_id) {
     const text = ctx.currentText ?? "";
     const onEnquiry = [...ctx.lines.map((line) => line.code), ...ctx.uncheckedCodes].some((item) => same(item, input.stock_id!));
     const newItemOn = ctx.changes.some((change) => (change.action === "add" || change.action === "set") && change.code !== null && change.code.toLowerCase() !== code);
-    if (onEnquiry && swapRequest.test(text) && !explicitRemove.test(text) && !newItemOn) {
+    const failedOther = ctx.failedAdds.some((item) => !same(item, input.stock_id!));
+    if (onEnquiry && !explicitRemove.test(text) && (failedOther || (swapRequest.test(text) && !newItemOn))) {
       ctx.kept.push(input.stock_id);
       ctx.refusedKeys.add(refusalKey(input));
       return fail("SWAP_NOT_DONE", { note: SWAP_NOTE });
     }
     // Before the unchecked-line branch, so a line the browser keeps is only removed when the customer asked.
-    const refusal = await pickCheck(input, ctx);
+    const refusal = await pickRefusal(input, ctx);
     if (refusal) {
       ctx.kept.push(input.stock_id);
       return refusal;
@@ -610,11 +642,11 @@ async function enquiryTool(input: EnquiryInput, ctx: TurnContext) {
     return ok(enquiryState(ctx));
   }
   if ((input.action === "add" || input.action === "set") && input.stock_id) {
-    // A reviewer's probe: a refused remove, then an add of the same code, made a line of 4 into 10.
+    // A refused remove, then an add of the same code, made a line of 4 into 10.
     if (input.action === "add" && ctx.kept.some((item) => same(item, input.stock_id!)) && ctx.lines.some((line) => same(line.code, input.stock_id!))) {
       return fail("ALREADY_ON_ENQUIRY", { notice: "This line is still on the enquiry: use set with the new total." });
     }
-    const refusal = await pickCheck(input, ctx);
+    const refusal = await pickRefusal(input, ctx);
     if (refusal) return refusal;
   }
   // The typed number lets a second add through (it guards against an earlier message's number); within one turn it would double the line.

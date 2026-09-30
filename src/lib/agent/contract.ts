@@ -79,6 +79,11 @@ export const CHIP_PREFIX = "[chip]";
 export const PHOTO_PREFIX = "[photo]";
 export const NO_CAPTION = "(no caption)";
 
+/** The item code at the end of a card tap's history entry ("[tap] Picked: <name> (code X)"), or null. */
+export function tappedCode(content: string) {
+  return content.match(/\(code ([^()]+)\)\s*$/)?.[1] ?? null;
+}
+
 /** The words a customer history entry carries: the text, or a photo's caption. A photo sent without a caption has none. */
 export function customerWords(content: string) {
   const text = content.startsWith(PHOTO_PREFIX) ? content.slice(PHOTO_PREFIX.length).trim() : content;

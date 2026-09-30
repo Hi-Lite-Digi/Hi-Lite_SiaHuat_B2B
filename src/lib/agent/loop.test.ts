@@ -935,7 +935,7 @@ test("a permission question with no tool round left is repaired and asked to kee
     answer({ message }),
     answer({ message: "The Safico runs on gas. How many do you need?" }),
   ]);
-  // A tap is a pick: no check says so for a product only named, as no number was typed (X5 checks named products only then).
+  // A tap is a pick: no check says so for a product only named, as no number was typed (a named product is checked only when a number was typed).
   const picked = searchedTwice("The Safico runs on gas. Want me to add it?");
   await runAgentTurn({ request: request({ event: { type: "select_product", stockId: "BTS-8026D" }, history: [{ role: "user", content: "torch" }, saficoShown] }), deps: deps(), client: picked.client, model: "claude-sonnet-5" });
   assert.equal(picked.bodies.length, 4);
@@ -1392,6 +1392,24 @@ test("after a refused add, a reply that claims or offers the add is not nudged b
   }
 });
 
+test("after a refused removal, or an item the check says has no typed number, a false claim is repaired without another tool round", async () => {
+  // r4 c02-A idx 16 shape: the retry the nudge asks for is answered from the check's cache with the same refusal (one wasted round).
+  const cases: Array<[string, Record<string, unknown>, Parameters<typeof fakePickCheck>[0], string, AgentRequest["enquiry"]]> = [
+    ["so expensive. got something cheaper?", { action: "remove", stock_id: "BTS-8026D" }, { verdict: "not_picked" }, "I've removed the Safico torch from your enquiry. The blow torch is another option.", [{ stockId: "BTS-8026D", quantity: 2 }]],
+    ["the safico one for outlet B", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, { quantity: null }, "Added 2 of the Safico torch.", []],
+  ];
+  for (const [text, input, verdict, claim, enquiry] of cases) {
+    const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", input), answer({ message: claim }), answer({ message: "How many of the Safico torch do you need for outlet B?" })]);
+    const reply = await runAgentTurn({
+      request: request({ event: { type: "text", text }, history: [{ role: "user", content: "need torches. 2 for outlet A" }, saficoShown], enquiry }),
+      deps: deps(), client, model: "claude-sonnet-5", pickCheck: () => fakePickCheck(verdict),
+    });
+    assert.equal(bodies.length, 3, text);
+    assert.ok(!bodies.some((body) => NUDGE.test(JSON.stringify(body.messages))), text);
+    assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), enquiry.map((line) => [line.stockId, line.quantity]), text);
+  }
+});
+
 test("'same qty' after switching items adds the number typed a few messages back", async () => {
   // exam 3, c09-stress T7: "ya tht one. same qty" after a single UT12HR card; the 20 was typed two messages earlier.
   const tong16 = product({ stock_id: "2564L", name: "Stainless Steel Utility Tong 16in", list_price: 3.85 });
@@ -1587,7 +1605,7 @@ test("a follow-up to a GST question still gets the estimate; a total question tw
 });
 
 test("while a line is unchecked, a total with GST is sent back for a repair that names it", async () => {
-  // P3 eval: 2 of 3 drafts gave a figure with GST for the checked line only.
+  // 2 of 3 GST replay drafts gave a figure with GST for the checked line only.
   const fixed = "The checkout or Sia Huat's quote shows the exact amount with GST.";
   const { client, bodies } = fakeClient([answer({ message: ESTIMATE }), answer({ message: fixed })]);
   const reply = await runAgentTurn({
@@ -1601,7 +1619,7 @@ test("while a line is unchecked, a total with GST is sent back for a repair that
 });
 
 test("an estimate given earlier goes out again on a plain total question", async () => {
-  // P3 eval, r4 c09-stress: "ok so final total how much ah, i tell boss" two turns after the estimate.
+  // r4 c09-stress, replayed: "ok so final total how much ah, i tell boss" two turns after the estimate.
   const message = "Total is $46.72 before GST, about $50.92 with GST (GST $4.20).";
   const { client, bodies } = fakeClient([answer({ message })]);
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "ok so final total how much ah" }, enquiry: saficoTwo }), deps: deps(), client, model: "claude-sonnet-5" });
@@ -1691,6 +1709,30 @@ test("a swap in one round adds the new item first: a failed add keeps the old li
   assert.deepEqual(failed.reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["UT16HR", 4]]);
   const done = await swap(`${text}, same 4`, "Got it: 4 locking-ring tongs. Anything else?");
   assert.deepEqual(done.reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["UT16LR", 4]]);
+});
+
+test("a swap from a chip or a plain yes keeps the old line when the new item's add fails", async () => {
+  // A chip "Switch to the 16.5cm" or a "yes" has no swap words: [add new, remove old] took the old line off while the add failed.
+  const small = product({ stock_id: "13128-0401", name: "S/S FINE MESH SKIMMER Ø15cm", list_price: 2.29 });
+  const bigger = product({ stock_id: "13128-0402", name: "S/S FINE MESH SKIMMER Ø16.5cm", list_price: 2.75 });
+  const history: AgentRequest["history"] = [
+    { role: "user", content: "ok the 2.29 one lor, take 2" }, { role: "assistant", content: `Got it: 2 added.${cardsNote([small])}` },
+    { role: "user", content: "eh wait ah. 15cm maybe too small for maggi" },
+    { role: "assistant", content: `The 16.5cm is a bit bigger. Want to switch?${cardsNote([bigger])}` },
+  ];
+  for (const event of [{ type: "text", text: "Switch to the 16.5cm", chip: true }, { type: "text", text: "yes" }] as const) {
+    const { client, bodies } = fakeClient([
+      twoAddsRound({ action: "add", stock_id: "13128-0402", quantity: 2 }, { action: "remove", stock_id: "13128-0401" }),
+      answer({ message: "How many of the 16.5cm skimmer would you like?" }),
+    ]);
+    const reply = await runAgentTurn({
+      request: request({ event, history, enquiry: [{ stockId: "13128-0401", quantity: 2 }] }), deps: fakeDeps([small, bigger]), client, model: "claude-sonnet-5",
+      pickCheck: () => fakePickCheck((p) => (p.action === "add" ? { quantity: null } : {})),
+    });
+    const results = (bodies[1].messages.at(-1)!.content as Array<{ type: string; content: string }>).filter((item) => item.type === "tool_result").map((item) => JSON.parse(item.content).error);
+    assert.deepEqual(results, ["QTY_NOT_STATED", "SWAP_NOT_DONE"], event.text);
+    assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["13128-0401", 2]], event.text);
+  }
 });
 
 /** The same update_enquiry call in two rounds, then Claude's answer; the check answers as `answerFor` says. */
