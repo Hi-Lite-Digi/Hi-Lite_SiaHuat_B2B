@@ -69,6 +69,9 @@ const CARDS_ONLY_MESSAGE = "Here are some options.";
 const INVALID_ANSWER_ISSUE = "Your answer was not valid JSON with a non-empty message, card_ids, chips and show_contact. Answer with that JSON only.";
 const NOTHING_LEFT_MESSAGE = "Sorry, I couldn't confirm that from here. Sia Huat sales can help (details below).";
 const TIME_NOTE = "[Context from the system, not the customer] Time is nearly up: answer now with what you found. Nothing more can be looked up or changed this turn.";
+// A cut with nothing looked up: 2 rescues in a local check said "Sia Huat does carry griddles" from no lookup, and one said
+// "Sorry, got it: 2 ..." for an add that never ran (r6 skeptic).
+const NOTHING_FOUND_NOTE = "[Context from the system, not the customer] Nothing could be looked up in time this turn, and nothing on the enquiry was added or changed. Don't suggest products or say what Sia Huat has or doesn't have. Say sorry briefly, answer only what the chat and the current enquiry already show, then ask one short question: if they asked to add or change something, say it isn't done yet and ask them to send it again; if they are looking for a product, ask what it's for, the size or the type.";
 const CLAIM_NUDGE = "[Context from the system, not the customer] Your reply says the enquiry changed (or will change), but no update_enquiry call succeeded for that item in this turn. Call update_enquiry only for exactly what the customer picked and the number they typed; otherwise answer without saying it changed.";
 // Conditional: the number the customer typed may be for another item.
 const PERMISSION_NUDGE = "[Context from the system, not the customer] Don't ask permission to add. If the customer typed how many of this product, call update_enquiry now; otherwise ask how many, once.";
@@ -77,6 +80,9 @@ const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry c
 const ANSWER_NOTE = "[Context from the system, not the customer] The customer hasn't picked this product. No more tools this turn: answer what they said; don't add it, don't ask them to confirm it, and don't say it was added.";
 const KEEP_NOTE = "[Context from the system, not the customer] That line stays on the enquiry. No more tools this turn: say plainly it's still on, answer what they said, and don't ask them to confirm again.";
 const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
+const NOT_FINISHED: ToolOutcome = {
+  content: JSON.stringify({ error: "NOT_FINISHED", note: "This didn't finish in time, so there is no result. Don't say what it found or changed." }), isError: true, error: "NOT_FINISHED",
+};
 
 /** The customer's last two typed messages (card and chip taps, and photos without a caption, excluded), newest first. */
 export function recentCustomerTexts(request: AgentRequest) {
@@ -239,14 +245,23 @@ const updateAction = (input: unknown) => {
   return typeof action === "string" && /^(?:add|set|remove|clear)$/.test(action) ? action : "?";
 };
 
+/** A round's results for Claude and its calls, in call order. A call with no outcome yet didn't finish in time. */
+function roundResults(content: Anthropic.ContentBlock[], outcomes: ReadonlyMap<string, ToolOutcome>): { results: Anthropic.ToolResultBlockParam[]; done: ToolCallDone[] } {
+  const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
+  const outcome = (call: Anthropic.ToolUseBlock) => outcomes.get(call.id) ?? NOT_FINISHED;
+  return {
+    results: calls.map((call) => ({ type: "tool_result", tool_use_id: call.id, content: outcome(call).content, is_error: outcome(call).isError })),
+    done: calls.map((call) => ({ name: call.name, input: call.input, error: outcome(call).error })),
+  };
+}
+
 /**
- * Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log. Returns the results for
- * Claude and the calls as they ran, in call order.
+ * Runs the tool calls in Claude's response; each tool's name is added to `names` for the turn log, and each outcome to `outcomes`
+ * as it lands, so a round the deadline cuts keeps what finished (and makes no enquiry change after it). Returns the round's results.
  */
-async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext, names: string[]): Promise<{ results: Anthropic.ToolResultBlockParam[]; done: ToolCallDone[] }> {
+async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext, names: string[], outcomes: Map<string, ToolOutcome>, deadline: AbortSignal) {
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   names.push(...calls.map((call) => call.name));
-  const outcomes = new Map<string, ToolOutcome>();
   const updates = calls.filter((item) => item.name === "update_enquiry");
   const action = (call: Anthropic.ToolUseBlock) => updateFields(call.input).action;
   // Every update's pick check starts now, side by side ("these 2. 6 each" costs one check round, not two), and the adds' lookups
@@ -262,20 +277,17 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   const removeLast = (call: Anthropic.ToolUseBlock) => Number(action(call) === "remove"
     && !updates.some((other) => other !== call && action(other) !== "remove" && updateCode(other.input) === updateCode(call.input)));
   for (const call of [...updates].sort((a, b) => removeLast(a) - removeLast(b))) {
+    // Once the deadline has cut the round, nothing more changes: the answer says these didn't finish (r6 skeptic: an add whose live
+    // check stalled past the cut went onto the enquiry without the answer knowing).
+    if (deadline.aborted) break;
     outcomes.set(call.id, await runTool(call.name, call.input, ctx));
   }
+  // No lookup starts after the cut either.
+  if (deadline.aborted) return roundResults(content, outcomes);
   await Promise.all(calls.filter((item) => item.name !== "update_enquiry").map(async (call) => {
     outcomes.set(call.id, await runTool(call.name, call.input, ctx));
   }));
-  return {
-    results: calls.map((call) => ({
-      type: "tool_result",
-      tool_use_id: call.id,
-      content: outcomes.get(call.id)!.content,
-      is_error: outcomes.get(call.id)!.isError,
-    })),
-    done: calls.map((call) => ({ name: call.name, input: call.input, error: outcomes.get(call.id)!.error })),
-  };
+  return roundResults(content, outcomes);
 }
 
 type Stop = "which" | "ask" | "answer" | "keep";
@@ -343,6 +355,9 @@ export async function runAgentTurn(input: {
   const answerMs = Math.max(workMs, Math.floor(deadlineMs - Math.min(input.standInMs ?? STAND_IN_MS, fallbackReserveMs)));
   const answerBy = AbortSignal.timeout(answerMs);
   const answerLeft = () => answerMs - (performance.now() - started);
+  // After a cut at the work deadline, the answer call gets another go only when the turn keeps time for it past that deadline: a
+  // turn that starts late may keep none, and its cut goes straight to the backup reply.
+  const answerAfterCut = () => deadline.aborted && answerMs > workMs && answerLeft() > 0;
   const verified = await verifyEnquiry(request.enquiry, deps, Math.max(VERIFY_FLOOR_MS, Math.min(5_000, Math.floor(workMs / 3))));
   const recent = recentCustomerTexts(request);
   const picks = pickEvidence(request.history, request.event);
@@ -408,7 +423,13 @@ export async function runAgentTurn(input: {
     // attaching it, so the nudge and the review both get the earlier replies' cards: an unknown card would count as the confirm
     // step (exam 3, c09-stress T1).
     const earlierCards = picks.replies.flatMap((reply) => reply.cards);
-    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: ctx.searches, refused: ctx.refused, picked, earlierCards, unchecked: ctx.uncheckedCodes });
+    // What the work deadline cut, if anything, and how many tool calls finished this turn. A search the cut left running may land
+    // while Claude answers: only the searches before the cut back a claim, as Claude never saw the rest.
+    let cut: "call" | "tools" | null = null;
+    let finishedTools = 0;
+    let searchCut: number | null = null;
+    const searches = () => (searchCut === null ? ctx.searches : ctx.searches.slice(0, searchCut));
+    const turnFacts = () => ({ lines: ctx.lines, changes: ctx.changes, searches: searches(), refused: ctx.refused, picked, earlierCards, unchecked: ctx.uncheckedCodes });
     // A product the reply names but Claude never proposed, checked as an add with no number (from this turn's lookups or an earlier card).
     const checkNamed = (code: string) => {
       const product = [...ctx.seen.values()].find((item) => same(item.product.stock_id, code))?.product;
@@ -440,18 +461,36 @@ export async function runAgentTurn(input: {
       const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= roundNeedMs());
       const forceAnswer = stopped !== null || outOfTime;
       const note = stopped === "which" ? WHICH_NOTE : stopped === "ask" ? ASK_NOTE : stopped === "answer" ? ANSWER_NOTE : stopped === "keep" ? KEEP_NOTE
-        : stopped === "list" ? LIST_NOTE : outOfTime && round < MAX_TOOL_ROUNDS ? TIME_NOTE : null;
+        : stopped === "list" ? LIST_NOTE : outOfTime && round < MAX_TOOL_ROUNDS ? (cut && !finishedTools ? NOTHING_FOUND_NOTE : TIME_NOTE) : null;
       if (!stopped && outOfTime && round < MAX_TOOL_ROUNDS) forcedEarly = true;
       // After the tool results (or the nudge): every user message this loop sends has array content.
       if (note) (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: note });
       rounds += 1;
       const callStarted = performance.now();
-      const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", forceAnswer ? answerBy : deadline);
+      let response: Anthropic.Message;
+      try {
+        response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", forceAnswer ? answerBy : deadline);
+      } catch (error) {
+        // A call that could still use tools, cut by the work deadline: the next one answers without them, in the time kept for it.
+        if (forceAnswer || !answerAfterCut()) throw error;
+        cut = "call";
+        continue;
+      }
       slowestCall = Math.max(slowestCall, performance.now() - callStarted);
       if (response.stop_reason === "tool_use") {
         const before = { codes: new Set([...ctx.refused, ...ctx.kept].map((code) => code.toLowerCase())), keys: new Set(ctx.refusedKeys) };
+        const content = response.content;
         const toolsStarted = performance.now();
-        const { results, done } = await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline);
+        const outcomes = new Map<string, ToolOutcome>();
+        const { results, done } = await beforeDeadline(runToolBlocks(content, ctx, toolNames, outcomes, deadline), deadline).catch((error: unknown) => {
+          // A round the work deadline cut: the tools that finished give their results, the rest say so, and the next call answers
+          // (owner's chat, 2026-09-30: a cut round went straight to the backup reply).
+          if (!answerAfterCut()) throw error;
+          cut = "tools";
+          searchCut = ctx.searches.length;
+          return roundResults(content, outcomes);
+        });
+        finishedTools += outcomes.size;
         slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
@@ -513,7 +552,7 @@ export async function runAgentTurn(input: {
     const changeAsked = askedForChange(earlier.currentText, request.event.type === "select_product");
     const withoutClaims = (message: string) => withoutEnquiryClaims(message, { ...turnFacts(), seen: ctx.seen }, changeAsked);
     const fixers: Fixer[] = [
-      { prefix: CLAIM_ISSUE_PREFIX, fix: (message) => removeClaims(message, ctx.searches, ctx.seen) },
+      { prefix: CLAIM_ISSUE_PREFIX, fix: (message) => removeClaims(message, searches(), ctx.seen) },
       // Before the enquiry-claim fixer, so a "removed" line the browser still holds gets its own sentence, not NOT_ON_ENQUIRY's.
       { prefix: KEPT_LINE_PREFIX, fix: (message) => withoutKeptLineClaims(message, ctx.uncheckedCodes, ctx.changes) },
       { prefix: ENQUIRY_CLAIM_PREFIX, fix: withoutClaims },
@@ -579,7 +618,7 @@ export async function runAgentTurn(input: {
     // Codes and counts only, never customer or reply text. The session's tail and the cards' code:status:qty let the exam match
     // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).
     console.info("[api/agent] turn", {
-      ms: Math.round(performance.now() - started), session: request.sessionId.slice(-8), rounds, forcedEarly, stopped, repaired, repairCauses,
+      ms: Math.round(performance.now() - started), session: request.sessionId.slice(-8), rounds, forcedEarly, cut, stopped, repaired, repairCauses,
       repairSkipped: repairCauses.length > 0 && !repaired, repairFailed, tools: toolNames, updates: updateResults,
       picks: ctx.checkPick.settled.map((v) => `${v.action}:${v.verdict}${v.sure ? "" : "?"}:${v.ms}`), pickFast: ctx.pickFast,
       cards: review.cards.map((card) => `${card.stock_id}:${card.stock_status}:${card.available_quantity ?? "?"}`),

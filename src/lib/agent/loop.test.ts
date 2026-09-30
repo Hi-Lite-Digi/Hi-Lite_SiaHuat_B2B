@@ -403,7 +403,7 @@ test("every turn logs one line of codes and counts, never text", async (t) => {
   assert.equal(typeof first.ms, "number");
   // The session's last 8 characters and the cards' code:status:qty match a log line to its transcript turn (exam 3 couldn't).
   assert.deepEqual({ ...first, ms: 0 }, {
-    ms: 0, session: "ion-1234", rounds: 2, forcedEarly: false, stopped: null, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null,
+    ms: 0, session: "ion-1234", rounds: 2, forcedEarly: false, cut: null, stopped: null, repaired: false, repairCauses: [], repairSkipped: false, repairFailed: null,
     tools: ["search_catalogue"], updates: [], picks: [], pickFast: 0, cards: ["970S:in_stock:50"],
   });
   assert.deepEqual([second.rounds, second.repaired, second.repairCauses, second.tools], [1, true, ["UNKNOWN_CARD"], []]);

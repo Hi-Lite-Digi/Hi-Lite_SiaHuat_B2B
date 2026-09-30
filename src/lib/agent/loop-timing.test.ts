@@ -78,6 +78,15 @@ function slowSearches(searchMs: number[]) {
   return deps;
 }
 
+/** Catalogue fakes whose first search waits firstSearchMs. */
+function fakeDepsWithDelay(catalogue: ReturnType<typeof product>[], firstSearchMs: number) {
+  const deps = fakeDeps(catalogue);
+  const search = deps.searchDirect;
+  let n = 0;
+  deps.searchDirect = (query, limit) => (n++ === 0 ? new Promise((resolve) => setTimeout(resolve, firstSearchMs)).then(() => search(query, limit)) : search(query, limit));
+  return deps;
+}
+
 /** The owner's two messages (2026-09-30). */
 const prata = (): AgentRequest => ({
   sessionId: "session-prata01", event: { type: "text", text: "prata pan maybe" }, enquiry: [], shownProductIds: [],
@@ -214,6 +223,75 @@ test("at normal speeds the next call may still use tools, as before", async (t) 
   const reply = await runAgentTurn({ request: prata(), deps: slowSearches([2 * S, 2 * S, 2 * S]), client, model: "claude-sonnet-5", ...TIMES, deadlineMs: 36.5 * S });
   assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
   assert.deepEqual(bodies.map(toolChoice), ["auto", "auto", "auto", "none"]);
+});
+
+/** The tool results the nth Claude call was sent, in order. */
+const toolResults = (body: Body) => (body.messages.at(-1)!.content as Anthropic.ContentBlockParam[])
+  .filter((block): block is Anthropic.ToolResultBlockParam => block.type === "tool_result");
+
+test("a search that never answers is cut at the work deadline; the answer call gets what finished", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([
+    { ms: 2 * S, reply: toolUse({ id: "g1", name: "get_product", input: { stock_id: "PA10313" } }, search("s1", "crepe pan")) },
+    { ms: 3 * S, reply: either(toolUse(search("t2", "crepe pan")), GOOD) },
+  ]);
+  const started = performance.now();
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([HANG]), client, model: "claude-sonnet-5", ...TIMES });
+  const took = (performance.now() - started) / S;
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  assert.ok(took < 42, `took ${took.toFixed(1)} s`);
+  assert.equal(toolChoice(bodies[1]), "none");
+  assert.deepEqual(toolResults(bodies[1]).map((block) => [block.tool_use_id, Boolean(block.is_error), /NOT_FINISHED/.test(String(block.content))]), [["g1", false, false], ["s1", true, true]]);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /Time is nearly up/);
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, line.tools]), [["tools", ["get_product", "search_catalogue"]]]);
+});
+
+test("a first call that never answers is tried once more without tools", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([{ ms: HANG, reply: GOOD }, { ms: 3 * S, reply: answer({ message: "Is the pan for home or for a shop?" }) }]);
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([]), client, model: "claude-sonnet-5", ...TIMES });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  assert.equal(reply.message, "Is the pan for home or for a shop?");
+  assert.deepEqual(bodies.map(toolChoice), ["auto", "none"]);
+  // Nothing was looked up or changed: the note asks for a question, not products from memory or an add that never ran.
+  const last = JSON.stringify(bodies[1].messages.at(-1));
+  assert.match(last, /Nothing could be looked up/);
+  assert.match(last, /nothing on the enquiry was added or changed/);
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, line.forcedEarly]), [["call", true]]);
+});
+
+test("an add whose live check stalls past the work deadline is not made after the cut", async (t) => {
+  const log = quiet(t);
+  const deps = slowSearches([]);
+  const fetchLive = deps.fetchLive;
+  // The add's lookup starts at about 2 s and its live check lands at about 36.5 s: after the cut at 35 s, before the answer at 38 s.
+  deps.fetchLive = (url, ms) => (url === blowtorch.source_url ? new Promise((resolve) => setTimeout(resolve, 34.5 * S)).then(() => fetchLive(url, ms)) : fetchLive(url, ms));
+  const { client, bodies } = timedClient([
+    { ms: 2 * S, reply: toolUse({ id: "u1", name: "update_enquiry", input: { action: "add", stock_id: "970S", quantity: 2 } }) },
+    { ms: 3 * S, reply: answer({ message: "Sorry, I couldn't add the blow torch just now. Could you send that again?" }) },
+  ]);
+  const request: AgentRequest = {
+    sessionId: "session-torch001", event: { type: "text", text: "2 of the 970S please" }, enquiry: [], shownProductIds: ["970S"],
+    history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "This one is a handheld kitchen blow torch." }],
+  };
+  const reply = await runAgentTurn({ request, deps, client, model: "claude-sonnet-5", pickCheck: () => fakePickCheck(), ...TIMES });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /NOT_FINISHED/);
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, line.updates]), [["tools", ["add:NOT_FINISHED"]]]);
+});
+
+test("a search cut at the deadline that lands during the answer backs no claim", async (t) => {
+  const log = quiet(t);
+  // A category search that finds its category (with two queries, it would back "we don't carry X"), landing at about 36.5 s.
+  const crepePans = product({ stock_id: "CREPE-24", name: "CREPE PAN 24CM", list_price: 48.81, third_category: "Crepe pans" });
+  const { client } = timedClient([
+    { ms: 2 * S, reply: toolUse({ id: "s1", name: "search_catalogue", input: { queries: ["prata pan", "tawa"], category: "crepe pans" } }) },
+    { ms: 3.5 * S, reply: answer({ message: "Sorry, we don't carry prata pans. Is it for home or for a shop?" }) },
+  ]);
+  await runAgentTurn({ request: prata(), deps: fakeDepsWithDelay([crepePans], 34.5 * S), client, model: "claude-sonnet-5", ...TIMES });
+  // The answer never saw that search, so the search can't back what it says.
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, (line.repairCauses as string[]).includes("ABSENCE")]), [["tools", true]]);
 });
 
 // Real time scale (about 8 s): the nudge's 15 s minimum isn't an input, so a scaled test can't reach it.
