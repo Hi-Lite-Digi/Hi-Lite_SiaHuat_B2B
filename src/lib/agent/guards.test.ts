@@ -7,7 +7,7 @@ import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
-  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
+  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
   type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
@@ -389,9 +389,23 @@ test("a card set shown twice already is dropped unless the customer asks for it,
   assert.deepEqual(withoutRepeatedSet(ask, { ...earlier, cardSets: [["UT16HR"]] }, []).card_ids, ["UT16HR"]);
   assert.deepEqual(withoutRepeatedSet(ask, { ...earlier, currentText: "show me that one again" }, []).card_ids, ["UT16HR"]);
   assert.deepEqual(withoutRepeatedSet({ ...ask, message: "Tap it to add." }, earlier, []).card_ids, ["UT16HR"]);
+  // A show promise or "here they are" points at the cards too (X7 review: the promise lost its cards and cost a NO_CARD repair).
+  for (const message of ["Let me pull up the locking-ring tong again for you.", "Here they are again: the 16in is the longer one."]) {
+    assert.deepEqual(withoutRepeatedSet({ ...ask, message }, earlier, []).card_ids, ["UT16HR"], message);
+  }
+  // "details below" points at the contact details, not the cards.
+  assert.deepEqual(withoutRepeatedSet({ ...ask, message: "Sia Huat sales can help with photos (details below)." }, earlier, []).card_ids, []);
   assert.deepEqual(withoutRepeatedSet(ask, earlier, ["ut16hr"]).card_ids, ["UT16HR"]);
   // Another set is a new showing.
   assert.deepEqual(withoutRepeatedSet({ ...ask, card_ids: ["UT16HR", "UT12HR"] }, earlier, []).card_ids, ["UT16HR", "UT12HR"]);
+});
+
+test("withoutCardPointers cuts the sentences that point at a card, not those that point at the contact details", () => {
+  assert.equal(withoutCardPointers("It's item E910076. The card below has the same details. Tap it to add."), "It's item E910076.");
+  // r2 c08-stress idx 6: this "below" is the contact details.
+  for (const message of ["You can call our sales line to check or ask more, or email us - number and email below.", "Sia Huat sales can help (details below)."]) {
+    assert.equal(withoutCardPointers(message), message);
+  }
 });
 
 const checked = (stock_id: string, name: string, list_price: number): [string, CheckedProduct] => [stock_id, { product: product({ stock_id, name, list_price }), verified: true }];
@@ -579,6 +593,28 @@ test("a swap reported in one clause joined by 'and' is judged per item", () => {
   assert.equal(enquiryClaimIssues("Added 2 6-slot toasters and 2 Safico torches.", { lines: [het6Line], changes: [swapped[1]], seen: toasters }).length, 1);
 });
 
+test("the removal line replaces only a removal whose line is still on the enquiry; a swap or a removal of nothing gets the bare line", () => {
+  // X7 review: any removal word in the claim picked "That line is still on your enquiry.", which was false when the swap's removal
+  // ran and its add didn't (exam 3, c11-stress T4 replayed; r4 c11-stress idx 13), or when nothing was on the enquiry.
+  const toasters = new Map([...toasterShop, checked("HET-6", "S/S 6-SLOTS TOASTER", 257.85)]);
+  const removedHet4 = { lines: [], changes: [{ action: "remove", code: "HET-4" }] as EnquiryChange[], seen: toasters };
+  assert.equal(withoutEnquiryClaims("Done: removed the 4-slot and added 2 HET-6 6-slot toasters. Anything else?", removedHet4), "That change isn't on your enquiry yet. Anything else?");
+  assert.equal(withoutEnquiryClaims("HET-4 removed, 2 HET-6 added.", removedHet4), "That change isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("HET-4 removed and 2 HET-6 added for outlet 2. Anything else?", { ...removedHet4, lines: [{ ...het6Line, quantity: 1, total: 250 }] }),
+    "That change isn't on your enquiry yet. Anything else?");
+  const empty = { lines: [], changes: [], seen: shop };
+  for (const message of ["Removed it from your enquiry.", "Removed the Zyliss garlic press from your enquiry.", "Added 4 Rooster plates, and the price dropped to $4.20 each.", "The price dropped, so I added 2 Safico torches."]) {
+    assert.equal(withoutEnquiryClaims(message, empty), "That change isn't on your enquiry yet.", message);
+  }
+  // The add ran and the removal didn't: the bare line, not a question about the add.
+  assert.equal(withoutEnquiryClaims("Added 4 Rooster plates and removed the Safico torch.", { lines: [line("BTS-8026D", 2), line("RS-J1009-7", 4)], changes: [added("RS-J1009-7")], seen: shop }),
+    "That change isn't on your enquiry yet.");
+  // A promise to remove is a removal too, and the torch is still on.
+  assert.equal(withoutEnquiryClaims("I'll remove the Safico torch now.", { lines: [line("BTS-8026D", 2)], changes: [], seen: shop }), "That line is still on your enquiry.");
+  // An add or status beside the removal in the same clause is not a removal alone.
+  assert.equal(withoutEnquiryClaims("Removed the HET-4 so the HET-6 is now on your enquiry.", { lines: [het6Line], changes: [], seen: toasters }), "That change isn't on your enquiry yet.");
+});
+
 test("sums, GST, questions about what the customer wants and promises that wait are not enquiry claims", () => {
   for (const message of [
     // exam 3, c12-persona T11 (replayed): the repair's GST sum became "That change isn't on your enquiry yet."
@@ -665,7 +701,8 @@ test("the fixed line answers only a change the customer asked for, and only once
   // exam 3, c10-stress T5 (replayed): the other tong "hasn't been added yet" doesn't say the steak tong add failed.
   const tongs = { lines: [], changes: [], seen: new Map([checked("ST-15", "Stainless Steel Steak Tong 15\"", 12.48), checked("2564L", "Stainless Steel Utility Tong 16\"", 3.85)]) };
   const otherTong = "For the 16″ tong, is it the Utility Tong 16″ (2564L)? That one hasn't been added yet, just confirm and I'll add 3 for you.";
-  assert.equal(withoutEnquiryClaims(`Got it: 3 Stainless Steel Steak Tong 15″ added. ${otherTong}`, tongs, true), `That change isn't on your enquiry yet. Which item and how many would you like? ${otherTong}`);
+  // The reply already asks its own question, so the line asks nothing more (X7 review: two questions in a row).
+  assert.equal(withoutEnquiryClaims(`Got it: 3 Stainless Steel Steak Tong 15″ added. ${otherTong}`, tongs, true), `That change isn't on your enquiry yet. ${otherTong}`);
   // Nor does a GST note, another product, or a sentence that isn't about a change.
   for (const note of [
     "Note GST is not added to these prices yet.", "The Rooster Series Round Plate is not in your enquiry.", "Prices are not final on your enquiry until sales confirms.",
@@ -1196,6 +1233,9 @@ test("brokenLinkCodes gives the linked cards the customer says don't open: those
   assert.deepEqual(brokenLinkCodes("zyliss link cannot open leh", shown([zyliss, zylissBasic])), ["E910076", "E910077"]);
   assert.deepEqual(brokenLinkCodes("link can open la, just no photo", shown([zyliss])), []);
   assert.deepEqual(brokenLinkCodes("the zyliss one, 2 pcs", shown([zyliss])), []);
+  // "still no" or "still not" alone is no broken link (X7 review), but a page that still won't open is.
+  for (const text of ["i open the link still no photo", "link ok but still no pic", "still not sure which, the website say 5 dollar"]) assert.deepEqual(brokenLinkCodes(text, shown([zyliss])), [], text);
+  for (const text of ["Same link. Still not working", "the zyliss page still no open"]) assert.deepEqual(brokenLinkCodes(text, shown([zyliss])), ["E910076"], text);
 });
 
 test("a reply saying a line the browser still holds was removed is flagged, and fixed with one whole sentence", () => {

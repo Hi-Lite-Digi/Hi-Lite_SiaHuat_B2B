@@ -217,9 +217,10 @@ export function unknownStoreLinks(message: string, seen: ReadonlyMap<string, Che
   return storeLinks(message).filter((link) => linkKey(link) !== STORE_HOME && !known.has(linkKey(link)));
 }
 
-// "zyliss link cannot open leh", "Same link. Still not working", "the link got nothing inside" (exam 2, c03 and c08).
+// "zyliss link cannot open leh", "Same link. Still not working", "the link got nothing inside" (exam 2, c03 and c08). A bare "still
+// no" or "still not" isn't one: "i open the link still no photo", "still not sure which, the website say 5 dollar".
 const linkWord = /\b(?:link|url|page|website|site)s?\b|链接|网页/i;
-const linkFails = /\b(?:not (?:work|open|load)\w*|(?:can ?not|can't|cant|couldn't|won't|wont|doesn't|doesnt|didn't|dun|don't|never) (?:open|load|work)\w*|broken|dead|empty|nothing (?:inside|there|come|show)\w*|error|not found|still no|still not|same link)\b|打不开|无法打开/i;
+const linkFails = /\b(?:not (?:work|open|load)\w*|(?:can ?not|can't|cant|couldn't|won't|wont|doesn't|doesnt|didn't|dun|don't|never) (?:open|load|work)\w*|broken|dead|empty|nothing (?:inside|there|come|show)\w*|error|not found|still (?:no|not|can'?t|cannot)\s*(?:work|open|load)\w*|same link)\b|打不开|无法打开/i;
 const choosing = /\d|\b(?:add|take|tap|buy|order|show)\b/i;
 const blamesCustomer = /\b(?:browser|network|connection|cach(?:e|ing)|incognito|private window|on your (?:side|end))\b/i;
 export const BROKEN_LINK_ISSUE = "The customer says a link you sent doesn't open. Don't send that link again. Give the item code and the facts from the tools, and offer Sia Huat sales for photos (show_contact true) or a similar product.";
@@ -258,8 +259,12 @@ const asksForTap = (sentence: string) => tapAsk.test(sentence) && !tapNotACard.t
 const showPromise = /\b(?:let me|I'?ll|I will|one sec|one moment|hold on)\b[^.!?\n]{0,40}\b(?:pull|bring|show|get)\b[^.!?\n]{0,25}(?<!\bset )\bup\b|\b(?:pulling|bringing) (?:up|those|these|it|that)\b/i;
 // "Let me know the type and I'll pull up options" waits for the customer; "having trouble pulling up the catalogue" is honest.
 const promisesToShow = (sentence: string) => showPromise.test(sentence) && !/\b(?:if|once|when|let me know|tell me|trouble|unable|cannot)\b|n['’]t\b/i.test(sentence);
-// Words that point at a card keep it: "tap it", "here it is", "card below".
-const pointsAtCard = (sentence: string) => asksForTap(sentence) || promisesToShow(sentence) || /\b(?:cards?|below|here it is)\b/i.test(sentence);
+// Words that point at a card keep it: "tap it", "here it is", "here they are", "card below"; not "(details below)" or "number and
+// email below", which point at the contact details (r2 c08-stress idx 6).
+const pointsAtCard = (sentence: string) => asksForTap(sentence) || promisesToShow(sentence)
+  || /\b(?:cards?|here it is|here they are)\b|(?<!\b(?:details|number|email|contact|phone)s?\s+)\bbelow\b/i.test(sentence);
+/** The message without its sentences that point at a card, for an answer whose cards were all dropped. */
+export const withoutCardPointers = (message: string) => removeSentences(message, pointsAtCard);
 /**
  * The answer without the cards of items this turn added or set that the customer has already seen: the words and the enquiry
  * bar show the change, and the card would only repeat (exam 3: 61 of 87 add confirmations re-sent the card, 54 of those a
@@ -271,16 +276,14 @@ export function withoutChangedCards(answer: FinalAnswer, changes: EnquiryChange[
   const changed = new Set(changes.flatMap((change) => (change.code && (change.action === "add" || change.action === "set") ? [change.code.toLowerCase()] : [])));
   return { ...answer, card_ids: answer.card_ids.filter((id) => !(changed.has(id.toLowerCase()) && shown.has(id.toLowerCase()))) };
 }
-// Words that send the customer to the cards: without them the cards would leave the words pointing at nothing.
-const pointsAtCards = /\b(?:tap|click)\b|\bcards?\b|\bbelow\b/i;
 /**
  * The answer without its cards when that same set was already shown twice (exam 4: 14 third showings, most re-attached to "Just to
- * confirm?", "Want me to add it?" or "How many?"), unless the customer asked to see it again, the message points at the cards, or
- * update_enquiry refused one of them this turn (the question about it offers it). The pick check reads the chat, so a yes or a
- * number no longer needs the card on screen.
+ * confirm?", "Want me to add it?" or "How many?"), unless the customer asked to see it again, the message points at the cards (without
+ * them the words would point at nothing, and a show promise would cost a NO_CARD repair), or update_enquiry refused one of them this
+ * turn (the question about it offers it). The pick check reads the chat, so a yes or a number no longer needs the card on screen.
  */
 export function withoutRepeatedSet(answer: FinalAnswer, earlier: EarlierTurns, refused: readonly string[]): FinalAnswer {
-  if (!answer.card_ids.length || asksAgain.test(earlier.currentText) || pointsAtCards.test(answer.message)) return answer;
+  if (!answer.card_ids.length || asksAgain.test(earlier.currentText) || sentences(answer.message).some(pointsAtCard)) return answer;
   if (answer.card_ids.some((id) => refused.some((code) => same(code, id)))) return answer;
   const key = cardSetKey(answer.card_ids);
   return earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2 ? { ...answer, card_ids: [] } : answer;
@@ -366,8 +369,8 @@ const claimClauses = (sentence: string) => sentence
     return clauses;
   }, []))
   .map((part) => part.trim()).filter(Boolean);
-// The fixer's lines: true for a false add, change or removal, including of an item already on the enquiry. An add or change asks
-// what is still needed, never for an item code and never with "I'll"; exam-numbers counts the first sentence.
+// The fixer's lines (fixedLine picks one): true for a false add, change or removal, including of an item already on the enquiry. An
+// add or change asks what is still needed, never for an item code and never with "I'll"; exam-numbers counts the first sentence.
 const NOT_ON_ENQUIRY = "That change isn't on your enquiry yet.";
 const NOT_ADDED_LINE = `${NOT_ON_ENQUIRY} Which item and how many would you like?`;
 const NOT_REMOVED_LINE = "That line is still on your enquiry.";
@@ -453,9 +456,27 @@ function saysEachNotMade(unclaimed: string, claims: string[], cards: ShownCard[]
   });
 }
 
+const addWording = /\b(?:added|adding|updated|updating|put|noted down)\b|已(?:添加|加入|更新)|加好了|帮你加了/i;
+/**
+ * The fixed line for a false claim. NOT_REMOVED_LINE only for a claim that only removes (or promises to), naming a line the enquiry
+ * still holds; a removal beside an add, or of nothing on the enquiry, gets the bare NOT_ON_ENQUIRY, true of any false change (X7
+ * review: exam 3, c11-stress T4 replayed, where the swap's removal ran and its add didn't). An add or change asks what is still
+ * needed, unless the rest of the reply already asks its own question.
+ */
+function fixedLine(claim: string, facts: ClaimFacts, unclaimed: string) {
+  const parts = claimClauses(claim).filter((clause) => changeClaim.test(clause) || promiseChange.test(clause));
+  const removals = parts.filter((clause) => removalWord.test(clause) || /\bremove\b/i.test(clause));
+  if (removals.length) {
+    const alone = removals.length === parts.length && !addWording.test(claim) && !onEnquiryWording.test(claim);
+    const kept = removals.some((clause) => pointedBy(clause, claimCards(facts)).some((card) => facts.lines.some((line) => same(line.code, card.code))));
+    return alone && kept ? NOT_REMOVED_LINE : NOT_ON_ENQUIRY;
+  }
+  return sentences(unclaimed).some((sentence) => /[?？]$/.test(sentence) && !genericAsk.test(sentence)) ? NOT_ON_ENQUIRY : NOT_ADDED_LINE;
+}
+
 /**
  * The message without its false enquiry claims. Only when the customer asked for a change, and the rest of the reply doesn't already
- * say each one wasn't made, does one fixed line take the first claim's place: NOT_REMOVED_LINE for a removal, else NOT_ADDED_LINE.
+ * say each one wasn't made, does one fixed line take the first claim's place.
  */
 export function withoutEnquiryClaims(message: string, facts: ClaimFacts, askedChange = true) {
   const claims = falseEnquiryClaims(message, facts);
@@ -463,7 +484,7 @@ export function withoutEnquiryClaims(message: string, facts: ClaimFacts, askedCh
   if (!first) return message;
   const unclaimed = removeSentences(message, (sentence) => claims.includes(sentence));
   if (!askedChange || saysEachNotMade(unclaimed, claims, claimCards(facts))) return unclaimed;
-  return removeSentences(message.replace(first, removalWord.test(first) ? NOT_REMOVED_LINE : NOT_ADDED_LINE), (sentence) => rest.includes(sentence));
+  return removeSentences(message.replace(first, fixedLine(first, facts, unclaimed)), (sentence) => rest.includes(sentence));
 }
 
 export const KEPT_LINE_PREFIX = "This line is still on the enquiry";

@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
+  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -467,8 +467,10 @@ export async function runAgentTurn(input: {
     const brokenCodes = brokenLinkCodes(earlier.currentText, picks.replies);
     const trimCards = (answer: FinalAnswer): FinalAnswer => {
       const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
-      if (answer.message === CARDS_ONLY_MESSAGE) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: NOTHING_LEFT_MESSAGE, show_contact: true };
-      return withoutRepeatedSet(withoutChangedCards({ ...answer, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused);
+      // With every card dropped, the words pointing at them go too (r3 c08-stress idx 5: "the card below carries the same details").
+      const message = answer.card_ids.length && !kept.length ? withoutCardPointers(answer.message) : answer.message;
+      if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: NOTHING_LEFT_MESSAGE, show_contact: true };
+      return withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused);
     };
     let final = result.final && await withEarlierCards(trimCards(result.final));
     let allowed = currentAllowed();

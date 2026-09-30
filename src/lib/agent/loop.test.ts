@@ -1256,6 +1256,13 @@ test("a card whose link the customer says doesn't open is dropped in code, with 
   assert.equal(reply.message, message);
   const log = info.mock.calls.filter((call) => call.arguments[0] === "[api/agent] turn").at(-1)!.arguments[1] as Record<string, unknown>;
   assert.deepEqual(log.repairCauses, []);
+  // With every card dropped, a sentence pointing at them goes too (r3 c08-stress idx 5: "the card below carries the same details").
+  const pointing = await brokenTurn(fakeClient([answer({ message: `${message} The card below has the same details.`, card_ids: ["E910076"] })]).client);
+  assert.deepEqual(pointing.cards, []);
+  assert.equal(pointing.message, message);
+  const onlyPointing = await brokenTurn(fakeClient([answer({ message: "The card below has the same details.", card_ids: ["E910076"] })]).client);
+  assert.equal(onlyPointing.showContact, true);
+  assert.match(onlyPointing.message, /Sia Huat sales can help/);
   // A cards-only answer with nothing left after the drop points to sales instead.
   const cardsOnly = await brokenTurn(fakeClient([answer({ message: "", card_ids: ["E910076"] })]).client);
   assert.deepEqual(cardsOnly.cards, []);
