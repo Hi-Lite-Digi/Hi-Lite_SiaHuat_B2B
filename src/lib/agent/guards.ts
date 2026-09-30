@@ -603,8 +603,9 @@ const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\
 const ranking = (sentence: string) => RANKING.test(sentence) || PRICE_RANK.test(sentence.replace(OFFER, " "));
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
-// "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product.
-const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price|issue|problem))`;
+// "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product. Whole words
+// only: "We don't have a tawa specifically" is (runs-new3 c03-stress T1 slipped through as "spec").
+const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price|issue|problem)\b)`;
 // "I haven't found an actual Japan-made knife brand" and "I don't have anything actually made in Japan" (exam 4, c03-A idx 6,
 // c03-persona idx 4); "I haven't found a boxed set yet" says its own scope, and "I don't have anything else to add" or "anything more
 // on its warranty" is no product.

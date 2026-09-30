@@ -1129,6 +1129,12 @@ test("a 'we don't have it' needs two searches and a found category, and is only 
   assert.match(torch.style.find((issue) => issueCode(issue) === "ABSENCE") ?? "", /no direct substitute/);
 });
 
+test("'specifically' is not read as 'spec': the 'we don't have it' is still checked (r6 area N)", () => {
+  // runs-new3 c03-stress T1 slipped through this way.
+  assert.equal(absenceOf("We don't have a tawa specifically.").length, 1);
+  assert.deepEqual(absenceOf("I don't have a spec on that."), []);
+});
+
 test("an out-of-stock claim needs every product it points at checked live as out of stock", () => {
   assert.equal(claimsOf("The two cheaper options I found (Kenwood x-Tract, Adler 2L) are both out of stock.").length, 1);
   assert.deepEqual(claimsOf("The Kenwood x-Tract is out of stock."), []);
