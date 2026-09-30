@@ -111,6 +111,19 @@ test("a made-up card is sent back for one repair", async () => {
   assert.match(JSON.stringify(bodies[1].messages.at(-1)), /not found: FAKE-1/);
 });
 
+test("a wrong stock count left after the repair is dropped from its bracket, never rewritten to another number (exam 4, c03-stress idx 7)", async () => {
+  const woks = [product({ stock_id: "P-16HD", name: "IRON WOK", available_quantity: 35 }), product({ stock_id: "13103-1601", name: "Iron Wok 16\"", available_quantity: 2 })];
+  const draft = "A few options in stock: 16in Iron Wok (35 available). Which size do you need?";
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["iron wok"] }),
+    answer({ message: draft, card_ids: ["13103-1601"] }),
+    answer({ message: draft, card_ids: ["13103-1601"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "got wok? need 4 for zichar" } }), deps: fakeDeps(woks), client, model: "claude-sonnet-5" });
+  assert.match(String(bodies[2].messages.at(-1)!.content), /"35 available" for 13103-1601 \(live 2\); 35 matches P-16HD IRON WOK/);
+  assert.equal(reply.message, "A few options in stock: 16in Iron Wok. Which size do you need?");
+});
+
 test("an unverified amount that survives the repair is removed", async () => {
   const { client } = fakeClient([
     answer({ message: "That one is $99.", chips: ["Yes, $99 one", "Show others"] }),

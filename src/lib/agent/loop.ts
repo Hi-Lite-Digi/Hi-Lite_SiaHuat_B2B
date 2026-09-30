@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
+  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -492,11 +492,12 @@ export async function runAgentTurn(input: {
       { prefix: MONEY_ISSUE_PREFIX, fix: (message) => removeAmounts(message, unverifiedAmounts(message, allowed)) },
     ];
     // An answer about to be sent, with what code can fix fixed. Style problems left are not worth the backup reply: the answer is
-    // lightly tidied, then checked again for claims, as tidying rewords it ("Noted: 2" becomes "Got it: 2"). It is never sent empty.
+    // lightly tidied, then checked again for claims, as tidying rewords it ("Noted: 2" becomes "Got it: 2"). A stock count that still
+    // disagrees with its card's live stock loses its number (exam 4, c03-stress idx 7). It is never sent empty.
     const finish = (answer: FinalAnswer, checked: Review): FinalAnswer => {
       const fixed = applyFixers(answer.message, checked.safety, fixers);
       if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
-      const message = checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message;
+      const message = withoutWrongStockCounts(checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message, checked.cards, ctx.seen);
       if (message.trim()) return { ...answer, message };
       return { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
     };

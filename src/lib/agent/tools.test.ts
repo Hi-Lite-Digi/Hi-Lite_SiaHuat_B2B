@@ -739,6 +739,16 @@ test("when no candidate's stock could be checked, find_alternatives says so inst
   assert.doesNotMatch(body.note ?? "", /No close in-stock match/);
 });
 
+test("a look for alternatives is recorded for the absence check, unless it failed or no stock could be checked", async () => {
+  // exam 4, s03-B idx 1: "no close substitute" was repaired as unbacked after find_alternatives had run.
+  const ctx = context(fakeDeps([blowtorch, mastrad, safico]));
+  await runTool("find_alternatives", { stock_id: "970S" }, ctx);
+  assert.deepEqual(ctx.searches, [{ queries: [], category: null, categoryFound: false, maxPrice: null, complete: false, alternativesFor: "970S" }]);
+  const unchecked = context(fakeDeps([blowtorch, mastrad, safico], { F46700: "fail", "BTS-8026D": "fail" }));
+  await runTool("find_alternatives", { stock_id: "970S" }, unchecked);
+  assert.deepEqual(unchecked.searches, []);
+});
+
 test("find_alternatives returns nothing rather than unrelated products", async () => {
   const body = await alternativesFor("4020", [
     product({ stock_id: "4020", name: "BAIN MARIE POT 12QT" }),

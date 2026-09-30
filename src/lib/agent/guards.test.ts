@@ -8,7 +8,7 @@ import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedSet,
-  type EarlierTurns, type FinalAnswer, type TurnFacts,
+  withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -1193,6 +1193,144 @@ test("removeClaims drops only the unbacked claim sentences", () => {
   assert.equal(removeClaims("That covers our tong range. Want me to add any?", [], stockSeen), "Want me to add any?");
   assert.equal(removeClaims("Approx. 5L each. That covers our range.", [], stockSeen), "Approx. 5L each.");
   assert.equal(removeClaims("We don't carry boxed dining sets. Want cutlery?", [], stockSeen), "We don't carry boxed dining sets. Want cutlery?");
+});
+
+// A search backing every kind of range claim: two queries, a found category, listed in full.
+const backing = [search({ queries: ["chef knife", "knives"], category: "chef knives", categoryFound: true, complete: true })];
+const rangeIssues = (message: string, searches: SearchRecord[] = []) => {
+  const review = claimReview(message, searches);
+  return [...review.safety.map((issue) => `safety ${issueCode(issue)}`), ...review.style.filter((issue) => ["CLAIM", "ABSENCE"].includes(issueCode(issue))).map((issue) => `style ${issueCode(issue)}`)];
+};
+
+test("range wordings the round-4 guard missed need a backing search (exam 4)", () => {
+  for (const [message, expected] of [
+    // c03-A idx 8: "all our" with six words before "are".
+    ["All our in-stock chef knives right now are Taiwan (Atlantic Chef) or Germany (Giesser) brands.", "safety CLAIM"],
+    // c03-A idx 6 and c03-persona idx 4: "haven't found", "don't have anything".
+    ["I haven't found an actual Japan-made knife brand in our catalogue.", "style ABSENCE"],
+    ["I don't have anything actually made in Japan in the catalogue - we do have the Atlantic Chef 'Japanese Chef Knife' style (German steel 1.4116, POM handle), but Atlantic Chef is a Taiwan brand, so the 'Japanese' in the name refers to the knife style, not its origin.", "style ABSENCE"],
+    // c04-persona idx 3, s09-B idx 1, c07-stress idx 4: rankings of the range, reworded but never removed.
+    ["That's the one for home use we've got - the Kenwood Lite is actually quite versatile: 5 speeds plus pulse, and comes with both beaters and a dough kneader attachment, so it handles both baking (cakes, cream) and cooking tasks (batters, light dough).", "style CLAIM"],
+    ["Two options: the Giesser (German brand, 28cm, ergonomic handle, bigger fish, GERMANY brand) at a higher price, or the all-stainless 21cm scaler which is more budget-friendly and in stock (21 units).", "style CLAIM"],
+    ["We have two fish scalers: the Giesser 28cm and the 21cm one.", "style CLAIM"],
+    ["No worries, here are cheaper hand-held ones in stock: Waring Quik Stik (18cm shaft, 175W) is the most budget option.", "style CLAIM"],
+    ["Bamix (39.5cm, 200W) I showed earlier is next up in price.", "style CLAIM"],
+  ]) {
+    assert.deepEqual(rangeIssues(message), [expected], message);
+    assert.deepEqual(rangeIssues(message, backing), [], message);
+  }
+  for (const message of [
+    "That's the one I'd recommend from what we have - German steel blade.",
+    "We carry three main types: bar blenders, stick blenders and ice crushers.",
+    "We have 2 units left.",
+    "Of the Waring blenders I've shown, the MX1100 is the cheapest.",
+    "Two options: I can check with sales on restock, or show you the 28cm instead.",
+    "There are 3 things to check before you order.",
+    "Between these two, the Zyliss is the cheapest.",
+  ]) {
+    assert.deepEqual(rangeIssues(message), [], message);
+  }
+});
+
+test("a ranking of the range is a style issue that is never removed, so a failed repair can't turn it into a stand-in", () => {
+  const message = "Waring Quik Stik is the most budget option. Want it?";
+  const review = claimReview(message);
+  assert.deepEqual(review.safety, []);
+  assert.match(review.style.find((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)) ?? "", /isn't backed by this turn's searches: "Waring Quik Stik is the most budget option\."/);
+  assert.equal(removeClaims(message, [], stockSeen), message);
+});
+
+const originSeen = (...items: Array<[Parameters<typeof product>[0], string | null]>) => new Map<string, CheckedProduct>(items.map(([overrides, origin]) => [
+  overrides.stock_id, { product: product(overrides), verified: true, details: origin ? { "Country of Brand Origin": origin } : null },
+]));
+const disproved = (message: string, seen: Map<string, CheckedProduct>) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, seen, allowed, undefined, { searches: backing })
+  .style.filter((issue) => issue.includes("came up in this turn's results"));
+
+test("a 'we don't have it' that a product seen this turn disproves names that product (exam 4, s03-B idx 1, c03-A idx 6)", () => {
+  const rice = originSeen([{ stock_id: "EK9108S", name: "STAINLESS STEEL FOOD GRADE RICE DISPENSER", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }, null]);
+  assert.deepEqual(disproved("I couldn't find a 'rice dispenser' by that name in the searches I ran.", rice), [
+    `This 'we don't have it': "I couldn't find a 'rice dispenser' by that name in the searches I ran.". EK9108S (STAINLESS STEEL FOOD GRADE RICE DISPENSER) came up in this turn's results: if it is what the customer asked for, name it with its stock; if not, keep your sentence.`,
+  ]);
+  const global = originSeen([{ stock_id: "GF-34", name: "CHEF'S KNIFE", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }, "JAPAN"]);
+  assert.match(disproved("I haven't found an actual Japan-made knife brand in our catalogue.", global).join(" "), /GF-34 \(CHEF'S KNIFE\) came up/);
+  assert.equal(issueCode(disproved("I haven't found an actual Japan-made knife brand in our catalogue.", global)[0]), "ABSENCE");
+  assert.equal(removeClaims("I haven't found an actual Japan-made knife brand in our catalogue.", [], global), "I haven't found an actual Japan-made knife brand in our catalogue.");
+});
+
+test("a product that doesn't fit the clause never disproves it", () => {
+  // r2 c03-A idx 8: "available" rules out an out-of-stock Japan knife.
+  const santoku = originSeen([{ stock_id: "G-80", name: "SANTOKU KNIFE", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }, "JAPAN"]);
+  assert.deepEqual(disproved("Our Global brand knives (G-77, G-78, G-79) - which is the Japan-made brand we carry - are all currently out of stock or unverified, so I don't have a Japan-made chef knife available right now.", santoku), []);
+  // r3 c03-persona idx 8: a brand's origin is not where it was made.
+  const cheese = originSeen([{ stock_id: "GS-10", name: "Global Cheese Knife 14cm" }, "JAPAN"]);
+  assert.deepEqual(disproved("I couldn't find a chef knife confirmed as made in Japan in the searches I ran.", cheese), []);
+  // A one-word quote, another product sharing one word, and a quoted name of another country's brand.
+  const stool = originSeen([{ stock_id: "FSS-2", name: "FOLDING STEP STOOL 2-STEP GREY" }, null]);
+  assert.deepEqual(disproved("I couldn't find a 3-step stool in 'grey'.", stool), []);
+  const bowl = originSeen([{ stock_id: "RB-1", name: "RICE BOWL 11CM WHITE" }, "JAPAN"]);
+  assert.deepEqual(disproved("We don't carry Japanese rice cookers.", bowl), []);
+  const atlantic = originSeen([{ stock_id: "5301T49", name: "Atlantic Chef Japanese Chef Knife 21cm, Pom Hdle" }, "TAIWAN"]);
+  assert.deepEqual(disproved("I couldn't find a 'Japanese Chef Knife' actually made in Japan.", atlantic), []);
+});
+
+test("find_alternatives backs 'no substitute' (exam 4, s03-B idx 1: repaired after it had run)", () => {
+  const message = "I couldn't find a close in-stock substitute for the Mastrad torch.";
+  assert.equal(absenceOf(message).length, 1);
+  assert.deepEqual(absenceOf(message, [search({ queries: [], alternativesFor: "F46700" })]), []);
+  assert.deepEqual(absenceOf("Mastrad torch is out of stock, no direct substitute for it.", [search({ queries: [], alternativesFor: "F46700" })]), []);
+  // It backs only the substitute: "we don't carry" still needs its searches.
+  assert.equal(absenceOf("We don't carry Japanese torches, and I couldn't find a close substitute.", [search({ queries: [], alternativesFor: "F46700" })]).length, 1);
+});
+
+test("the absence repair asks Claude to check this turn's results first and not to describe its searches", () => {
+  assert.match(absenceOf("We don't carry boxed dining sets.")[0], /First check this turn's results for it\. If it isn't there, say you couldn't find it \(without describing your searches\) rather than that Sia Huat doesn't carry it/);
+});
+
+// r4 c03-stress idx 7: the P-16HD (35 in stock) was in the results, but the reply's card was the 13103-1601 (2 left).
+const wokSeen = new Map<string, CheckedProduct>([
+  ["P-15HD", { product: product({ stock_id: "P-15HD", name: "IRON WOK", available_quantity: 62 }), verified: true }],
+  ["P-16HD", { product: product({ stock_id: "P-16HD", name: "IRON WOK", available_quantity: 35 }), verified: true }],
+  ["13103-1501", { product: product({ stock_id: "13103-1501", name: "Iron Wok 15\"", available_quantity: 7 }), verified: true }],
+  ["13103-1601", { product: product({ stock_id: "13103-1601", name: "Iron Wok 16\"", available_quantity: 2 }), verified: true }],
+]);
+const wokMessage = "Yes, we've got iron woks good for zichar-style stir frying - traditional carbon iron, high sloping sides. A few options in stock: 15in Iron Wok (62 available), 16in Iron Wok (35 available), or 20in Iron Wok (only 4 left, so tight for 4pcs). Which size do you need?";
+const stockNumberIssues = (message: string, cardIds: string[], seen = wokSeen) => reviewAnswer({ message, card_ids: cardIds, chips: [], show_contact: false }, seen, allowed)
+  .style.filter((issue) => issueCode(issue) === "STOCK_NUMBER");
+
+test("a typed stock count must match the live stock of the one card it points at (exam 4, c03-stress idx 7)", () => {
+  assert.deepEqual(wrongStockCounts(wokMessage, [wokSeen.get("13103-1601")!.product], wokSeen).map(({ said, code, live, alsoMatches }) => [said, code, live, alsoMatches.map((item) => item.stock_id)]), [
+    ["35 available", "13103-1601", 2, ["P-16HD"]],
+  ]);
+  assert.deepEqual(stockNumberIssues(wokMessage, ["13103-1601"]), [
+    `These stock numbers don't match the live stock: "35 available" for 13103-1601 (live 2); 35 matches P-16HD IRON WOK: if you meant that product, attach its card instead. Give each product's available_quantity, or leave the number out; never say stock changed.`,
+  ]);
+  // "15in Iron Wok" points at the 13103-1501, not the P-15HD card, so its 62 isn't judged.
+  assert.deepEqual(stockNumberIssues(wokMessage, ["P-15HD"]), []);
+});
+
+test("stock counts are judged one by one, and never an approximate count or one in another unit", () => {
+  const toasters = new Map<string, CheckedProduct>([
+    ["HET-4", { product: product({ stock_id: "HET-4", name: "Pop-Up Toaster 4 Slot", available_quantity: 5 }), verified: true }],
+    ["HET-6", { product: product({ stock_id: "HET-6", name: "Pop-Up Toaster 6 Slot", available_quantity: 3 }), verified: true }],
+  ]);
+  const twice = "The 4-slot toaster has 5 available, and the 6-slot toaster has 5 available too.";
+  const cards = [...toasters.values()].map((item) => item.product);
+  assert.deepEqual(wrongStockCounts(twice, cards, toasters).map((wrong) => [wrong.code, wrong.index]), [["HET-6", twice.lastIndexOf("5 available")]]);
+  assert.equal(withoutWrongStockCounts(twice, cards, toasters), "The 4-slot toaster has 5 available, and the 6-slot toaster is in stock too.");
+  const spoons = new Map<string, CheckedProduct>([["SP-12", { product: product({ stock_id: "SP-12", name: "Wave Dinner Spoon", uom_id: "DOZ", available_quantity: 3 }), verified: true }]]);
+  assert.deepEqual(wrongStockCounts("The Wave dinner spoon has 36 pcs available.", [spoons.get("SP-12")!.product], spoons), []);
+  assert.deepEqual(wrongStockCounts("The Wave dinner spoon (over 30 available) is a good match.", [spoons.get("SP-12")!.product], spoons), []);
+  // A code's digits are not a count.
+  assert.deepEqual(wrongStockCounts("There are 9 HET-6 units in stock currently.", cards, toasters), []);
+});
+
+test("a wrong count left after the repair is dropped from its bracket, else said as in stock or out of stock, never another number", () => {
+  const card = [wokSeen.get("13103-1601")!.product];
+  assert.equal(withoutWrongStockCounts("The 16in Iron Wok (35 available) suits zichar.", card, wokSeen), "The 16in Iron Wok suits zichar.");
+  assert.equal(withoutWrongStockCounts("The 16in Iron Wok (only 35 left, plenty for 4) suits zichar.", card, wokSeen), "The 16in Iron Wok (plenty for 4) suits zichar.");
+  assert.equal(withoutWrongStockCounts("The 16in Iron Wok has 35 in stock.", card, wokSeen), "The 16in Iron Wok is in stock.");
+  const soldOut = new Map<string, CheckedProduct>([["13103-1601", { product: product({ stock_id: "13103-1601", name: "Iron Wok 16\"", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }), verified: true }]]);
+  assert.equal(withoutWrongStockCounts("16in Iron Wok: 35 available.", [soldOut.get("13103-1601")!.product], soldOut), "16in Iron Wok: out of stock.");
 });
 
 test("saying all the cards are in stock when one isn't is a style issue", () => {

@@ -11,8 +11,11 @@ import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
 
 /** One change update_enquiry made to the enquiry. */
 export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null };
-/** One search_catalogue call: what backs a reply's "that's our range", "nothing cheaper" or "we don't have it". */
-export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean };
+/**
+ * One search_catalogue call: what backs a reply's "that's our range", "nothing cheaper" or "we don't have it". A find_alternatives
+ * run is recorded too (alternativesFor, with no queries): it backs "no close substitute".
+ */
+export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean; alternativesFor?: string };
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -424,8 +427,11 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
   const available = checked
     .filter((item) => item.verified && item.product.stock_status === "in_stock" && (item.product.available_quantity ?? 0) >= minQty)
     .slice(0, 3);
+  const unchecked = checked.length > 0 && !checked.some((item) => item.verified);
+  // A look that could check stock backs "no close substitute" (exam 4, s03-B idx 1: repaired as unbacked after this had run).
+  if (!unchecked) ctx.searches.push({ queries: [], category: null, categoryFound: false, maxPrice: null, complete: false, alternativesFor: input.stock_id });
   if (!available.length) {
-    return ok({ ...sourceFact, products: [], note: checked.length && !checked.some((item) => item.verified) ? ALTERNATIVES_UNCHECKED : NO_CLOSE_ALTERNATIVE });
+    return ok({ ...sourceFact, products: [], note: unchecked ? ALTERNATIVES_UNCHECKED : NO_CLOSE_ALTERNATIVE });
   }
   return ok({ ...sourceFact, products: available.map((item) => remember(ctx, withDetails(item, details))) });
 }
