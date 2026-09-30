@@ -404,6 +404,9 @@ export async function runAgentTurn(input: {
     links: [...request.history.map((item) => item.content), searchText ?? ""].flatMap(storeLinks),
     previousLinks: storeLinks(request.history.findLast((item) => item.role === "assistant")?.content ?? ""),
   };
+  // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
+  const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
+    && !(/^\s*ok/i.test(request.event.text) && picks.replies.at(-1)?.cards.length === 1);
 
   try {
     const messages: Anthropic.MessageParam[] = [
@@ -442,9 +445,6 @@ export async function runAgentTurn(input: {
     let nudged = false;
     // The customer's typed texts don't change within the turn.
     const typedAny = statesAnyQuantity(ctx.customerTexts);
-    // A plain thank-you is answered without tools; a photo, or "ok thanks" to the only card just shown (a yes), is not one.
-    const thanksTurn = request.event.type === "text" && !request.event.chip && THANKS_ONLY.test(request.event.text)
-      && !(/^\s*ok/i.test(request.event.text) && picks.replies.at(-1)?.cards.length === 1);
     const listTurn = listItemCount(searchText ?? "") > LIST_ITEMS_PER_TURN;
     // Why the tool rounds stopped before time or the round cap did: the one place that turns tools off, with its note.
     let stopped: Stop | "list" | "thanks" | null = thanksTurn ? "thanks" : null;
@@ -637,10 +637,19 @@ export async function runAgentTurn(input: {
   } catch (error) {
     // Only a reason code is logged: error text could echo customer or model content.
     console.warn("[api/agent] fallback reply", { reason: failureCode(error, deadline), ms: Math.round(performance.now() - started), session: request.sessionId.slice(-8) });
+    // The enquiry as it stands at the cut: an add still landing isn't said or shown, and the browser keeps its own copy.
+    const enquiry = replyEnquiry(ctx);
+    const changes = [...ctx.changes];
     // The backup reply gets the reserve, or less if the turn started with less than that left.
     const left = deadlineMs - (performance.now() - started);
-    const reply = await buildFallbackReply({ searchText, lines: ctx.lines, deps: input.deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)) });
-    return { ...reply, enquiry: replyEnquiry(ctx) };
+    // It starts from what this turn already found and changed: the owner's "prata pan maybe" (2026-09-30) ran out of time after its
+    // searches, and the backup's own search of the raw words showed melamine GN pans.
+    const reply = await buildFallbackReply({
+      searchText, lines: enquiry.lines, deps: input.deps, timeoutMs: Math.max(1, Math.floor(Math.min(fallbackReserveMs, left) * 0.9)),
+      seen: ctx.seen, changes, thanks: thanksTurn,
+      event: request.event.type === "select_product" ? "tap" : request.event.type === "image" ? "photo" : "text",
+    });
+    return { ...reply, enquiry };
   }
 }
 

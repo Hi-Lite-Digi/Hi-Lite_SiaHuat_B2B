@@ -1896,3 +1896,75 @@ test("the turn log adds the pick verdicts, the tap passes and each update's resu
   assert.deepEqual(logs.map((log) => [log.picks, log.pickFast, log.updates]), [[["add:picked:0"], 0, ["add:ok"]], [[], 1, ["add:ok"]]]);
   assert.doesNotMatch(JSON.stringify(logs), /ok 2|safico|blow torch|got it/i);
 });
+
+/** Answers with these responses in turn, then never answers until its signal aborts (the owner's 10 s Claude call, 2026-09-30). */
+function answersThenHangs(responses: Anthropic.Message[]): AgentClient {
+  return {
+    messages: {
+      create: (body, options) => {
+        const next = responses.shift();
+        return next ? Promise.resolve(next) : hangingClient.messages.create(body, options);
+      },
+    },
+  };
+}
+
+test("owner 2026-09-30: a turn that runs out of time after its searches asks for more detail, not unrelated pans", async () => {
+  const griddle = product({ stock_id: "PA10313", name: "ELECTRIC GRIDDLE", third_category: "Griddles" });
+  const gnPan = product({ stock_id: "1165EBK", name: "MELAMINE GN PAN", third_category: "Gastronorm pans" });
+  const shop = fakeDeps([griddle, gnPan]);
+  // The real search ranks rows by any word: "prata pan maybe" found only melamine GN pans.
+  shop.searchDirect = async (query) => [griddle, gnPan].filter((item) => item.name.toLowerCase().split(" ").some((word) => query.toLowerCase().split(/\s+/).includes(word)));
+  const client = answersThenHangs([toolCall("t1", "search_catalogue", { queries: ["prata pan", "griddle"] })]);
+  // A reserve under STAND_IN_MS keeps no time for a rescue call: the cut goes straight to the backup reply.
+  const reply = await within(runAgentTurn({
+    request: request({ event: { type: "text", text: "prata pan maybe" } }), deps: shop, client, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500,
+  }), 2_500);
+  assert.equal(reply.provider, "fallback");
+  assert.deepEqual(reply.cards, []);
+  assert.match(reply.message, /^Sorry, I don't have a clear match/);
+  assert.doesNotMatch(reply.message, /trouble/);
+});
+
+test("an add that went through before the turn ran out of time is said in the backup reply", async () => {
+  const client = answersThenHangs([toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 })]);
+  const reply = await within(checkedTurn({
+    request: request({ event: { type: "text", text: "ok 2" }, history: [{ role: "user", content: "torch" }, saficoShown] }),
+    deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500,
+  }), 2_500);
+  assert.equal(reply.provider, "fallback");
+  assert.equal(reply.message, "Done: 2 PC CASSETTE GAS TORCH BURNER SAFICO PRO (BTS-8026D) is on your enquiry. Anything else?");
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]]);
+});
+
+test("an add that lands while the backup reply searches is neither shown nor said (r6 skeptic g)", async () => {
+  const shop = deps();
+  const search = shop.searchDirect;
+  let searching = () => {};
+  const searchStarted = new Promise<void>((resolve) => { searching = resolve; });
+  // The backup's own search of the customer's words: the add's pick check lands while it runs.
+  shop.searchDirect = async (query, limit) => {
+    searching();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return search(query, limit);
+  };
+  const late = fakePickCheck();
+  const client = answersThenHangs([toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 })]);
+  const reply = await within(runAgentTurn({
+    request: request({ event: { type: "text", text: "2 of the safico torch" }, history: [{ role: "user", content: "torch" }, saficoShown] }),
+    deps: shop, client, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500,
+    pickCheck: () => async (p) => { await searchStarted; return late(p); },
+  }), 2_500);
+  assert.equal(reply.provider, "fallback");
+  assert.equal(late.calls.length, 1);
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.doesNotMatch(reply.message, /^Done/);
+});
+
+test("a card tap that runs out of time asks for the tap again", async () => {
+  const reply = await within(runAgentTurn({
+    request: request({ event: { type: "select_product", stockId: "970S" } }), deps: deps(), client: hangingClient, model: "claude-sonnet-5", deadlineMs: 1_500, fallbackReserveMs: 500,
+  }), 2_500);
+  assert.equal(reply.provider, "fallback");
+  assert.match(reply.message, /^Sorry, I couldn't open that one just now\. Could you tap it again\?/);
+});
