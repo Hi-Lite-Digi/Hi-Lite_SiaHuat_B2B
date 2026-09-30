@@ -426,10 +426,17 @@ export async function runAgentTurn(input: {
     const listTurn = listItemCount(searchText ?? "") > LIST_ITEMS_PER_TURN;
     // Why the tool rounds stopped before time or the round cap did: the one place that turns tools off, with its note.
     let stopped: Stop | "list" | "thanks" | null = thanksTurn ? "thanks" : null;
+    // This turn's slowest Claude call and tool round so far.
+    let slowestCall = 0;
+    let slowestTools = 0;
+    // What a call that may use tools needs: itself and a tool round as slow as this turn's slowest, then an answer half as long again
+    // (answers ran 1.3-1.5 times a tool call's time in a local check). The owner's chat, 2026-09-30: a 10 s first call, then another
+    // round started with 12.6 s left and the answer was cut off. With calls and rounds up to about 3 s, lastCallMs decides.
+    const roundNeedMs = () => Math.max(lastCallMs, 2.5 * slowestCall + slowestTools);
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
       if (!stopped && listTurn && round > 0 && toolNames.length > 0) stopped = "list";
-      // The first call is never out of time; after a tool round, a nearly spent budget means answer now.
-      const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= lastCallMs);
+      // The first call is never out of time; after a tool round, answer now when another round won't fit.
+      const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= roundNeedMs());
       const forceAnswer = stopped !== null || outOfTime;
       const note = stopped === "which" ? WHICH_NOTE : stopped === "ask" ? ASK_NOTE : stopped === "answer" ? ANSWER_NOTE : stopped === "keep" ? KEEP_NOTE
         : stopped === "list" ? LIST_NOTE : outOfTime && round < MAX_TOOL_ROUNDS ? TIME_NOTE : null;
@@ -437,10 +444,14 @@ export async function runAgentTurn(input: {
       // After the tool results (or the nudge): every user message this loop sends has array content.
       if (note) (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: note });
       rounds += 1;
+      const callStarted = performance.now();
       const response = await callClaude(client, model, messages, forceAnswer ? "none" : "auto", forceAnswer ? answerBy : deadline);
+      slowestCall = Math.max(slowestCall, performance.now() - callStarted);
       if (response.stop_reason === "tool_use") {
         const before = { codes: new Set([...ctx.refused, ...ctx.kept].map((code) => code.toLowerCase())), keys: new Set(ctx.refusedKeys) };
+        const toolsStarted = performance.now();
         const { results, done } = await beforeDeadline(runToolBlocks(response.content, ctx, toolNames), deadline);
+        slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
         stopped = stopped ?? stopNote(done, ctx, before, picked);
@@ -451,8 +462,9 @@ export async function runAgentTurn(input: {
       // c08-persona T8; a refused removal or an item with no typed number is answered from the check's cache, r4 c02-A idx 16) or on
       // a thank-you or a paced list. A permission question is nudged only when it is the confirm step and the customer typed a number:
       // without one, update_enquiry can only refuse, and the tool-less repair keeps the rest of the answer. Safe only because
-      // update_enquiry checks the pick and the typed number.
-      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > CLAIM_NUDGE_MIN_MS && !ctx.refused.length && !ctx.finalRefusal;
+      // update_enquiry checks the pick and the typed number. A nudged round must fit at this turn's speed, or its call is forced to
+      // answer and the nudge can't be acted on; an un-nudged claim is fixed by the ENQUIRY_CLAIM fixer or the tool-less repair.
+      const toolsLeft = !nudged && !forceAnswer && round + 1 < MAX_TOOL_ROUNDS && timeLeft() > Math.max(CLAIM_NUDGE_MIN_MS, roundNeedMs()) && !ctx.refused.length && !ctx.finalRefusal;
       // A permission question about the one product the customer named but Claude never proposed: one check says whether they
       // picked it, i.e. whether this is the confirm step the owner ruled out (r4 c02-persona idx 8; about 1 in 700 round-4 turns).
       if (final && toolsLeft && typedAny) {

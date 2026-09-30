@@ -6,9 +6,9 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { AgentRequest } from "./contract";
+import { cardsNote, type AgentRequest } from "./contract";
 import { runAgentTurn, type AgentClient } from "./loop";
-import { fakeDeps, product } from "./testing";
+import { fakeDeps, fakePickCheck, product } from "./testing";
 
 const S = 40;
 const TIMES = { deadlineMs: 45 * S, fallbackReserveMs: 10 * S, standInMs: 4 * S, lastCallMs: 12 * S };
@@ -143,4 +143,70 @@ test("when the answer call hangs too, the backup reply still comes within the tu
   assert.ok(took <= 45.5, `took ${took.toFixed(1)} s`);
   assert.ok(bodies.length <= 2);
   assert.deepEqual(log.fallbacks().map((line) => line.reason), ["AGENT_DEADLINE"]);
+});
+
+test("the prata timeline: a 10 s and an 11 s call end in the answer, not the backup reply", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([
+    { ms: 9.7 * S, reply: toolUse(search("t1", "griddle")) },
+    { ms: 11.2 * S, reply: either(toolUse(search("t2", "crepe pan")), GOOD) },
+    { ms: 12 * S, reply: either(toolUse(search("t3", "pan")), GOOD) },
+  ]);
+  const started = performance.now();
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([1.5 * S, 1.5 * S]), client, model: "claude-sonnet-5", ...TIMES });
+  const took = (performance.now() - started) / S;
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["PA10313"]);
+  // At the second call 23.8 s are left, and another round at this turn's speed needs 2.5 x 9.7 + 1.5 = 25.75 s: it answers.
+  assert.deepEqual(bodies.map(toolChoice), ["auto", "none"]);
+  assert.ok(took < 42, `took ${took.toFixed(1)} s`);
+});
+
+test("after a 12.5 s first call and a tool round, the next call answers", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([
+    { ms: 12.5 * S, reply: toolUse(search("t1", "griddle")) },
+    { ms: 12.5 * S, reply: either(toolUse(search("t2", "crepe pan")), GOOD) },
+    { ms: 12.5 * S, reply: either(toolUse(search("t3", "pan")), GOOD) },
+  ]);
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([1.5 * S]), client, model: "claude-sonnet-5", ...TIMES });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  // 21 s are left, and another round and an answer at this turn's speed need 32.75 s.
+  assert.deepEqual(bodies.map(toolChoice), ["auto", "none"]);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /tool_result.*Time is nearly up/);
+  assert.deepEqual(log.turnLog().map((line) => line.forcedEarly), [true]);
+});
+
+test("at normal speeds the next call may still use tools, as before", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([
+    { ms: 3 * S, reply: toolUse(search("t1", "griddle")) },
+    { ms: 3 * S, reply: either(toolUse(search("t2", "crepe pan")), GOOD) },
+    { ms: 3 * S, reply: either(toolUse(search("t3", "pan")), GOOD) },
+    { ms: 3 * S, reply: GOOD },
+  ]);
+  // A 26.5 s work budget: the third call starts with about 16.5 s left, and 3 s calls and 2 s rounds need lastCallMs's 12 s.
+  const reply = await runAgentTurn({ request: prata(), deps: slowSearches([2 * S, 2 * S, 2 * S]), client, model: "claude-sonnet-5", ...TIMES, deadlineMs: 36.5 * S });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  assert.deepEqual(bodies.map(toolChoice), ["auto", "auto", "auto", "none"]);
+});
+
+// Real time scale (about 8 s): the nudge's 15 s minimum isn't an input, so a scaled test can't reach it.
+test("no claim nudge when a nudged round wouldn't fit at this turn's speed", async (t) => {
+  quiet(t);
+  const request: AgentRequest = {
+    sessionId: "session-nudge01", event: { type: "text", text: "ok 2 of the crepe pan" }, enquiry: [], shownProductIds: ["CREPE-24"],
+    history: [{ role: "user", content: "crepe pan got?" }, { role: "assistant", content: `Yes, the 24cm crepe pan.${cardsNote([crepe])}` }],
+  };
+  const { client, bodies } = timedClient([
+    { ms: 7_000, reply: answer({ message: "Got it: 2 CREPE PAN 24CM added. Anything else?", card_ids: ["CREPE-24"] }) },
+    { ms: 300, reply: answer({ message: "How many of the crepe pan do you need?" }) },
+  ]);
+  // 16 s of work time are left after the first call: more than the nudge's 15 s, less than the 17.5 s a nudged round needs at 7 s a call.
+  const reply = await runAgentTurn({ request, deps: slowSearches([]), client, model: "claude-sonnet-5", deadlineMs: 33_000, pickCheck: () => fakePickCheck() });
+  assert.equal(reply.provider, "anthropic");
+  assert.ok(bodies.every((body) => !JSON.stringify(body.messages.at(-1)).includes("Call update_enquiry")));
+  assert.equal(bodies.length, 2);
+  assert.equal(toolChoice(bodies[1]), "none"); // the repair
+  assert.doesNotMatch(reply.message, /added/i);
 });
