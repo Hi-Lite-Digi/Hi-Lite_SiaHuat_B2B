@@ -255,8 +255,9 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const excludedBrands = new Set((input.exclude_brands ?? []).map((brand) => brand.toLowerCase()));
   const merged: Product[] = [];
   const ids = new Set<string>();
+  const ruledOutItem = (item: Product) => excluded.has(item.stock_id.toLowerCase()) || excludedBrands.has((item.brand ?? "").toLowerCase());
   const add = (item: Product) => {
-    if (ids.has(item.stock_id) || excluded.has(item.stock_id.toLowerCase()) || excludedBrands.has((item.brand ?? "").toLowerCase())) return;
+    if (ids.has(item.stock_id) || ruledOutItem(item)) return;
     if (input.max_price && item.list_price > input.max_price) return;
     ids.add(item.stock_id);
     merged.push(item);
@@ -313,8 +314,8 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
   ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
   // Hits that only max_price removed are still matches, above the budget: "No catalogue matches" read as nothing cheaper (exam 4,
-  // c06-stress idx 2-3), so the note says so and categories come from them.
-  const overBudget = merged.length || !input.max_price ? [] : queryLists.flat().filter((item) => item.list_price > (input.max_price ?? Infinity));
+  // c06-stress idx 2-3), so the note says so and categories come from them. Ruled-out hits are no matches at any price.
+  const overBudget = merged.length || !input.max_price ? [] : queryLists.flat().filter((item) => !ruledOutItem(item) && item.list_price > (input.max_price ?? Infinity));
   const leafCounts = new Map<string, number>();
   for (const item of overBudget.length ? overBudget : merged) if (item.third_category) leafCounts.set(item.third_category, (leafCounts.get(item.third_category) ?? 0) + 1);
   const categories = [...leafCounts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name]) => name);

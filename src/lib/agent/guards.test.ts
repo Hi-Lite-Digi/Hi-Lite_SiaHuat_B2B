@@ -1213,6 +1213,10 @@ test("range wordings the round-4 guard missed need a backing search (exam 4)", (
     ["That's the one for home use we've got - the Kenwood Lite is actually quite versatile: 5 speeds plus pulse, and comes with both beaters and a dough kneader attachment, so it handles both baking (cakes, cream) and cooking tasks (batters, light dough).", "style CLAIM"],
     ["Two options: the Giesser (German brand, 28cm, ergonomic handle, bigger fish, GERMANY brand) at a higher price, or the all-stainless 21cm scaler which is more budget-friendly and in stock (21 units).", "style CLAIM"],
     ["We have two fish scalers: the Giesser 28cm and the 21cm one.", "style CLAIM"],
+    // s09-B idx 1 in the X11 live check: a bare count before a colon, a dash or the sentence end.
+    ["We have two: the Giesser 28cm (Germany, ergonomic plastic handle, larger fish) and a smaller stainless steel one, L21cm.", "style CLAIM"],
+    ["We have two - the 28cm and the 21cm.", "style CLAIM"],
+    ["For scalers we have two.", "style CLAIM"],
     ["No worries, here are cheaper hand-held ones in stock: Waring Quik Stik (18cm shaft, 175W) is the most budget option.", "style CLAIM"],
     ["Bamix (39.5cm, 200W) I showed earlier is next up in price.", "style CLAIM"],
   ]) {
@@ -1223,13 +1227,35 @@ test("range wordings the round-4 guard missed need a backing search (exam 4)", (
     "That's the one I'd recommend from what we have - German steel blade.",
     "We carry three main types: bar blenders, stick blenders and ice crushers.",
     "We have 2 units left.",
+    "We have 2 left.",
+    "We have two in stock.",
     "Of the Waring blenders I've shown, the MX1100 is the cheapest.",
+    // Next steps, offers and questions rank nothing.
     "Two options: I can check with sales on restock, or show you the 28cm instead.",
+    "There are two options: I can check with sales on restock, or show you the 28cm instead.",
+    "We have two options: you can wait for restock or take the 28cm.",
+    "We have two: I can add either one.",
+    "Want me to look for the cheapest one?",
+    "Would you like me to search for the most affordable option?",
+    "I can check which is the cheapest if you like.",
+    "Here's the one I have in mind: the Giesser 28cm.",
+    "There are two differences: the MX1000 has a 64oz jar and the MX1200 has a timer.",
     "There are 3 things to check before you order.",
     "Between these two, the Zyliss is the cheapest.",
+    // Nothing more to say is not a product we lack.
+    "We don't have anything else to add.",
+    "I don't have anything more on its warranty, Sia Huat sales can confirm.",
   ]) {
     assert.deepEqual(rangeIssues(message), [], message);
   }
+  // An offer only excuses the ranking inside it, and a question the whole sentence.
+  assert.deepEqual(rangeIssues("The Mika is the cheapest; I can check stock for you."), ["style CLAIM"]);
+  assert.deepEqual(rangeIssues("We don't have anything else in 28cm."), ["style ABSENCE"]);
+});
+
+test("'between these' excuses a ranking of the cards shown, not a claim about the whole range", () => {
+  assert.deepEqual(rangeIssues("Between these, that's our full range of tongs."), ["safety CLAIM"]);
+  assert.deepEqual(rangeIssues("Among these, the Zyliss is the cheapest."), []);
 });
 
 test("a ranking of the range is a style issue that is never removed, so a failed repair can't turn it into a stand-in", () => {
@@ -1255,6 +1281,11 @@ test("a 'we don't have it' that a product seen this turn disproves names that pr
   assert.match(disproved("I haven't found an actual Japan-made knife brand in our catalogue.", global).join(" "), /GF-34 \(CHEF'S KNIFE\) came up/);
   assert.equal(issueCode(disproved("I haven't found an actual Japan-made knife brand in our catalogue.", global)[0]), "ABSENCE");
   assert.equal(removeClaims("I haven't found an actual Japan-made knife brand in our catalogue.", [], global), "I haven't found an actual Japan-made knife brand in our catalogue.");
+  const chef = originSeen([{ stock_id: "GC-1", name: "CHEF KNIFE 20CM", available_quantity: 3 }, "JAPAN"]);
+  assert.equal(disproved("I couldn't find a Japanese chef knife in our range.", chef).length, 1);
+  assert.equal(disproved("I don't have a Japan-made chef knife available right now.", chef).length, 1);
+  // A backed ranking in the same sentence doesn't excuse it.
+  assert.equal(disproved("The cheapest one is the Atlantic Chef, as we don't carry Japanese chef knives.", chef).length, 1);
 });
 
 test("a product that doesn't fit the clause never disproves it", () => {
@@ -1264,6 +1295,19 @@ test("a product that doesn't fit the clause never disproves it", () => {
   // r3 c03-persona idx 8: a brand's origin is not where it was made.
   const cheese = originSeen([{ stock_id: "GS-10", name: "Global Cheese Knife 14cm" }, "JAPAN"]);
   assert.deepEqual(disproved("I couldn't find a chef knife confirmed as made in Japan in the searches I ran.", cheese), []);
+  // The same two skips where only they decide: a Japan chef knife out of stock, and one whose origin is only its brand's.
+  const chefOut = originSeen([{ stock_id: "GC-1", name: "CHEF KNIFE 20CM", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }, "JAPAN"]);
+  assert.deepEqual(disproved("I don't have a Japan-made chef knife available right now.", chefOut), []);
+  const chefIn = originSeen([{ stock_id: "GC-1", name: "CHEF KNIFE 20CM", available_quantity: 3 }, "JAPAN"]);
+  assert.deepEqual(disproved("I couldn't find a Japanese chef knife confirmed as made in Japan.", chefIn), []);
+  // The sentence already names it, or it is the item find_alternatives looked around (a substitute for a quoted item is not the item).
+  const riceIn = originSeen([{ stock_id: "EK9108S", name: "STAINLESS STEEL FOOD GRADE RICE DISPENSER", available_quantity: 2 }, null]);
+  assert.deepEqual(disproved("I couldn't find a 'rice dispenser' other than the EK9108S stainless steel rice dispenser.", riceIn), []);
+  assert.deepEqual(disproved("No close substitute for the 'rice dispenser' right now.", riceIn), []);
+  const lookedAround = reviewAnswer({ message: "No close in-stock substitute for the Japanese chef knife.", card_ids: [], chips: [], show_contact: false }, chefIn, allowed, undefined, {
+    searches: [...backing, search({ queries: [], alternativesFor: "GC-1" })],
+  }).style.filter((issue) => issue.includes("came up in this turn's results"));
+  assert.deepEqual(lookedAround, []);
   // A one-word quote, another product sharing one word, and a quoted name of another country's brand.
   const stool = originSeen([{ stock_id: "FSS-2", name: "FOLDING STEP STOOL 2-STEP GREY" }, null]);
   assert.deepEqual(disproved("I couldn't find a 3-step stool in 'grey'.", stool), []);
@@ -1280,6 +1324,8 @@ test("find_alternatives backs 'no substitute' (exam 4, s03-B idx 1: repaired aft
   assert.deepEqual(absenceOf("Mastrad torch is out of stock, no direct substitute for it.", [search({ queries: [], alternativesFor: "F46700" })]), []);
   // It backs only the substitute: "we don't carry" still needs its searches.
   assert.equal(absenceOf("We don't carry Japanese torches, and I couldn't find a close substitute.", [search({ queries: [], alternativesFor: "F46700" })]).length, 1);
+  // Every substitute wording in the sentence is backed, not only the first.
+  assert.deepEqual(absenceOf("No close substitute, and I couldn't find a replacement either.", [search({ queries: [], alternativesFor: "F46700" })]), []);
 });
 
 test("the absence repair asks Claude to check this turn's results first and not to describe its searches", () => {
@@ -1320,15 +1366,43 @@ test("stock counts are judged one by one, and never an approximate count or one 
   const spoons = new Map<string, CheckedProduct>([["SP-12", { product: product({ stock_id: "SP-12", name: "Wave Dinner Spoon", uom_id: "DOZ", available_quantity: 3 }), verified: true }]]);
   assert.deepEqual(wrongStockCounts("The Wave dinner spoon has 36 pcs available.", [spoons.get("SP-12")!.product], spoons), []);
   assert.deepEqual(wrongStockCounts("The Wave dinner spoon (over 30 available) is a good match.", [spoons.get("SP-12")!.product], spoons), []);
-  // A code's digits are not a count.
+  // A code's digits are not a count, nor is "left-handed".
   assert.deepEqual(wrongStockCounts("There are 9 HET-6 units in stock currently.", cards, toasters), []);
+  assert.deepEqual(wrongStockCounts("The 6-slot toaster has 2 left-handed dials.", cards, toasters), []);
+});
+
+test("a count with a thousands comma is read whole (4-digit live stock, SB3038 has 2702)", () => {
+  const scissors = new Map<string, CheckedProduct>([
+    ["SB3038", { product: product({ stock_id: "SB3038", name: "Shibazi Household Scissors L21cm", available_quantity: 2702 }), verified: true }],
+    ["KS-1", { product: product({ stock_id: "KS-1", name: "Kitchen Shears", available_quantity: 1500 }), verified: true }],
+  ]);
+  const card = [scissors.get("SB3038")!.product];
+  for (const message of ["For basic use, the SB3038 Shibazi scissors (2,702 in stock) are the pick.", "The Shibazi Household Scissors have 2,702 available."]) {
+    assert.deepEqual(stockNumberIssues(message, ["SB3038"], scissors), [], message);
+    assert.equal(withoutWrongStockCounts(message, card, scissors), message);
+  }
+  const wrong = "The SB3038 Shibazi scissors (1,500 in stock, plenty for 4) are basic.";
+  assert.deepEqual(wrongStockCounts(wrong, card, scissors).map(({ said, live }) => [said, live]), [["1,500 in stock", 2702]]);
+  assert.match(stockNumberIssues(wrong, ["SB3038"], scissors)[0], /"1,500 in stock" for SB3038 \(live 2702\); 1500 matches KS-1 Kitchen Shears/);
+  assert.equal(withoutWrongStockCounts(wrong, card, scissors), "The SB3038 Shibazi scissors are basic.");
 });
 
 test("a wrong count left after the repair is dropped from its bracket, else said as in stock or out of stock, never another number", () => {
   const card = [wokSeen.get("13103-1601")!.product];
   assert.equal(withoutWrongStockCounts("The 16in Iron Wok (35 available) suits zichar.", card, wokSeen), "The 16in Iron Wok suits zichar.");
-  assert.equal(withoutWrongStockCounts("The 16in Iron Wok (only 35 left, plenty for 4) suits zichar.", card, wokSeen), "The 16in Iron Wok (plenty for 4) suits zichar.");
+  // A coverage claim made from the count goes with it: 2 left is not plenty for 4.
+  assert.equal(withoutWrongStockCounts("The 16in Iron Wok (only 35 left, plenty for 4) suits zichar.", card, wokSeen), "The 16in Iron Wok suits zichar.");
+  assert.equal(withoutWrongStockCounts("The 16in Iron Wok (carbon iron, 35 in stock — matches your qty) is good.", card, wokSeen), "The 16in Iron Wok (carbon iron) is good.");
   assert.equal(withoutWrongStockCounts("The 16in Iron Wok has 35 in stock.", card, wokSeen), "The 16in Iron Wok is in stock.");
+  // Real phrasings from rounds 2-4 (r2 c03-A idx 9, s06-B idx 0) and the ways to say "we have N".
+  for (const [message, fixed] of [
+    ["The 16in Iron Wok has exactly 35 pcs left, enough for your 4.", "The 16in Iron Wok is in stock."],
+    ["The 16in Iron Wok is in stock with 35 pcs available.", "The 16in Iron Wok is in stock."],
+    ["The 16in Iron Wok: we have 35 in stock.", "The 16in Iron Wok: it's in stock."],
+    ["The 16in Iron Wok: there are 35 left.", "The 16in Iron Wok: it's in stock."],
+  ]) {
+    assert.equal(withoutWrongStockCounts(message, card, wokSeen), fixed, message);
+  }
   const soldOut = new Map<string, CheckedProduct>([["13103-1601", { product: product({ stock_id: "13103-1601", name: "Iron Wok 16\"", stock_status: "out_of_stock", in_stock: false, available_quantity: 0 }), verified: true }]]);
   assert.equal(withoutWrongStockCounts("16in Iron Wok: 35 available.", [soldOut.get("13103-1601")!.product], soldOut), "16in Iron Wok: out of stock.");
 });

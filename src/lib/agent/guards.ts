@@ -534,8 +534,9 @@ const ENQUIRY_TALK = /\b(?:enquiry|added|removed|updated|your\s+(?:list|order|ca
 // The list rule's pointer to sales ("send the whole list to Sia Huat sales for a formal quote", exam 3, s01-A/B T0) is about the
 // customer's list, not the range.
 const LIST_TO_SALES = /\b(?:send|forward|email|share)\b[^.!?]{0,30}\blist\b|\bquot(?:e|ation)\b[^.!?]{0,30}\blist\b|\blist\b[^.!?]{0,30}\b(?:to\s+(?:sia\s+huat\s+)?sales|quot(?:e|ation))\b/i;
-// "Between these two, the Zyliss is the cheapest" compares the cards shown.
-const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b|\b(?:between|among|of)\s+(?:these|those|the\s+(?:two|three|cards?|ones?\s+(?:above|shown)))\b/i;
+const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
+// "Between these two, the Zyliss is the cheapest" ranks the cards shown; "Between these, that's our full range" still claims the range.
+const AMONG_SHOWN = /\b(?:between|among|of)\s+(?:these|those|the\s+(?:two|three|cards?|ones?\s+(?:above|shown)))\b/i;
 // "Nothing else to add?", "No other questions", "Everything else looks fine" and "The only option now is to ask sales" aren't about the range,
 // nor are a product's parts and materials ("everything else is stainless steel", "no other assembly", "needs no other attachments") or charges.
 const MATERIAL = String.raw`(?:stainless|plastic|glass|porcelain|ceramic|alumin(?:i)?um|metal|wood(?:en)?|silicone|pom|pp|nylon|melamine|copper|brass|iron)`;
@@ -560,26 +561,37 @@ const RANGE_SUMMARY = new RegExp([
 // itself asks for. Not "I got": in Singapore English it means "we have".
 const SCOPED = /\b(?:I|we)\s+(?:found|could\s+find|can\s+find|saw|see)\b|\bturned\s+up\b|\bso\s+far\b|\bof\s+the\s+ones\s+I\b|\b(?:in|among)\s+(?:these|the\s+results|my\s+search(?:es)?)\b|\bI(?:['’]ve|\s+have)\s+(?:shown|listed)\b/i;
 const rangeSummary = (sentence: string) => RANGE_SUMMARY.test(sentence) && !SCOPED.test(sentence);
+// "Two options: I can check with sales on restock, or ..." offers next steps.
+const NEXT_STEP = String.raw`(?![^:.!?]{0,15}:\s*(?:I\s+can|you\s+can|add|wait|check|ask)\b)`;
+const COUNTED = String.raw`\b(?:we\s+(?:have|carry|stock|sell)|there\s+are|we['’]ve\s+got)\s+(?:only\s+|just\s+)?(?:two|three|four|[2-4])`;
 // Rankings and counts of the range: "That's the one for home use we've got" (exam 4, c04-persona idx 3), "Two options: ..." and "we
 // have two fish scalers" (s09-B idx 1), "the most budget option ... next up in price" (c07-stress idx 4). Often the answer to "got
 // cheaper?", so they are reworded, never removed.
 const RANKING = new RegExp([
-  String.raw`\bthe\s+(?:only\s+)?one\b[^.!?,]{0,30}?(?<!\bfrom\s+what\s+)\b(?:we|I)(?:['’]ve\s+got|\s+(?:have|carry|stock))\b`,
-  // "Two options: I can check with sales on restock, or ..." offers next steps.
-  String.raw`^(?:(?:only|just)\s+)?(?:two|three|four|[2-4])\s+(?:options?|choices|models|versions)\b(?![^:.!?]{0,15}:\s*(?:I\s+can|you\s+can|add|wait|check|ask)\b)`,
-  String.raw`\b(?:we\s+(?:have|carry|stock|sell)|there\s+are|we['’]ve\s+got)\s+(?:only\s+|just\s+)?(?:two|three|four|[2-4])\s+(?!(?:[\w-]+\s+)?(?:types|kinds|categories|lines|styles|ways|things|steps|questions|reasons|items|units)\b|(?:units?|pcs?|pieces|sets?|pkts?|cartons?|left|in\s+stock|available|more)\b)(?:[\w-]+\s+){0,2}?[a-z-]+s\b(?!\s+(?:left|available|in\s+stock|on\s+(?:hand|your)))`,
-  String.raw`\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b|\bnext\s+up\s+in\s+price\b`,
+  // "the one I have in mind" is no ranking.
+  String.raw`\bthe\s+(?:only\s+)?one\b[^.!?,]{0,30}?(?<!\bfrom\s+what\s+)\b(?:we|I)(?:['’]ve\s+got|\s+(?:have|carry|stock))\b(?!\s+in\s+mind)`,
+  String.raw`^(?:(?:only|just)\s+)?(?:two|three|four|[2-4])\s+(?:options?|choices|models|versions)\b${NEXT_STEP}`,
+  String.raw`${COUNTED}\s+(?!(?:[\w-]+\s+)?(?:types|kinds|categories|lines|styles|ways|things|steps|questions|reasons|items|units|differences)\b|(?:units?|pcs?|pieces|sets?|pkts?|cartons?|left|in\s+stock|available|more)\b)(?:[\w-]+\s+){0,2}?[a-z-]+s\b(?!\s+(?:left|available|in\s+stock|on\s+(?:hand|your)))${NEXT_STEP}`,
+  // A bare count: "We have two: the Giesser 28cm ... and a smaller ... one" (X11 live check, s09-B idx 1); not "We have 2 left".
+  String.raw`${COUNTED}(?=\s*(?::|[-–—]\s|[.!?]?$))${NEXT_STEP}`,
 ].join("|"), "i");
+const PRICE_RANK = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b|\bnext\s+up\s+in\s+price\b/i;
+// An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest") or a question ("Looking for the
+// cheapest?") ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check stock" still ranks.
+const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?/gi;
+const ranking = (sentence: string) => RANKING.test(sentence) || PRICE_RANK.test(sentence.replace(OFFER, " "));
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
-// "I don't have a spec on that" or "couldn't find the photo" is not about a product.
-const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price))`;
+// "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product.
+const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price|issue|problem))`;
 // "I haven't found an actual Japan-made knife brand" and "I don't have anything actually made in Japan" (exam 4, c03-A idx 6,
-// c03-persona idx 4); "I haven't found a boxed set yet" says its own scope.
-const ABSENT = new RegExp(String.raw`\b(?:we|i|sia\s+huat)\s+(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not)\s+(?:carry|stock|sell)\b|\b(?:we|i)\s+(?:don['’]?t|do\s+not)\s+have\s+(?:a|an|any|anything|another|other|bundled|boxed|pre[- ]?\w+|such)\b${NOT_A_PRODUCT}|\bnot\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b${NOT_A_PRODUCT}|\b(?:i['’]?m|am)\s+not\s+finding\b|\b(?:I|we)\s+(?:haven['’]?t|have\s+not)\s+(?:yet\s+)?(?:found|seen|come\s+across)\b(?![^.!?]*\b(?:yet|so\s+far))${NOT_A_PRODUCT}|\bnone\s+of\s+our\b`, "i");
+// c03-persona idx 4); "I haven't found a boxed set yet" says its own scope, and "I don't have anything else to add" or "anything more
+// on its warranty" is no product.
+const ABSENT = new RegExp(String.raw`\b(?:we|i|sia\s+huat)\s+(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not)\s+(?:carry|stock|sell)\b|\b(?:we|i)\s+(?:don['’]?t|do\s+not)\s+have\s+(?:a|an|any|anything(?!\s+(?:else|more)\s+(?:to\s+add|on)\b)|another|other|bundled|boxed|pre[- ]?\w+|such)\b${NOT_A_PRODUCT}|\bnot\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b${NOT_A_PRODUCT}|\b(?:i['’]?m|am)\s+not\s+finding\b|\b(?:I|we)\s+(?:haven['’]?t|have\s+not)\s+(?:yet\s+)?(?:found|seen|come\s+across)\b(?![^.!?]*\b(?:yet|so\s+far))${NOT_A_PRODUCT}|\bnone\s+of\s+our\b`, "i");
 // "No close substitute", "couldn't find a close in-stock substitute": a finished find_alternatives backs these (exam 4, s03-B idx 1: 3
 // of 4 reruns were repaired at 18.6-27.1 s after it had run).
 const SUBSTITUTE_ABSENT = /\bno\s+(?:direct\s+|close\s+|similar\s+)?(?:substitute|alternative|replacement)s?\b(?!\s+needed)|\bcan['’]?t\s+offer\s+(?:a|an|any)\s+(?:substitute|alternative)|\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\s+(?:(?:a|an|any)\s+)?(?:[\w-]+\s+){0,3}?(?:substitute|alternative|replacement)s?\b/i;
+const EVERY_SUBSTITUTE_ABSENT = new RegExp(SUBSTITUTE_ABSENT.source, "gi");
 // "Under", "below" and "within" only count before a price or a budget: "none turned up under that name" is not about price
 // (runs-new2 c01-B T9), and a bare number after "within" isn't a price ("within 3 days").
 const BUDGET_WORD = String.raw`(?:(?:your|that|the)\s+(?:S?\$\s?[\d,.]+\s+)?(?:budget|price|amount)\b|budget\b)`;
@@ -625,9 +637,11 @@ const soldOutProduct = ({ product }: CheckedProduct) => product.stock_status ===
  * 4, s03-B idx 1: "couldn't find a 'rice dispenser'" beside EK9108S), or the product's brand is from the country the clause names and
  * its name has every word of the item named after the country (c03-A idx 6: "no Japan-made knife brand" beside Global GF-34, JAPAN;
  * not a Japan rice bowl for "Japanese rice cookers"). Never a clause about where things are made or what is confirmed (brand origin
- * is not manufacture), an out-of-stock product when the clause says in stock or available, or a product from another named country.
+ * is not manufacture), an out-of-stock product when the clause says in stock or available, or a product from another named country;
+ * nor a product the sentence already names by code or the one find_alternatives looked around (sources). A quoted item counts
+ * only in a "we don't have it" (quotes): after "no close substitute for" it is the item replaced.
  */
-function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>) {
+function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>, quotes: boolean, sources: string[]) {
   const at = [ABSENT, SUBSTITUTE_ABSENT].map((pattern) => sentence.search(pattern)).find((index) => index >= 0) ?? 0;
   // Only the clause that says we don't have it: "... in Japan - we do have the Atlantic Chef" names what we do have after the dash.
   const clause = sentence.slice(at).split(/\s[-–—]\s|[;,]|\bbut\b/i)[0];
@@ -638,9 +652,11 @@ function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>
   const end = words.findIndex((word, index) => index > countryAt && ITEM_END.has(word));
   const item = countryAt < 0 ? [] : words.slice(countryAt + 1, end < 0 ? undefined : end).filter((word) => /^\p{L}{3,}$/u.test(word) && !NOT_ITEM.has(word)).map(singular);
   // A quote opens after a space or bracket, so the apostrophe of "couldn't" never starts one.
-  const quoted = [...clause.matchAll(/(?<![\p{L}\p{N}])['‘“"]([^'’”"]{3,40})['’”"](?![\p{L}\p{N}])/gu)].map((match) => nameWords(match[1])).filter((quote) => quote.length >= 2);
+  const quoted = !quotes ? [] : [...clause.matchAll(/(?<![\p{L}\p{N}])['‘“"]([^'’”"]{3,40})['’”"](?![\p{L}\p{N}])/gu)].map((match) => nameWords(match[1])).filter((quote) => quote.length >= 2);
   const inStockAsked = /\bin[- ]stock\b|\bavailable\b/i.test(clause);
   return [...seen.values()].filter((checked) => {
+    const code = checked.product.stock_id;
+    if (codePattern(code).test(sentence) || sources.some((source) => same(source, code))) return false;
     const origin = originOf(checked.details);
     if ((inStockAsked && soldOutProduct(checked)) || (countries.size && origin && !countries.has(origin))) return false;
     const name = new Set(nameWords(checked.product.name));
@@ -660,7 +676,8 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
   const budgetBacked = searches.some((search) => search.maxPrice !== null && search.complete);
   const queries = new Set(searches.flatMap((search) => search.queries.map((query) => query.trim().toLowerCase())));
   const absenceBacked = queries.size >= 2 && searches.some((search) => search.categoryFound);
-  const substituteBacked = absenceBacked || searches.some((search) => search.alternativesFor);
+  const sources = searches.flatMap((search) => (search.alternativesFor ? [search.alternativesFor] : []));
+  const substituteBacked = absenceBacked || sources.length > 0;
   const cards = seenCards(seen);
   const soldOut = (card: ShownCard) => {
     const item = seen.get(card.code);
@@ -687,13 +704,14 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     const talk = ENQUIRY_TALK.test(sentence);
     const aboutRange = !talk && !LIST_TO_SALES.test(sentence) && !RELATIVE.test(sentence) && !OPEN_ENDED.test(sentence);
     // Judged without its substitute wording, which find_alternatives backs: "we don't carry X" beside it still needs the searches.
-    const absent = ABSENT.test(sentence.replace(SUBSTITUTE_ABSENT, " "));
+    const absent = ABSENT.test(sentence.replace(EVERY_SUBSTITUTE_ABSENT, " "));
     const absence = (absent || SUBSTITUTE_ABSENT.test(sentence)) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence);
-    const found = absence ? disprovedBy(sentence, seen) : [];
-    // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it".
+    const found = absence ? disprovedBy(sentence, seen, absent, sources) : [];
+    // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it". A backed
+    // ranking backs no absence, so "the cheapest ..., as we don't carry Japanese knives" is still judged as one.
     const range = BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
       : (COMPLETE.test(sentence) || rangeSummary(sentence)) && aboutRange ? (complete ? null : "complete" as const)
-      : RANKING.test(sentence) && !SCOPED.test(sentence) && aboutRange ? (complete ? null : "ranking" as const)
+      : !complete && ranking(sentence) && !SCOPED.test(sentence) && !AMONG_SHOWN.test(sentence) && aboutRange ? "ranking" as const
       : absence ? (found.length ? "disproved" as const : (absent ? absenceBacked : substituteBacked) ? null : "absence" as const)
       : null;
     // An unbacked stock claim is removed if it survives the repair, so it outranks the kinds that are only reworded.
@@ -711,16 +729,17 @@ export function removeClaims(message: string, searches: SearchRecord[], seen: Re
 }
 
 export const STOCK_NUMBER_PREFIX = "These stock numbers";
-// "35 available", "only 2 left", "(12 in stock)", "131 units in stock"; never a code's digits ("HET-6 units in stock") or a price.
-const STOCK_COUNT = /(?:\b(?:only|just)\s+)?(?<![\p{L}\p{N}.$-])(\d{1,5})\s*(?:(pcs?|pieces?|units?|sets?|pkts?|packets?)\s+)?(?:available|left|in\s+stock)(?:\s+in\s+stock)?\b/giu;
+// "35 available", "only 2 left", "(12 in stock)", "131 units in stock", "(2,702 in stock)" read whole; never a code's digits ("HET-6
+// units in stock"), a price or "2 left-handed".
+const STOCK_COUNT = /(?:\b(?:only|just)\s+)?(?<![\p{L}\p{N}.,$-])(\d{1,3}(?:,\d{3})+|\d{1,5})\s*(?:(pcs?|pieces?|units?|sets?|pkts?|packets?)\s+)?(?:available|left|in\s+stock)(?:\s+in\s+stock)?(?![\w-])/giu;
 // "over 30 available" is no count to check.
 const APPROX_BEFORE = /\b(?:over|more\s+than|at\s+least|about|around|up\s+to|under|nearly|almost)\b[^.!?\n]{0,15}$/i;
 // A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item (P4 regression probe).
 const UNIT_UOMS: Array<[RegExp, string[]]> = [[/^(?:pcs?|pieces?|units?)$/i, ["PC", "UNIT"]], [/^sets?$/i, ["SET"]], [/^(?:pkts?|packets?)$/i, ["PKT"]]];
 const unitFits = (unit: string, uom: string) => UNIT_UOMS.some(([words, uoms]) => words.test(unit) && uoms.includes(uom.trim().toUpperCase()));
 // A message's parts: sentence ends, line breaks, and commas, semicolons, dashes, "and" and "or" outside brackets, so "16in Iron Wok
-// (35 available)" keeps its bracket with its product.
-const PART_BREAK = /[.!?](?=\s)|\n|[,;](?![^()]*\))|\s[-–—]\s|\b(?:or|and)\b(?![^()]*\))/gi;
+// (35 available)" keeps its bracket with its product. A comma between digits (2,702) is no break.
+const PART_BREAK = /[.!?](?=\s)|\n|(?:;|(?<!\d),|,(?!\d))(?![^()]*\))|\s[-–—]\s|\b(?:or|and)\b(?![^()]*\))/gi;
 function partAt(message: string, index: number) {
   let start = 0;
   for (const found of message.matchAll(PART_BREAK)) {
@@ -741,18 +760,36 @@ export function wrongStockCounts(message: string, cards: readonly Product[], see
     if (APPROX_BEFORE.test(message.slice(Math.max(0, match.index - 40), match.index))) return [];
     const pointed = pointedBy(partAt(message, match.index), all);
     const item = pointed.length === 1 ? seen.get(pointed[0].code) : undefined;
-    const count = Number(match[1]);
+    const count = Number(match[1].replace(/,/g, ""));
     const live = item?.product.available_quantity;
     if (!item?.verified || live === null || live === undefined || live === count || !cards.some((card) => same(card.stock_id, item.product.stock_id))) return [];
     if (match[2] && !unitFits(match[2], item.product.uom_id)) return [];
     const alsoMatches = [...seen.values()].flatMap(({ product, verified }) => (verified && product.available_quantity === count && product !== item.product ? [product] : []));
-    return [{ said: match[0], index: match.index, code: item.product.stock_id, live, alsoMatches }];
+    return [{ said: match[0], index: match.index, count, code: item.product.stock_id, live, alsoMatches }];
   });
 }
 
+// A claim that the count covers the order goes with a wrong count: "plenty for 4", "so tight for 4pcs", "matches your qty".
+const COVERAGE = String.raw`(?:(?:so\s+|which\s+is\s+|that['’]?s\s+)?(?:(?:more\s+than\s+)?enough|plenty|tight|short)\s+for|(?:which\s+|that\s+)?(?:matches|covers?)\s+your|covered)\b`;
+const COVERAGE_PIECE = new RegExp(`^${COVERAGE}`, "i");
+const COVERAGE_AFTER = new RegExp(String.raw`^(?:\s*[,;]|\s+[-–—])?\s*${COVERAGE}[^,;.!?()\n]*`, "i");
+// A bracket's pieces and the separators between them (a comma between digits is none); pieces kept are joined by the last mark.
+const PIECE_BREAK = /((?:\s*(?:;|(?<!\d),|,(?!\d))|\s+[-–—](?=\s))+\s*)/;
+const joint = (separator: string) => {
+  const mark = separator.trim().slice(-1);
+  return /[,;]/.test(mark) ? `${mark} ` : ` ${mark} `;
+};
+// What comes before an unbracketed count: "in stock with 642 pcs available" drops it, "we have 35 in stock" and "there are 35 left"
+// read "it's in stock", "has exactly 3 pcs left" reads "is in stock" (rounds 2-4 phrasings).
+const QUALIFIER = String.raw`(?:(?:only|exactly|just)\s+)?`;
+const WITH_BEFORE = new RegExp(String.raw`\s*\bwith\s+${QUALIFIER}$`, "i");
+const WE_HAVE_BEFORE = new RegExp(String.raw`\b(?:we\s+(?:have|got)|we['’]ve\s+got|there\s+(?:are|is)|there['’]s)\s+${QUALIFIER}$`, "i");
+const HAS_BEFORE = new RegExp(String.raw`\b(?:only\s+)?(has|have)\s+${QUALIFIER}$`, "i");
+
 /**
  * The message a wrong count that survived the repair can go out in: dropped from its bracket, else said as "in stock" or "out of
- * stock" from the live check. Never another number: the wrong figure may belong to another product.
+ * stock" from the live check, with any coverage claim made from it. Never another number: the wrong figure may belong to another
+ * product.
  */
 export function withoutWrongStockCounts(message: string, cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>) {
   // Last first, so each index still points at its own count.
@@ -762,18 +799,27 @@ export function withoutWrongStockCounts(message: string, cards: readonly Product
     if (/\([^()]*$/.test(before) && /^[^()]*\)/.test(after)) {
       const open = before.lastIndexOf("(");
       const close = index + said.length + after.indexOf(")");
-      const inside = `${text.slice(open + 1, index)}${text.slice(index + said.length, close)}`.replace(/^[\s,;]+|[\s,;]+$/g, "").replace(/\s*[,;]\s*(?=[,;])/g, "");
+      const pieces = `${text.slice(open + 1, index)}${text.slice(index + said.length, close)}`.split(PIECE_BREAK);
+      let inside = "";
+      for (let at = 0; at < pieces.length; at += 2) {
+        const piece = pieces[at].trim();
+        if (piece && !COVERAGE_PIECE.test(piece)) inside += inside ? `${joint(pieces[at - 1])}${piece}` : piece;
+      }
       return inside ? `${text.slice(0, open + 1)}${inside}${text.slice(close)}` : `${text.slice(0, open).replace(/\s+$/, "")}${text.slice(close + 1)}`;
     }
+    const rest = after.slice(COVERAGE_AFTER.exec(after)?.[0].length ?? 0);
     const status = soldOutProduct(seen.get(code)!) ? "out of stock" : "in stock";
-    const opening = /^[A-Z]/.test(said) ? `${status[0].toUpperCase()}${status.slice(1)}` : status;
-    // "has 35 in stock" reads "is in stock".
-    const verb = /\b(?:only\s+)?(has|have)\s+$/i.exec(before);
-    return verb ? `${before.slice(0, verb.index)}${verb[1].toLowerCase() === "has" ? "is" : "are"} ${status}${after}` : `${before}${opening}${after}`;
+    const withCount = WITH_BEFORE.exec(before);
+    if (withCount) return `${before.slice(0, withCount.index)}${rest}`;
+    const weHave = WE_HAVE_BEFORE.exec(before);
+    if (weHave) return `${before.slice(0, weHave.index)}${/^[A-Z]/.test(weHave[0]) ? "It's" : "it's"} ${status}${rest}`;
+    const verb = HAS_BEFORE.exec(before);
+    if (verb) return `${before.slice(0, verb.index)}${verb[1].toLowerCase() === "has" ? "is" : "are"} ${status}${rest}`;
+    return `${before}${/^[A-Z]/.test(said) ? `${status[0].toUpperCase()}${status.slice(1)}` : status}${rest}`;
   }, message);
 }
-const stockNumberIssue = (wrong: ReturnType<typeof wrongStockCounts>) => `${STOCK_NUMBER_PREFIX} don't match the live stock: ${wrong.map(({ said, code, live, alsoMatches }) => `"${said}" for ${code} (live ${live})${alsoMatches.length
-  ? `; ${said.match(/\d+/)![0]} matches ${alsoMatches.slice(0, 2).map((item) => `${item.stock_id} ${item.name.replace(/"/g, "″")}`).join(", ")}: if you meant that product, attach its card instead` : ""}`).join("; ")}. Give each product's available_quantity, or leave the number out; never say stock changed.`;
+const stockNumberIssue = (wrong: ReturnType<typeof wrongStockCounts>) => `${STOCK_NUMBER_PREFIX} don't match the live stock: ${wrong.map(({ said, count, code, live, alsoMatches }) => `"${said}" for ${code} (live ${live})${alsoMatches.length
+  ? `; ${count} matches ${alsoMatches.slice(0, 2).map((item) => `${item.stock_id} ${item.name.replace(/"/g, "″")}`).join(", ")}: if you meant that product, attach its card instead` : ""}`).join("; ")}. Give each product's available_quantity, or leave the number out; never say stock changed.`;
 
 const ALL_IN_STOCK_ISSUE_PREFIX = "You wrote that the cards are all in stock";
 // "All confirmed in stock", "both available", "3 porcelain options in stock"; not "Both are 0 in stock" or "not available".

@@ -421,6 +421,16 @@ test("when max_price leaves nothing, the note says the matches are all above it 
   // No hits at all is still "no matches".
   const none = await searchBody({ queries: ["gelato cabinet"], max_price: 2 }, fakeDeps(skimmers)) as SearchBody & { note?: string };
   assert.equal(none.note, "No catalogue matches for these words. Try other words the customer might mean, or ask one question.");
+  // Hits a ruled-out brand or code removed are not "above it": the Waring within budget was left out by exclude_brands.
+  const waring = [
+    product({ stock_id: "W1", name: "WARING STICK BLENDER 175W", brand: "Waring", list_price: 150, third_category: "Stick blenders" }),
+    product({ stock_id: "W2", name: "WARING STICK BLENDER 200W", brand: "Waring", list_price: 30, third_category: "Stick blenders" }),
+  ];
+  for (const input of [{ exclude_brands: ["Waring"] }, { exclude_ids: ["W1", "W2"] }]) {
+    const ruledOut = await searchBody({ queries: ["stick blender"], max_price: 100, ...input }, fakeDeps(waring)) as SearchBody & { note?: string };
+    assert.equal(ruledOut.note, "No catalogue matches for these words. Try other words the customer might mean, or ask one question.");
+    assert.deepEqual(ruledOut.categories, []);
+  }
 });
 
 test("a short brand inside a query word is not named by the customer, so it is still capped", async () => {

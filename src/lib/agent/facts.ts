@@ -184,10 +184,11 @@ const inchMarks = (text: string | null | undefined) => text?.replace(/"/g, "″"
 export const houseCode = (brand: string) => /^UB-?\d/i.test(brand);
 
 // A volume, or a count of them, which may mean the total or each one: "2x7L" against 14L (CED-002), "4 x 2.5l" against 10L (Nemox),
-// "2 X 12 LITRES" against the name's 12L (Santos 34-2).
-const VOLUME = /(?:(?<![\d.])(\d+)\s*[x×]\s*)?(\d+(?:\.\d+)?)\s*(ml|l|ltr|litres?|liters?)\b/gi;
+// "2 X 12 LITRES" against the name's 12L (Santos 34-2). A model code's digits are none ("MK-768L"), and "1,000ml" is 1L; a comma
+// before a volume is no code ("H17cm,1000ml" against a store field cut to "000ml").
+const VOLUME = /(?:(?<![\d.])(\d+)\s*[x×]\s*)?(?<!(?![x×])[\p{L}\d.-])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s*(ml|l|ltr|litres?|liters?)\b/giu;
 const volumes = (text: string) => [...text.matchAll(VOLUME)].flatMap((match) => {
-  const litres = Number(match[2]) / (match[3].toLowerCase() === "ml" ? 1000 : 1);
+  const litres = Number(match[2].replace(/,/g, "")) / (match[3].toLowerCase() === "ml" ? 1000 : 1);
   return (match[1] ? [litres, litres * Number(match[1])] : [litres]).map((value) => ({ text: match[0], litres: value }));
 });
 /**

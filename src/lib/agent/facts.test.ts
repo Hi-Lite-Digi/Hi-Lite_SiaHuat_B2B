@@ -159,8 +159,11 @@ test("a store Capacity the name's volume contradicts is marked unclear, never qu
     ["WNK Twin Cereal Dispenser L43.5xW34xH69cm, 2x7L", "14L"],
     ["Nemox Table Top Gelato Ice Cream Storage & Display Case 10L, L980xW505xH360mm, 220-240V/50-60Hz/200W/1Ph, 4 Magic Pro 100", "4 x 2.5l"],
     ["Santos Cold Drink Dispenser 12L,Double Tank 240V/50/1=1 Year Warranty=", "2 X 12 LITRES (Double Tank)"],
-    // No volume in the name: the store's Capacity is the only figure.
+    // No volume in the name: the store's Capacity is the only figure. A model code ending in L is no volume.
     ["Stock Pot Ø25xH25cm", "12L"],
+    ["Mika Bar Blender MK-768L", "2L"],
+    // A thousands comma: 1,000ml is 1L.
+    ["Jar 1L", "1,000ml"],
   ]) {
     assert.equal(details(name, capacity)?.Capacity, capacity, name);
   }
