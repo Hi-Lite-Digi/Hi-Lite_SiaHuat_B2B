@@ -100,6 +100,9 @@ test("the check's prompt keeps v5 and adds removals, this turn's lookups, units,
   assert.match(PICK_CHECK_PROMPT, /of things it must hold \("fits 3 trays per shelf"\), or of units they already own/);
   assert.match(PICK_CHECK_PROMPT, /sure is about the product, not the number/);
   assert.match(PICK_CHECK_PROMPT, /so the customer hasn't seen them/);
+  // Review Y2: "by the same signs as picked" made r4 c02-stress idx 9 "the waring 1.2k one" a sure different(MX1200) 5 of 5.
+  assert.match(PICK_CHECK_PROMPT, /\n- different: they chose a product OTHER than the proposed one that appears in the chat: give its code\./);
+  assert.doesNotMatch(PICK_CHECK_PROMPT, /by the same signs as picked/);
   assert.deepEqual(PICK_SCHEMA.required, ["verdict", "sure", "code", "candidates", "quantity"]);
   assert.equal(PICK_SCHEMA.additionalProperties, false);
 });
