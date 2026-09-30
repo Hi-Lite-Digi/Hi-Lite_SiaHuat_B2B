@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import { cardsNote, type AgentRequest } from "./contract";
+import type { CheckedProduct } from "./facts";
 import type { AgentClient } from "./loop";
 import { fakePickCheck, product } from "./testing";
 import {
-  PICK_CHECK_PROMPT, PICK_SCHEMA, decidePick, modelPickCheck, pickCheckCache, pickCheckInput, readVerdict,
+  PICK_CHECK_PROMPT, PICK_SCHEMA, decidePick, modelPickCheck, pickCheckCache, pickCheckInput, pickView, readVerdict,
   type PickProposal, type PickVerdict, type PickView,
 } from "./verify";
 
@@ -373,4 +374,23 @@ test("fakePickCheck answers a sure pick with the proposal's number unless told o
   assert.deepEqual(await fake(proposal()), verdict());
   assert.equal(fake.calls.length, 2);
   assert.equal((await fakePickCheck({ verdict: "not_picked" })(proposal())).verdict, "not_picked");
+});
+
+test("pickView: the enquiry, this turn's lookups the chat hasn't shown (newest 10, with photo tags) and every code the chat knows", () => {
+  const found = Array.from({ length: 12 }, (_, i) => product({ stock_id: `F${i + 1}`, name: `Found ${i + 1}`, list_price: i + 1 }));
+  const seen = new Map<string, CheckedProduct>([tong, old, ...found].map((item) => [item.stock_id, { product: item, verified: true }]));
+  const lines = [{ item: old.name, code: "OLD1", pricePerItem: 12, quantity: 1, total: 12, uom: "PC" }];
+  const history: AgentRequest["history"] = [
+    { role: "user", content: "tong" },
+    { role: "assistant", content: `Two options.${cardsNote([tong, longTong])}` },
+    { role: "user", content: "[tap] Picked: Old Wok 36cm (code OLD1)" },
+  ];
+  const photoMatches = new Map<string, "direct" | "look-alike">([["F12", "direct"], ["F11", "look-alike"]]);
+  const seenView = pickView({ lines, uncheckedCodes: ["f10"], seen, photoMatches }, request({ history, event: { type: "select_product", stockId: "EVT-1" } }));
+  assert.equal(seenView.lines, lines);
+  // F10 is a line the browser keeps unchecked: on the enquiry, not new.
+  assert.deepEqual(seenView.found.map((item) => item.code), ["F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F11", "F12"]);
+  assert.deepEqual(seenView.found.slice(-2), [{ code: "F11", name: "Found 11", price: 11, photo: "look-alike" }, { code: "F12", name: "Found 12", price: 12, photo: "direct" }]);
+  assert.equal(seenView.found[0].photo, undefined);
+  assert.deepEqual([...seenView.known].sort(), ["2564L", "EVT-1", "OLD1", "UT16HR", ...found.map((item) => item.stock_id)].sort());
 });

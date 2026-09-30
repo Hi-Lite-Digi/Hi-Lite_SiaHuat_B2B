@@ -2,11 +2,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Product } from "@/lib/chat-contract";
-import { cardsNote } from "./contract";
+import { QTY_NOTICE } from "./enquiry";
 import { turnDeps, type CheckedProduct } from "./facts";
-import { pickEvidence } from "./picks";
-import { agentTools, runTool, type TurnContext } from "./tools";
-import { fakeDeps, product } from "./testing";
+import { agentTools, runTool, type ToolOutcome, type TurnContext } from "./tools";
+import { fakeDeps, fakePickCheck, product } from "./testing";
+import { pickCheckCache } from "./verify";
 
 const blowtorch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 31.31 });
 const mastrad = product({ stock_id: "F46700", name: "Mastrad Cooking Torch", list_price: 40 });
@@ -15,7 +15,8 @@ const safico = product({ stock_id: "BTS-8026D", name: "CASSETTE GAS TORCH BURNER
 function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Partial<TurnContext> = {}): TurnContext {
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], changes: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
-    picks: { taps: [], texts: [], replies: [] }, searches: [], refused: [], ...overrides,
+    searches: [], refused: [], tapped: null, checkPick: pickCheckCache(fakePickCheck()), photoMatches: new Map(), kept: [], refusedKeys: new Set(), pickFast: 0,
+    ...overrides,
   };
 }
 
@@ -713,160 +714,296 @@ test("match_photo needs a photo in this turn", async () => {
   assert.match(outcome.content, /NO_PHOTO/);
 });
 
-const twoCardsReply = { role: "assistant" as const, content: `Two options.${cardsNote([blowtorch, safico])}` };
-/** What the customer did this turn after Claire showed the torch and the Safico: a tap, or a typed text. */
-const tappedAfterTwo = (code: string) => pickEvidence([twoCardsReply], { type: "select_product", stockId: code });
-const typedAfter = (history: Parameters<typeof pickEvidence>[0], text: string) => pickEvidence(history, { type: "text", text });
+/** A context whose pick check answers with `answer`; check.calls lists the proposals it was asked about. */
+function checked(answer: Parameters<typeof fakePickCheck>[0] = {}, overrides: Partial<TurnContext> = {}, deps = fakeDeps([blowtorch, mastrad, safico])) {
+  const check = fakePickCheck(answer);
+  return { ctx: context(deps, { checkPick: pickCheckCache(check), ...overrides }), check };
+}
+const update = (ctx: TurnContext, input: Record<string, unknown>) => runTool("update_enquiry", input, ctx);
+const addSafico = (ctx: TurnContext, quantity = 2) => update(ctx, { action: "add", stock_id: "BTS-8026D", quantity });
+const bodyOf = (outcome: ToolOutcome) => JSON.parse(outcome.content) as Record<string, unknown> & { error?: string; note?: string; notice?: string };
+const saficoLine = (quantity: number) => ({ item: safico.name, code: "BTS-8026D", pricePerItem: 23.36, quantity, total: 23.36 * quantity, uom: "PC" });
+const linesOf = (ctx: TurnContext) => ctx.lines.map((line) => [line.code, line.quantity]);
 
-test("update_enquiry changes the turn's enquiry", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], picks: tappedAfterTwo("BTS-8026D") });
-  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
+test("update_enquiry changes the turn's enquiry once the check confirms the pick", async () => {
+  const { ctx, check } = checked({}, { customerTexts: ["2 please"] });
+  const outcome = await addSafico(ctx);
   assert.equal(outcome.isError, false);
   assert.equal(ctx.lines[0].quantity, 2);
   assert.ok(ctx.seen.has("BTS-8026D"));
+  // The proposal carries the catalogue's name, price and unit, and Claude's number both as typed and as sent.
+  assert.deepEqual(check.calls.map((p) => [p.code, p.name, p.price, p.uom, p.action, p.quantity, p.requested, p.unit]), [["BTS-8026D", safico.name, 23.36, "PC", "add", 2, 2, "uom"]]);
+});
+
+test("a set on a line already on the enquiry makes one check", async () => {
+  const { ctx, check } = checked({}, { customerTexts: ["make it 5"], lines: [saficoLine(2)] });
+  assert.equal((await update(ctx, { action: "set", stock_id: "BTS-8026D", quantity: 5 })).isError, false);
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 5]]);
+  assert.deepEqual(check.calls.map((p) => p.action), ["set"]);
 });
 
 test("a successful update is recorded in ctx.changes; a refused one is not", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], picks: tappedAfterTwo("BTS-8026D") });
-  assert.match((await runTool("update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }, ctx)).content, /PRODUCT_NOT_CHOSEN/);
+  const { ctx } = checked((p) => (p.code === "970S" ? { verdict: "not_picked" } : {}), { customerTexts: ["2 please"] });
+  assert.match((await update(ctx, { action: "add", stock_id: "970S", quantity: 2 })).content, /NOT_PICKED/);
   assert.deepEqual(ctx.changes, []);
-  await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 2 }, ctx);
+  await update(ctx, { action: "add", stock_id: "bts-8026d", quantity: 2 });
   assert.deepEqual(ctx.changes, [{ action: "add", code: "BTS-8026D" }]); // the catalogue's spelling
 });
 
 test("a second add of the same item in one turn is refused, so the line is not doubled", async () => {
-  const ctx = context(undefined, { customerTexts: ["4 can"], currentText: "4 can", picks: tappedAfterTwo("BTS-8026D") });
-  assert.equal((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 4 }, ctx)).isError, false);
-  const again = await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 4 }, ctx);
+  const ctx = context(undefined, { customerTexts: ["4 can"], currentText: "4 can" });
+  assert.equal((await addSafico(ctx, 4)).isError, false);
+  const again = await update(ctx, { action: "add", stock_id: "bts-8026d", quantity: 4 });
   assert.equal(again.isError, true);
   assert.match(again.content, /ALREADY_ON_ENQUIRY/);
-  assert.deepEqual(ctx.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 4]]);
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 4]]);
   assert.deepEqual(ctx.changes, [{ action: "add", code: "BTS-8026D" }]);
 });
 
-test("removing a line that could not be re-checked is recorded as a change", async () => {
-  const ctx = context(undefined, { uncheckedCodes: ["F46700"] });
-  await runTool("update_enquiry", { action: "remove", stock_id: "F46700" }, ctx);
-  assert.deepEqual(ctx.changes, [{ action: "remove", code: "F46700" }]);
+test("the number the customer typed for this item wins: QTY_NOT_FOR_ITEM, then the retry is added with no second check", async () => {
+  // r2 c11-persona idx 8 shape: two numbers typed, one per product.
+  const { ctx, check } = checked((p) => ({ quantity: p.code === "BTS-8026D" ? 3 : 2 }), { customerTexts: ["3 of the safico and 2 of the blow torch"] });
+  const refusal = bodyOf(await addSafico(ctx, 2));
+  assert.equal(refusal.error, "QTY_NOT_FOR_ITEM");
+  assert.equal(refusal.typed_quantity, 3);
+  assert.match(refusal.note ?? "", /use that number/);
+  assert.deepEqual(ctx.lines, []);
+  assert.equal((await addSafico(ctx, 3)).isError, false);
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 3]]);
+  assert.equal(check.calls.length, 1);
 });
 
-test("a line that could not be re-checked can be removed or cleared, but not changed", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], clearTexts: ["clear it all"], uncheckedCodes: ["BTS-8026D", "F46700"] });
-  const changed = await runTool("update_enquiry", { action: "add", stock_id: "bts-8026d", quantity: 2 }, ctx);
-  assert.match(changed.content, /STOCK_UNVERIFIED/);
-  const removed = await runTool("update_enquiry", { action: "remove", stock_id: "BTS-8026D" }, ctx);
-  assert.equal(removed.isError, false);
-  assert.deepEqual(ctx.uncheckedCodes, ["F46700"]);
-  const cleared = await runTool("update_enquiry", { action: "clear" }, ctx);
-  assert.equal(cleared.isError, false);
-  assert.deepEqual(ctx.uncheckedCodes, []);
+test("a typed number the check doesn't give this item is QTY_NOT_STATED, with the how-many notice", async () => {
+  // r4 s05-A idx 1 "Yes per level 2 pans side by side": only the check's "no number" stopped a wrong 2.
+  const { ctx } = checked({ quantity: null }, { customerTexts: ["yes per level 2 pans side by side"] });
+  assert.deepEqual(bodyOf(await addSafico(ctx)), { error: "QTY_NOT_STATED", notice: QTY_NOTICE });
+  assert.deepEqual(ctx.lines, []);
+  assert.deepEqual(ctx.refused, []);
 });
 
-test("while a line is unchecked, update_enquiry results tell Claude not to quote a total or item count", async () => {
-  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], picks: tappedAfterTwo("BTS-8026D") });
-  const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { unchecked?: string };
-  assert.match(added.unchecked ?? "", /Unchecked lines \(kept by the customer, not in these lines or totals\): F46700\./);
-  assert.match(added.unchecked ?? "", /Don't quote an enquiry total or item count/);
-  const removed = JSON.parse((await runTool("update_enquiry", { action: "remove", stock_id: "F46700" }, ctx)).content) as { unchecked?: string };
-  assert.equal(removed.unchecked, undefined);
-});
-
-test("a line that could not be re-checked is still on the enquiry, and the tool says so", async () => {
-  // exam 3, c08-stress T12: a bare STOCK_UNVERIFIED on an unchecked line led to retries and a "removed" claim.
-  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["BTS-8026D"], picks: tappedAfterTwo("BTS-8026D") });
-  const changed = JSON.parse((await runTool("update_enquiry", { action: "set", stock_id: "BTS-8026D", quantity: 2 }, ctx)).content) as { error: string; note?: string };
-  assert.equal(changed.error, "STOCK_UNVERIFIED");
-  assert.match(changed.note ?? "", /still on the customer's enquiry.*don't change it this turn/);
-  const other = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"], picks: tappedAfterTwo("BTS-8026D") });
-  const added = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, other)).content) as { unchecked?: string };
-  assert.match(added.unchecked ?? "", /They are still on the customer's enquiry: never say they were removed or are missing\./);
-});
-
-const addSafico = (overrides: Partial<TurnContext>, action: "add" | "set" = "add") => runTool("update_enquiry", { action, stock_id: "BTS-8026D", quantity: 2 }, context(undefined, overrides));
-
-test("a product whose card the customer tapped this turn can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["2 please"], picks: tappedAfterTwo("bts-8026d") })).isError, false);
-});
-
-test("a product already on the enquiry can have its quantity changed", async () => {
-  const lines = [{ item: safico.name, code: "BTS-8026D", pricePerItem: 23.36, quantity: 1, total: 23.36, uom: "PC" }];
-  const outcome = await addSafico({ customerTexts: ["make it 2"], lines, picks: typedAfter([twoCardsReply], "make it 2") }, "set");
-  assert.equal(outcome.isError, false);
-});
-
-test("a product whose item code the customer typed can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["2 pcs of bts-8026d"], picks: typedAfter([twoCardsReply], "2 pcs of bts-8026d") })).isError, false);
-});
-
-test("a yes to the only product card in Claire's previous reply adds it", async () => {
-  const oneCard = { role: "assistant" as const, content: `This one runs on gas.${cardsNote([safico])}` };
-  assert.equal((await addSafico({ customerTexts: ["ok 2"], picks: typedAfter([oneCard], "ok 2") })).isError, false);
-});
-
-test("a product named by a word no other card in the previous reply shares can be added", async () => {
-  assert.equal((await addSafico({ customerTexts: ["the safico one, 2 pcs"], picks: typedAfter([twoCardsReply], "the safico one, 2 pcs") })).isError, false);
-});
-
-test("a product named before it was shown as a card is refused", async () => {
-  // First message: the search finds several torches and nothing has been shown yet, so none of them was chosen.
-  const ctx = context(undefined, { customerTexts: ["I need 2 blow torches"], picks: typedAfter([], "I need 2 blow torches") });
-  await runTool("search_catalogue", { queries: ["torch"] }, ctx);
-  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
-  assert.match(outcome.content, /PRODUCT_NOT_CHOSEN/);
-  assert.match((await addSafico({ customerTexts: ["I need 2 safico torches"], picks: typedAfter([], "I need 2 safico torches") })).content, /PRODUCT_NOT_CHOSEN/);
-});
-
-test("a product the customer didn't pick out of several is refused", async () => {
-  for (const text of ["ok 2", "2 torches"]) {
-    const ctx = context(undefined, { customerTexts: [text], picks: typedAfter([twoCardsReply], text) });
-    const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
-    assert.equal(outcome.isError, true, text);
-    assert.match(outcome.content, /PRODUCT_NOT_CHOSEN/, text);
-    assert.deepEqual(ctx.lines, [], text);
-  }
-});
-
-test("a PRODUCT_NOT_CHOSEN refusal tells Claude what to do and which products the customer did pick", async () => {
-  const history = [twoCardsReply, { role: "user" as const, content: "[tap] Picked: KITCHEN BLOW TORCH 970S (code 970S)" }, { role: "assistant" as const, content: "How many do you need?" }];
-  const outcome = await addSafico({ customerTexts: ["2 torches"], picks: typedAfter(history, "2 torches") });
-  const body = JSON.parse(outcome.content) as { error: string; note: string; picked: string[] };
-  assert.deepEqual(Object.keys(body), ["error", "note", "product", "picked"]);
-  assert.equal(body.error, "PRODUCT_NOT_CHOSEN");
-  assert.deepEqual(body.picked, ["970S"]);
-  // The tapped blow torch may be added only if it is the product the customer means, not with the number typed for this one.
-  assert.match(body.note, /if picked lists the product they mean, that one may be added/);
-});
-
-test("a refused add returns the product's live facts and records the code", async () => {
+test("a pick the check isn't sure of is PICK_UNCONFIRMED: one question naming the product, with its live facts for the card", async () => {
   // exam 3, c08-persona T8: the refused product wasn't looked up, so the question about it lost its price and its card.
-  const ctx = context(undefined, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") });
-  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, ctx);
-  const body = JSON.parse(outcome.content) as { error: string; note: string; product: { stock_id: string; price_ex_gst: number | null } | null; picked: string[] };
+  const { ctx } = checked({ sure: false }, { customerTexts: ["2 torches"] });
+  const outcome = await addSafico(ctx);
+  const body = bodyOf(outcome) as { error: string; note: string; product: { stock_id: string; price_ex_gst: number | null } | null };
   assert.equal(outcome.isError, true);
-  assert.deepEqual(Object.keys(body), ["error", "note", "product", "picked"]);
-  assert.equal(body.product?.stock_id, "BTS-8026D");
-  assert.equal(body.product?.price_ex_gst, 23.36);
-  assert.match(body.note, /Don't call update_enquiry for this code again this turn/);
+  assert.deepEqual(Object.keys(body), ["error", "product", "note"]);
+  assert.equal(body.error, "PICK_UNCONFIRMED");
+  assert.deepEqual([body.product?.stock_id, body.product?.price_ex_gst], ["BTS-8026D", 23.36]);
+  assert.match(body.note, /Is it the <name> <code>\?/);
+  assert.match(body.note, /Don't call update_enquiry for it again this turn/);
   assert.equal(ctx.seen.get("BTS-8026D")?.verified, true);
   assert.deepEqual(ctx.refused, ["BTS-8026D"]);
   assert.deepEqual(ctx.lines, []);
 });
 
+test("a product the customer hasn't asked for is NOT_PICKED: answer what they said, no confirm question", async () => {
+  const { ctx } = checked({ verdict: "not_picked" }, { customerTexts: ["ok 2"] });
+  const body = bodyOf(await addSafico(ctx));
+  assert.deepEqual(Object.keys(body), ["error", "note"]);
+  assert.equal(body.error, "NOT_PICKED");
+  assert.match(body.note ?? "", /Don't add it or ask them to confirm it; answer what they said/);
+  assert.deepEqual(ctx.refused, ["BTS-8026D"]);
+  assert.deepEqual([ctx.lines, ctx.changes], [[], []]);
+});
+
+test("a pick of another product is PICKED_OTHER with its typed number, and adding that one needs no second check", async () => {
+  const { ctx, check } = checked({ verdict: "different", code: "970S", quantity: 2 }, { customerTexts: ["2 of the blow torch"] });
+  const body = bodyOf(await addSafico(ctx)) as { error: string; picked: unknown; product: { stock_id: string } | null; note: string };
+  assert.equal(body.error, "PICKED_OTHER");
+  assert.deepEqual(body.picked, { code: "970S", quantity: 2 });
+  assert.equal(body.product?.stock_id, "970S");
+  assert.match(body.note, /add it with picked.quantity if that is set; otherwise ask how many/);
+  assert.deepEqual(ctx.refused, ["BTS-8026D"]);
+  assert.equal((await update(ctx, { action: "add", stock_id: "970S", quantity: 2 })).isError, false);
+  assert.deepEqual(linesOf(ctx), [["970S", 2]]);
+  assert.equal(check.calls.length, 1);
+});
+
+test("words that fit two products are PICK_UNCLEAR with both cards' facts, and both codes are refused", async () => {
+  const { ctx } = checked({ verdict: "unclear", candidates: ["970S", "BTS-8026D"] }, { customerTexts: ["2 torches"] });
+  const body = bodyOf(await addSafico(ctx)) as { error: string; candidates: Array<{ stock_id: string }>; note: string };
+  assert.equal(body.error, "PICK_UNCLEAR");
+  assert.deepEqual(body.candidates.map((item) => item.stock_id), ["970S", "BTS-8026D"]);
+  assert.match(body.note, /attach these cards and ask which one, naming them \(X or Y\?\)/);
+  assert.deepEqual([...ctx.refused].sort(), ["970S", "BTS-8026D"]);
+  assert.deepEqual(ctx.lines, []);
+});
+
+test("a check that fails is PICK_UNCHECKED: the enquiry is unchanged and Claire asks about the product", async () => {
+  const { ctx } = checked({ verdict: "error", sure: false, quantity: null }, { customerTexts: ["2 please"], lines: [saficoLine(1)] });
+  const body = bodyOf(await update(ctx, { action: "add", stock_id: "970S", quantity: 2 })) as { error: string; product: { stock_id: string } | null };
+  assert.equal(body.error, "PICK_UNCHECKED");
+  assert.equal(body.product?.stock_id, "970S");
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 1]]);
+  assert.deepEqual(ctx.changes, []);
+});
+
+test("a tap this turn is the pick: with one typed number it is added with no check; with two numbers the check binds the number", async () => {
+  const one = checked({}, { tapped: "bts-8026d", customerTexts: ["2 please"] });
+  assert.equal((await addSafico(one.ctx)).isError, false);
+  assert.deepEqual([one.check.calls.length, one.ctx.pickFast], [0, 1]);
+  const two = checked({}, { tapped: "BTS-8026D", customerTexts: ["3 of this and 5 of the blow torch"] });
+  assert.equal((await addSafico(two.ctx, 3)).isError, false);
+  assert.deepEqual([two.check.calls.length, two.ctx.pickFast], [1, 0]);
+});
+
+test("a tap with no typed number is QTY_NOT_STATED, with no check", async () => {
+  const { ctx, check } = checked({}, { tapped: "BTS-8026D", customerTexts: ["blow torch"] });
+  assert.match((await addSafico(ctx)).content, /QTY_NOT_STATED/);
+  assert.equal(check.calls.length, 0);
+});
+
+test("'Recommend' with a number Claude made up is checked with no number and refused as NOT_PICKED, not QTY_NOT_STATED", async () => {
+  // r2 c03-B idx 5: the old rule's refusal led to "How many?" on a recommendation request.
+  const { ctx, check } = checked({ verdict: "not_picked" }, { customerTexts: ["Recommend"] });
+  assert.equal(bodyOf(await addSafico(ctx, 3)).error, "NOT_PICKED");
+  assert.deepEqual(check.calls.map((p) => [p.quantity, p.requested]), [[null, 3]]);
+});
+
+test("a product found this turn that fits the customer's words as well as another is PICK_UNCLEAR, not added", async () => {
+  // "I need 2 blow torches" before any card was shown: the search finds several torches, and none of them was chosen.
+  const { ctx } = checked({ verdict: "unclear", candidates: ["970S", "F46700"] }, { customerTexts: ["I need 2 blow torches"] });
+  await runTool("search_catalogue", { queries: ["torch"] }, ctx);
+  assert.equal(bodyOf(await update(ctx, { action: "add", stock_id: "970S", quantity: 2 })).error, "PICK_UNCLEAR");
+  assert.deepEqual(ctx.lines, []);
+});
+
+test("clearing and a code the catalogue doesn't have make no check", async () => {
+  const { ctx, check } = checked({}, { customerTexts: ["2 please"], clearTexts: ["clear all"], lines: [saficoLine(1)] });
+  assert.match((await update(ctx, { action: "add", stock_id: "NOPE-1", quantity: 2 })).content, /NOT_FOUND/);
+  assert.equal((await update(ctx, { action: "clear" })).isError, false);
+  assert.equal(check.calls.length, 0);
+});
+
+test("a failed catalogue lookup still runs the check: a flaky lookup can't skip it", async () => {
+  const deps = fakeDeps([blowtorch, mastrad, safico]);
+  let failures = 1;
+  const findByCode = deps.findByCode;
+  deps.findByCode = (code) => (failures-- > 0 ? Promise.reject(new Error("DB_DOWN")) : findByCode(code));
+  const { ctx, check } = checked({ verdict: "not_picked" }, { customerTexts: ["2 please"] }, deps);
+  assert.equal(bodyOf(await addSafico(ctx)).error, "NOT_PICKED");
+  assert.deepEqual(check.calls.map((p) => [p.code, p.name]), [["BTS-8026D", "BTS-8026D"]]);
+});
+
+test("a removal the customer asked for goes through after one check; a refused one keeps the line", async () => {
+  const asked = checked({}, { customerTexts: ["remove the safico"], currentText: "remove the safico", lines: [saficoLine(2)] });
+  assert.equal((await update(asked.ctx, { action: "remove", stock_id: "BTS-8026D" })).isError, false);
+  assert.deepEqual(asked.ctx.lines, []);
+  assert.deepEqual(asked.check.calls.map((p) => [p.code, p.name, p.action, p.quantity]), [["BTS-8026D", safico.name, "remove", null]]);
+  // r4 c02-A idx 16: a price complaint is no removal.
+  const text = "so expensive. got something cheaper?";
+  const refused = checked({ verdict: "not_picked" }, { customerTexts: [text], currentText: text, lines: [saficoLine(2)] });
+  const body = bodyOf(await update(refused.ctx, { action: "remove", stock_id: "BTS-8026D" }));
+  assert.equal(body.error, "REMOVE_REFUSED");
+  assert.match(body.note ?? "", /stays on the enquiry. Don't remove it; answer what they said, and don't tell them they never asked/);
+  assert.deepEqual(linesOf(refused.ctx), [["BTS-8026D", 2]]);
+  assert.deepEqual([refused.ctx.kept, refused.ctx.changes, refused.ctx.refused], [["BTS-8026D"], [], []]);
+});
+
+test("a removal the check says was meant for another line names that line", async () => {
+  const { ctx } = checked({ verdict: "different", code: "970S" }, { customerTexts: ["remove the blow torch"], currentText: "remove the blow torch", lines: [saficoLine(2)] });
+  const body = bodyOf(await update(ctx, { action: "remove", stock_id: "BTS-8026D" }));
+  assert.deepEqual([body.error, body.meant], ["REMOVE_REFUSED", "970S"]);
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 2]]);
+});
+
+test("removing a line that could not be re-checked is recorded as a change", async () => {
+  const ctx = context(undefined, { uncheckedCodes: ["F46700"] });
+  await update(ctx, { action: "remove", stock_id: "F46700" });
+  assert.deepEqual(ctx.changes, [{ action: "remove", code: "F46700" }]);
+});
+
+test("removing a line that could not be re-checked goes through the check too", async () => {
+  const { ctx, check } = checked({ verdict: "not_picked" }, { uncheckedCodes: ["F46700"] });
+  assert.equal(bodyOf(await update(ctx, { action: "remove", stock_id: "F46700" })).error, "REMOVE_REFUSED");
+  assert.deepEqual([ctx.uncheckedCodes, ctx.changes, ctx.kept], [["F46700"], [], ["F46700"]]);
+  assert.deepEqual(check.calls.map((p) => [p.code, p.action]), [["F46700", "remove"]]);
+});
+
+const tong16 = product({ stock_id: "UT16HR", name: "Utility Tong 16 inch", list_price: 3.5 });
+const tong165 = product({ stock_id: "2564L", name: "Long Tong 16.5 inch", list_price: 4.2 });
+const tongLine = { item: tong16.name, code: "UT16HR", pricePerItem: 3.5, quantity: 2, total: 7, uom: "PC" };
+
+test("a swap's remove waits for the new item: SWAP_NOT_DONE before the add, allowed once the add went through", async () => {
+  // r4 c09-persona idx 11: the old line came off while the new one was refused, so the customer lost both.
+  const text = "change to the 16.5 one la, same 2 pcs";
+  const { ctx, check } = checked({}, { customerTexts: [text], currentText: text, lines: [tongLine] }, fakeDeps([tong16, tong165]));
+  const held = bodyOf(await update(ctx, { action: "remove", stock_id: "UT16HR" }));
+  assert.equal(held.error, "SWAP_NOT_DONE");
+  assert.match(held.note ?? "", /the old line comes off only once the new item is on the enquiry/);
+  assert.deepEqual([linesOf(ctx), ctx.kept, check.calls.length], [[["UT16HR", 2]], ["UT16HR"], 0]);
+  assert.equal((await update(ctx, { action: "add", stock_id: "2564L", quantity: 2 })).isError, false);
+  assert.equal((await update(ctx, { action: "remove", stock_id: "UT16HR" })).isError, false);
+  assert.deepEqual(linesOf(ctx), [["2564L", 2]]);
+});
+
+test("an explicit removal in a swap-worded message is not held", async () => {
+  for (const text of ["just remove the safico instead", "cancel the safico, i buy torch elsewhere instead", "take out safico. 换别家买"]) {
+    const { ctx } = checked({}, { customerTexts: [text], currentText: text, lines: [saficoLine(2)] });
+    assert.equal((await update(ctx, { action: "remove", stock_id: "BTS-8026D" })).isError, false, text);
+    assert.deepEqual(ctx.lines, [], text);
+  }
+});
+
+test("after a refused removal, an add of that line is refused so it isn't merged (4 + 6 = 10)", async () => {
+  const text = "hmm make the safico 6";
+  const { ctx } = checked((p) => (p.action === "remove" ? { verdict: "not_picked" } : {}), { customerTexts: [text], currentText: text, lines: [saficoLine(4)] });
+  assert.equal(bodyOf(await update(ctx, { action: "remove", stock_id: "BTS-8026D" })).error, "REMOVE_REFUSED");
+  const again = bodyOf(await addSafico(ctx, 6));
+  assert.equal(again.error, "ALREADY_ON_ENQUIRY");
+  assert.match(again.notice ?? "", /use set with the new total/);
+  assert.deepEqual(linesOf(ctx), [["BTS-8026D", 4]]);
+});
+
+test("a line that could not be re-checked can be removed or cleared, but not changed", async () => {
+  const ctx = context(undefined, { customerTexts: ["2 please"], clearTexts: ["clear it all"], uncheckedCodes: ["BTS-8026D", "F46700"] });
+  const changed = await update(ctx, { action: "add", stock_id: "bts-8026d", quantity: 2 });
+  assert.match(changed.content, /STOCK_UNVERIFIED/);
+  const removed = await update(ctx, { action: "remove", stock_id: "BTS-8026D" });
+  assert.equal(removed.isError, false);
+  assert.deepEqual(ctx.uncheckedCodes, ["F46700"]);
+  const cleared = await update(ctx, { action: "clear" });
+  assert.equal(cleared.isError, false);
+  assert.deepEqual(ctx.uncheckedCodes, []);
+});
+
+test("while a line is unchecked, update_enquiry results tell Claude not to quote a total or item count", async () => {
+  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"] });
+  const added = JSON.parse((await addSafico(ctx)).content) as { unchecked?: string };
+  assert.match(added.unchecked ?? "", /Unchecked lines \(kept by the customer, not in these lines or totals\): F46700\./);
+  assert.match(added.unchecked ?? "", /Don't quote an enquiry total or item count/);
+  const removed = JSON.parse((await update(ctx, { action: "remove", stock_id: "F46700" })).content) as { unchecked?: string };
+  assert.equal(removed.unchecked, undefined);
+});
+
+test("a line that could not be re-checked is still on the enquiry, and the tool says so", async () => {
+  // exam 3, c08-stress T12: a bare STOCK_UNVERIFIED on an unchecked line led to retries and a "removed" claim.
+  const ctx = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["BTS-8026D"] });
+  const changed = JSON.parse((await update(ctx, { action: "set", stock_id: "BTS-8026D", quantity: 2 })).content) as { error: string; note?: string };
+  assert.equal(changed.error, "STOCK_UNVERIFIED");
+  assert.match(changed.note ?? "", /still on the customer's enquiry.*don't change it this turn/);
+  const other = context(undefined, { customerTexts: ["2 please"], uncheckedCodes: ["F46700"] });
+  const added = JSON.parse((await addSafico(other)).content) as { unchecked?: string };
+  assert.match(added.unchecked ?? "", /They are still on the customer's enquiry: never say they were removed or are missing\./);
+});
+
 test("a refused add whose lookup fails or stalls returns product null within about 2 s", async () => {
+  const unsure = () => pickCheckCache(fakePickCheck({ sure: false }));
   const failing = fakeDeps([blowtorch, mastrad, safico]);
   failing.findByCode = async () => { throw new Error("DB_DOWN"); };
-  const refusedCtx = context(failing, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") });
-  const failed = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, refusedCtx)).content) as { error: string; product: unknown };
-  assert.equal(failed.error, "PRODUCT_NOT_CHOSEN");
+  const refusedCtx = context(failing, { customerTexts: ["2 torches"], checkPick: unsure() });
+  const failed = bodyOf(await addSafico(refusedCtx)) as { error: string; product: unknown };
+  assert.equal(failed.error, "PICK_UNCONFIRMED");
   assert.equal(failed.product, null);
   assert.deepEqual(refusedCtx.refused, ["BTS-8026D"]);
   const stalled = fakeDeps([blowtorch, mastrad, safico]);
   const fetchLive = stalled.fetchLive;
   stalled.fetchLive = (url, ms) => (url === safico.source_url ? new Promise(() => undefined) : fetchLive(url, ms));
   const started = performance.now();
-  const slow = JSON.parse((await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, context(stalled, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") }))).content) as { error: string; product: unknown };
+  const slow = bodyOf(await addSafico(context(stalled, { customerTexts: ["2 torches"], checkPick: unsure() }))) as { error: string; product: unknown };
   assert.ok(performance.now() - started < 2_300, `${performance.now() - started} ms`);
-  assert.equal(slow.error, "PRODUCT_NOT_CHOSEN");
+  assert.equal(slow.error, "PICK_UNCONFIRMED");
   assert.equal(slow.product, null);
   // The live check gets only what is left of the 2 s, so it can't run on after the tool has answered.
   const lateFind = fakeDeps([blowtorch, mastrad, safico]);
@@ -875,8 +1012,24 @@ test("a refused add whose lookup fails or stalls returns product null within abo
   const given: number[] = [];
   const liveAfterFind = lateFind.fetchLive;
   lateFind.fetchLive = (url, ms) => { given.push(ms ?? Infinity); return liveAfterFind(url, ms); };
-  await runTool("update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }, context(lateFind, { customerTexts: ["2 torches"], picks: typedAfter([twoCardsReply], "2 torches") }));
+  await addSafico(context(lateFind, { customerTexts: ["2 torches"], checkPick: unsure() }));
   assert.ok(given.length === 1 && given[0] <= 1_700, `${given}`);
+});
+
+test("match_photo records which products the photo matched, exactly or as look-alikes, for the pick check", async () => {
+  const image = { dataUrl: "data:image/jpeg;base64,AAAA", mimeType: "image/jpeg" } as TurnContext["image"];
+  const lookup = (kind: "direct" | "candidates") => ({ kind, matches: [], products: [blowtorch, safico], totalProducts: 2 });
+  const direct = context(fakeDeps([blowtorch, safico], {}, lookup("direct")), { image });
+  await runTool("match_photo", {}, direct);
+  assert.deepEqual([...direct.photoMatches], [["970S", "direct"], ["BTS-8026D", "direct"]]);
+  const alike = context(fakeDeps([blowtorch, safico], {}, lookup("candidates")), { image });
+  await runTool("match_photo", {}, alike);
+  assert.deepEqual([...alike.photoMatches], [["970S", "look-alike"], ["BTS-8026D", "look-alike"]]);
+});
+
+test("the update_enquiry description says a separate check confirms the pick and a swap is an add plus a remove", () => {
+  const description = agentTools.find((tool) => tool.name === "update_enquiry")?.description ?? "";
+  assert.ok(description.endsWith("stock_id must be a product the customer picked. A separate check reads the chat to confirm the pick (or that they asked to remove the line) and the number they typed for this item. For a swap, send the add of the new item and the remove of the old one in the same response."));
 });
 
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {

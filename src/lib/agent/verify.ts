@@ -10,6 +10,7 @@ import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model
 import { CHIP_PREFIX, PHOTO_PREFIX, TAP_PREFIX, customerWords, parseCardsNote, withoutCardsNote, type AgentRequest, type ShownCard } from "./contract";
 import type { AgentClient } from "./loop";
 import { same } from "./picks";
+import type { TurnContext } from "./tools";
 
 export type PickAction = "add" | "set" | "remove";
 export type PickProposal = {
@@ -165,6 +166,25 @@ export function pickCheckInput(request: AgentRequest, view: PickView, p: PickPro
     `Already on the enquiry: ${lines.length ? lines.join(" | ") : "nothing"}`,
     proposalLine(p),
   ].filter((line) => line !== null).join("\n");
+}
+
+/**
+ * What the check sees of this turn when it runs: the enquiry, the products looked up this turn that the chat hasn't shown and
+ * that aren't on the enquiry (the newest 10, with match_photo's tags; a line the browser keeps unchecked is on the enquiry too),
+ * and every code the chat or this turn knows, which a "different" or "unclear" answer may name.
+ */
+export function pickView(ctx: Pick<TurnContext, "lines" | "uncheckedCodes" | "seen" | "photoMatches">, request: AgentRequest): PickView {
+  const cards = request.history.flatMap((item) => (item.role === "assistant" ? parseCardsNote(item.content).map((shown) => shown.code) : []));
+  const taps = request.history.flatMap((item) => (item.role === "user" && item.content.startsWith(TAP_PREFIX) ? item.content.match(/\(code ([^()]+)\)\s*$/)?.slice(1) ?? [] : []));
+  if (request.event.type === "select_product") taps.push(request.event.stockId);
+  const lineCodes = ctx.lines.map((line) => line.code);
+  const notNew = new Set([...cards, ...lineCodes, ...ctx.uncheckedCodes].map((code) => code.toLowerCase()));
+  const found = [...ctx.seen.values()].map(({ product }) => product).filter((product) => !notNew.has(product.stock_id.toLowerCase())).slice(-FOUND)
+    .map((product) => {
+      const photo = ctx.photoMatches.get(product.stock_id);
+      return { code: product.stock_id, name: product.name, price: product.list_price, ...(photo ? { photo } : {}) };
+    });
+  return { lines: ctx.lines, found, known: new Set([...cards, ...taps, ...ctx.seen.keys(), ...lineCodes]) };
 }
 
 const errorVerdict = (p: PickProposal, ms: number): PickVerdict => ({

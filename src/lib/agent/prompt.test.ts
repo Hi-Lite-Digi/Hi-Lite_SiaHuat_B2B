@@ -28,10 +28,13 @@ test("Claire quotes the enquiry totals from the context, says they are before GS
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /grandTotalWithGst/);
 });
 
-test("the update_enquiry errors Claude must explain are named in the prompt, clearing included", () => {
-  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "UNIT_MISMATCH", "CLEAR_NOT_REQUESTED", "PRODUCT_NOT_CHOSEN"]) {
+test("the update_enquiry errors Claude must explain are named in the prompt, clearing and the pick check's included", () => {
+  for (const code of ["OUT_OF_STOCK", "OVER_STOCK", "STOCK_UNVERIFIED", "PACK_SIZE_UNKNOWN", "QTY_NOT_STATED", "UNIT_MISMATCH", "CLEAR_NOT_REQUESTED", "REMOVE_REFUSED", "SWAP_NOT_DONE",
+    "PICKED_OTHER", "QTY_NOT_FOR_ITEM", "NOT_PICKED", "PICK_UNCLEAR", "PICK_UNCONFIRMED", "PICK_UNCHECKED"]) {
     assert.ok(CLAIRE_AGENT_PROMPT.includes(code), code);
   }
+  // The word-rule gate's code is gone with the gate.
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /PRODUCT_NOT_CHOSEN/);
 });
 
 test("Claire never claims an item isn't carried, nothing fits a budget or a list is complete unless a search this turn backs it", () => {
@@ -81,20 +84,28 @@ test("Claire knows product cards have no photos", () => {
 
 test("Claire adds a product the customer picked from any card in the chat, without a confirm step or a demand to tap", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Any card shown earlier in this chat counts"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say the system needs a tap"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("never say a check or system is involved"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Don't ask them to confirm first"));
   assert.ok(!CLAIRE_AGENT_PROMPT.includes("otherwise show it as a card first"));
 });
 
-test("after a PRODUCT_NOT_CHOSEN refusal Claire stops retrying and asks one question naming the product, with its card", () => {
+test("after a pick-check refusal Claire stops retrying and does what its code says, never mentioning the check", () => {
   // exam 3, c08-persona T8 and c11-stress T7: the refused add was retried, then asked about without its card.
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("don't call it again for that product this turn"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("rather than asking them to tap or type the code"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("(\"Is it the <name> <code>?\")"));
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- update_enquiry checks each add")) ?? "";
+  assert.ok(line.startsWith("- update_enquiry checks each add, change and removal against the chat. PICKED_OTHER: the customer picked that product instead: add it with picked.quantity."));
+  assert.ok(line.includes("NOT_PICKED: they haven't asked for it: answer what they said, don't add it and don't ask them to confirm it."));
+  assert.ok(line.includes("PICK_UNCLEAR: attach the fitting cards and ask which one, naming them (X or Y?)."));
+  assert.ok(line.includes("ask one short question naming the product with its code ('Is it the <name> <code>?') with its card; a yes or a tap then adds it."));
+  assert.ok(line.endsWith("Don't call update_enquiry again for a refused product this turn, and never say a check or system is involved."));
   assert.ok(!CLAIRE_AGENT_PROMPT.includes("show the likely cards and ask which one"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("Never say the system needs a tap"));
-  // Only the product they mean: another card they tapped earlier would take the number typed for this one.
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("if its picked list names the product they mean, that one may be added"));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("if its picked list names the product they mean"));
+});
+
+test("Claire removes only a line the customer asked to take off, and sends a swap as an add plus a remove", () => {
+  // r4 c09-persona idx 11: the old line came off while the new one was refused.
+  const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- Changes (")) ?? "";
+  assert.ok(line.includes("go through update_enquiry. Remove only a line the customer asked to take off. A swap is an add of the new item plus a remove of the old one in the same response; the old line comes off only after the new one is on. Report its result truthfully."));
+  assert.ok(line.includes("CLEAR_NOT_REQUESTED, REMOVE_REFUSED, SWAP_NOT_DONE)"));
 });
 
 test("Claire asks how many only after a pick, and answers a which-one question before letting them pick", () => {

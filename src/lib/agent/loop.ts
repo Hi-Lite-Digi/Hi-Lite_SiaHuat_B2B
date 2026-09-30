@@ -17,6 +17,7 @@ import {
 import { codePattern, pickEvidence, same, turnChooser, type Chooser } from "./picks";
 import { CLAIRE_AGENT_PROMPT } from "./prompt";
 import { agentTools, errorCode, keepBest, lookupDetails, runTool, uncheckedNote, withDetails, type ToolOutcome, type TurnContext } from "./tools";
+import { modelPickCheck, pickCheckCache, pickView, type PickCheck } from "./verify";
 
 export type AgentClient = {
   messages: {
@@ -217,6 +218,9 @@ function failureCode(error: unknown, deadline: AbortSignal) {
     : /aborted/i.test(error.message) ? "CLIENT_ABORT" : code;
 }
 
+/** The pick check's refusals that only the customer's answer to one question can settle. */
+const WHICH_ERRORS = new Set(["NOT_PICKED", "PICK_UNCLEAR", "PICK_UNCONFIRMED", "PICK_UNCHECKED"]);
+
 /** A tool call this round ran: its name, what Claude sent and its error code, if it failed. */
 type ToolCallDone = { name: string; input: unknown; error?: string };
 
@@ -269,7 +273,7 @@ function stopNote(done: ToolCallDone[], ctx: TurnContext, refusedBefore: Readonl
     const { stock_id: stockId } = fields(call);
     return typeof stockId === "string" ? stockId.trim().toLowerCase() : "";
   };
-  if (done.every((call) => call.error === "PRODUCT_NOT_CHOSEN" && refusedBefore.has(code(call)))) return "which";
+  if (done.every((call) => WHICH_ERRORS.has(call.error ?? "") && refusedBefore.has(code(call)))) return "which";
   // Quantity 0 fails the input check before the pick check: "how many?" is only asked about a product the customer picked.
   const chosen = (call: ToolCallDone) => chooses(code(call), null, ctx.lines.map((line) => line.code));
   const needsNumber = (call: ToolCallDone) => {
@@ -292,6 +296,10 @@ export async function runAgentTurn(input: {
   fallbackReserveMs?: number;
   /** With this little work time left after a tool round, the next Claude call must answer without tools. */
   lastCallMs?: number;
+  /** The pick check update_enquiry asks (tests pass a fake); by default the app's own model through this turn's client. */
+  pickCheck?: (ctx: TurnContext) => PickCheck;
+  /** The model the default pick check calls; by default the turn's model (owner decision 1: Sonnet 5, thinking off). */
+  pickModel?: string;
 }): Promise<AgentReply> {
   const started = performance.now();
   const { request, client, model } = input;
@@ -325,10 +333,20 @@ export async function runAgentTurn(input: {
     clearTexts: request.event.type === "text" && request.event.chip ? [request.event.text, ...recent] : recent,
     image: request.event.type === "image" ? request.event.image : null,
     shownIds: new Set(request.shownProductIds),
-    picks,
     searches: [],
     refused: [],
+    tapped: request.event.type === "select_product" ? request.event.stockId : null,
+    // The check is made just below: it reads this context (the enquiry and this turn's lookups) each time it runs.
+    checkPick: pickCheckCache((p) => check(p)),
+    photoMatches: new Map(),
+    kept: [],
+    refusedKeys: new Set(),
+    pickFast: 0,
   };
+  // It must leave the last Claude call its time: with less than a second to spare it makes no call and update_enquiry asks.
+  const check = input.pickCheck?.(ctx) ?? modelPickCheck({
+    client, model: input.pickModel ?? model, request, view: () => pickView(ctx, request), budgetMs: () => timeLeft() - lastCallMs, signal: deadline,
+  });
   const searchText = request.event.type === "text" ? request.event.text : request.event.type === "image" ? request.event.caption ?? null : null;
   const earlier: EarlierTurns = {
     cardSets: picks.replies.map((reply) => reply.cards.map((card) => card.code)),
