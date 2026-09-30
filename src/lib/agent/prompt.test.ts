@@ -56,9 +56,11 @@ test("equipment named in words the catalogue may not use gets the closest produc
   // Owner's chat, 2026-09-30: "if it searches and cannot find something similar to a prata pan, it can apologise and ask for more
   // description." In the area-N runs 4-5 of 10 first replies to such names had no card and a bare "I couldn't find it".
   const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- Equipment the customer names in words the catalogue may not use")) ?? "";
+  // Only when no result has their name: the catalogue lists 'Thai Style Claypot', 'Takoyaki Plate' and 'U-SHAPE NOODLE STRAINER',
+  // and the guard lets a one-word "we don't list anything called 'claypot'" through (review of D11).
   for (const words of ["not food, which Sia Huat doesn't sell", "the item's usual English name", "Don't search their words again",
-    "search once more with other words for the job", "we don't list anything called '<their exact words>'",
-    "closest products that do the same job as cards with a one-line reason each", "one short question about one thing", "set show_contact true",
+    "search once more with other words for the job", "if a result has their name for it, show it; if none does, say plainly we don't list anything called '<their exact words>'",
+    "closest products that do the same job as cards with a one-line reason each drawn from the tool facts", "one short question about one thing", "set show_contact true",
     "source it", "Never reply with only 'I couldn't find it'", "show them now"]) {
     assert.ok(line.includes(words), words);
   }

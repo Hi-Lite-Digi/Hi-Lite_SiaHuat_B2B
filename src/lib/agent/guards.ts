@@ -648,8 +648,13 @@ const CLAIM_FIXES = {
 };
 // The old wording ("in the searches you ran") invited search narration (exam 4, s03-B idx 4). "Say you couldn't find it" left bare
 // "I couldn't find it" replies (owner's chat, 2026-09-30: "When the AI gives up so easily it looks like the system is broken"); the
-// name-scoped wording is what the prompt asks for and what the absence check lets through (r6 area N).
-const ABSENCE_FIX = "First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it: say we don't list anything called '<the customer's words>' (without describing your searches), and keep the closest products you showed; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead.";
+// name-scoped wording is what the prompt asks for and what the absence check lets through (r6 area N). The repair may attach this
+// turn's cards, so it asks for them: "keep the products you showed" added none to a first answer with no card (review of D11).
+const ABSENCE_CHECK = "First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it:";
+const ABSENCE_FIX = `${ABSENCE_CHECK} say we don't list anything called '<the customer's words>' (without describing your searches), and attach the closest products from this turn's results; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead.`;
+// A substitute, another one, stock or origin is no name, and the item is often listed (exam 5: Japan-brand Global knives and the
+// cordless RHB100U, out of stock): "couldn't find one", which the absence check lets through, stays true there (review of D11).
+const ABSENCE_FIND_FIX = `${ABSENCE_CHECK} say you couldn't find one this time (without describing your searches), and attach the closest products from this turn's results.`;
 
 // Country words as the catalogue's 'Country of Brand Origin' spells them ("china" is left out: bone china is a material).
 const COUNTRIES: Record<string, string> = {
@@ -661,6 +666,9 @@ const originOf = (details?: Record<string, string> | null) => {
   const origin = (details?.["Country of Brand Origin"] ?? "").trim().toUpperCase();
   return origin === "UNITED STATES OF AMERICA" ? "USA" : origin;
 };
+const NOT_A_NAME = new RegExp(String.raw`\b(?:another|others?|in[- ]stock|available|brands?|made\s+in|${Object.keys(COUNTRIES).join("|")})\b`, "i");
+/** The repair for an unbacked "we don't have it": the name-scoped one, unless the sentence is only "no substitute" or is about another one, stock, origin or brand. */
+const absenceFix = (sentence: string) => (NOT_A_NAME.test(sentence) || !ABSENT.test(sentence.replace(EVERY_SUBSTITUTE_ABSENT, " ")) ? ABSENCE_FIND_FIX : ABSENCE_FIX);
 // Words that end the item a clause names after its country, and words in it that name no product ("Japan-made knife brand in our
 // catalogue" names a knife).
 const ITEM_END = new Set(["in", "at", "for", "from", "with", "that", "which", "by", "on", "of", "or", "and", "but", "to", "available", "right", "now", "here", "yet", "currently", "we", "i"]);
@@ -988,7 +996,7 @@ export function reviewAnswer(
   for (const { sentence, kind, found } of turn.searches ? unbackedClaims(answer.message, turn.searches, seen) : []) {
     // A "we don't have it" can be honest about a product type the searches missed, and a ranking may be the answer to "got cheaper?",
     // so they are reworded, never removed.
-    if (kind === "absence") style.push(`${ABSENCE_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${ABSENCE_FIX}`);
+    if (kind === "absence") style.push(`${ABSENCE_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${absenceFix(sentence)}`);
     else if (kind === "disproved") {
       const named = found.slice(0, 3).map((item) => `${item.stock_id} (${item.name.replace(/"/g, "″")})`).join(", ");
       style.push(`${ABSENCE_ISSUE_PREFIX}: "${sentence}". ${named} came up in this turn's results: if it is what the customer asked for, name it with its stock; if not, keep your sentence.`);

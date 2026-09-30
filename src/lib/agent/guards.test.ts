@@ -1451,10 +1451,25 @@ test("find_alternatives backs 'no substitute' (exam 4, s03-B idx 1: repaired aft
   assert.deepEqual(absenceOf("No close substitute, and I couldn't find a replacement either.", [search({ queries: [], alternativesFor: "F46700" })]), []);
 });
 
-test("the absence repair asks Claude to check this turn's results first, then to say we don't list anything by the customer's name and keep the closest products", () => {
-  assert.ok(absenceOf("We don't carry boxed dining sets.")[0].endsWith(" First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it: say we don't list anything called '<the customer's words>' (without describing your searches), and keep the closest products you showed; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead."));
+test("the absence repair asks Claude to check this turn's results first, then to say we don't list anything by the customer's name and attach the closest products", () => {
+  assert.ok(absenceOf("We don't carry boxed dining sets.")[0].endsWith(" First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it: say we don't list anything called '<the customer's words>' (without describing your searches), and attach the closest products from this turn's results; if the item isn't kitchen or F&B equipment at all, say what Sia Huat supplies instead."));
   // The wording it asks for is name-scoped, so the repaired reply isn't flagged again (r6 area N).
   assert.deepEqual(absenceOf("Sorry, we don't list anything called a 'boxed dining set'."), []);
+});
+
+test("an unbacked 'no substitute', 'another', 'in stock' or origin claim is repaired to 'couldn't find one', not to a name the catalogue may list", () => {
+  // Exam 5: Japan-brand Global knives and the cordless RHB100U are listed but out of stock; "we don't list anything called 'made in
+  // Japan'" or "... 'cordless hand blender'" would be false (review of D11).
+  const find = " First check this turn's results for it. If it isn't there, don't say Sia Huat doesn't carry it: say you couldn't find one this time (without describing your searches), and attach the closest products from this turn's results.";
+  const one = [search({ queries: ["stock pot 12L"] })];
+  for (const message of ["That one is out of stock, and there's no close substitute right now.", "I don't have anything actually made in Japan.",
+    "We don't carry Japanese knife brands.", "We don't have another cordless hand blender with a whisk.", "We don't have a 3-in-1 blender in stock."]) {
+    const issues = absenceOf(message, one);
+    assert.equal(issues.length, 1, message);
+    assert.ok(issues[0].endsWith(find), message);
+  }
+  // "I couldn't find one this time" is let through.
+  assert.deepEqual(absenceOf("I couldn't find one this time, but these are the closest.", one), []);
 });
 
 // r4 c03-stress idx 7: the P-16HD (35 in stock) was in the results, but the reply's card was the 13103-1601 (2 left).
