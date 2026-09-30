@@ -382,6 +382,47 @@ test("a size after another unit and a slash is still that size: \"16oz/500ml\" i
   assert.notEqual(idsOf(await searchBody({ queries: ["measuring cup 2oz"], category: "measuring jugs" }, deps))[0], "HALF");
 });
 
+test("a query listing sizes of one unit finds rows with any of them, and S/S names match 'stainless steel' (exam 4, s01-B idx 0)", async () => {
+  const four = product({ stock_id: "OZ4", name: "S/S ONE-PC LADLE 4.0oz", third_category: "Kitchen ladles" });
+  const six = product({ stock_id: "OZ6", name: "S/S ONE-PC LADLE 6.0oz", third_category: "Kitchen ladles" });
+  const deps = fakeDeps([...ladles(), four, six]);
+  deps.searchDirect = async () => ladles();
+  assert.deepEqual(idsOf(await searchBody({ queries: ["stainless steel ladle 4oz 6oz 8oz"], category: "kitchen ladles" }, deps)).slice(0, 2), ["OZ4", "OZ6"]);
+});
+
+test("sizes in different units describe one product: every one must match (stock pot 40cm 50l)", async () => {
+  // 12 in-category pots that match one size each, and the exact pot in another leaf that only the query search returns.
+  const partial = [
+    ...["A", "B", "C", "D", "E", "F"].map((brand, index) => product({ stock_id: `P40-${brand}`, name: `${brand}BRAND S/S STOCK POT 40CM ${60 + index * 10}L`, brand: `${brand}brand`, third_category: "Stock pots" })),
+    ...["G", "H", "I", "J", "K", "L"].map((brand, index) => product({ stock_id: `P50-${brand}`, name: `${brand}BRAND S/S STOCK POT ${44 + index * 2}CM 50L`, brand: `${brand}brand`, third_category: "Stock pots" })),
+  ];
+  const exact = product({ stock_id: "EXACT", name: "ZBRAND STOCK POT 40CM 50L", brand: "Zbrand", third_category: "Casseroles" });
+  const deps = fakeDeps([...partial, exact]);
+  deps.searchDirect = async () => [exact];
+  assert.equal(idsOf(await searchBody({ queries: ["stock pot 40cm 50l"], category: "stock pots" }, deps))[0], "EXACT");
+});
+
+test("with no category, a row naming every word of a query comes before other query hits (exam 4, s03-B idx 1: rice dispenser)", async () => {
+  const near = ["RICE COOKER 1.8L", "RICE COOKER 3L", "RICE SCOOP", "RICE BOWL 11CM"].map((name, index) => product({ stock_id: `R${index}`, name }));
+  const dispenser = product({ stock_id: "EK9108S", name: "STAINLESS STEEL FOOD GRADE RICE DISPENSER" });
+  const bins = ["INGREDIENT BIN 50L", "FLOUR BIN", "SUGAR BIN", "STORAGE BIN 20L", "MOBILE BIN"].map((name, index) => product({ stock_id: `B${index}`, name }));
+  const deps = fakeDeps([...near, dispenser, ...bins]);
+  deps.searchDirect = async (query) => (query === "rice dispenser" ? [...near, dispenser] : bins);
+  assert.ok(idsOf(await searchBody({ queries: ["rice dispenser", "rice bin"] }, deps)).slice(0, 3).includes("EK9108S"));
+});
+
+test("when max_price leaves nothing, the note says the matches are all above it and categories come from them (exam 4, c06-stress idx 2-3)", async () => {
+  const skimmers = Array.from({ length: 12 }, (_, index) => product({ stock_id: `SK${index}`, name: `FINE MESH SKIMMER ${index + 10}CM`, list_price: 2.29 + index, third_category: "Skimmers and splatter screens" }));
+  const body = await searchBody({ queries: ["fine mesh skimmer"], max_price: 2 }, fakeDeps(skimmers)) as SearchBody & { note?: string };
+  assert.deepEqual(body.products, []);
+  assert.equal(body.note, "Nothing within max_price among the top matches for these words; they are all above it. Try the customer's own shorter words (one key word) with max_price, or a category from categories, before saying there is nothing cheaper.");
+  assert.deepEqual(body.categories, ["Skimmers and splatter screens"]);
+  assert.equal(body.more_available, false);
+  // No hits at all is still "no matches".
+  const none = await searchBody({ queries: ["gelato cabinet"], max_price: 2 }, fakeDeps(skimmers)) as SearchBody & { note?: string };
+  assert.equal(none.note, "No catalogue matches for these words. Try other words the customer might mean, or ask one question.");
+});
+
 test("a short brand inside a query word is not named by the customer, so it is still capped", async () => {
   // Real brands AG, IR and AKI sit inside "bag", "stir" and "baking".
   const bags = [

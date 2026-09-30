@@ -180,17 +180,39 @@ const DESCRIPTION_CHARS = 2_000; // the longest catalogue description is 1,965 c
 // Claude copies names and sizes into its reply; a raw " there would end the JSON message string early.
 const inchMarks = (text: string | null | undefined) => text?.replace(/"/g, "″") ?? null;
 
+/** House codes (UB-0231, UB-06MS, UB1201) are not brands (exam 4, c10-A idx 0-2: "the UB-0292 Utility Tong"). */
+export const houseCode = (brand: string) => /^UB-?\d/i.test(brand);
+
+// A volume, or a count of them, which may mean the total or each one: "2x7L" against 14L (CED-002), "4 x 2.5l" against 10L (Nemox),
+// "2 X 12 LITRES" against the name's 12L (Santos 34-2).
+const VOLUME = /(?:(?<![\d.])(\d+)\s*[x×]\s*)?(\d+(?:\.\d+)?)\s*(ml|l|ltr|litres?|liters?)\b/gi;
+const volumes = (text: string) => [...text.matchAll(VOLUME)].flatMap((match) => {
+  const litres = Number(match[2]) / (match[3].toLowerCase() === "ml" ? 1000 : 1);
+  return (match[1] ? [litres, litres * Number(match[1])] : [litres]).map((value) => ({ text: match[0], litres: value }));
+});
+/**
+ * The store's Capacity, or a note not to quote it when no volume in the name is within 8% of it: 38 of 4,633 products, Santos 66 among them
+ * (1.4L in the name, 2.4L in the field: exam 4, c02-A idx 5 and 9, c07-B idx 2). Either side can be the wrong one (N4533/L's name
+ * says 12L for a 1.2L pot), so the field is kept, marked unclear.
+ */
+function capacityFact(name: string, capacity: string) {
+  const named = volumes(name);
+  const stored = volumes(capacity);
+  const agree = stored.some((own) => named.some((other) => Math.abs(own.litres - other.litres) <= 0.08 * Math.max(own.litres, other.litres)));
+  return named.length && stored.length && !agree ? `unclear: name says ${[...new Set(named.map((volume) => volume.text))].join(", ")}, store field says ${capacity}; don't quote either` : capacity;
+}
+
 /** Compact product facts for tool results. An unverified price is left out so it is never quoted. */
 export function productFact({ product, verified, details }: CheckedProduct, shownBefore = false) {
   return {
     stock_id: product.stock_id,
     name: inchMarks(product.name)!,
-    brand: product.brand ?? null,
+    brand: product.brand && !houseCode(product.brand) ? product.brand : null,
     size: inchMarks(product.size ?? product.dimensions),
     dimensions: inchMarks(product.dimensions),
     category: [product.category, product.subcategory, product.third_category].filter(Boolean).join(" > ") || null,
     description: product.description?.replace(/\s+/g, " ").trim().slice(0, DESCRIPTION_CHARS) || null,
-    details: details ? Object.fromEntries(Object.entries(details).map(([label, value]) => [label, inchMarks(value)])) : null,
+    details: details ? Object.fromEntries(Object.entries(details).map(([label, value]) => [label, inchMarks(label === "Capacity" ? capacityFact(product.name, value) : value)])) : null,
     price_ex_gst: verified ? product.list_price : null,
     uom: product.uom_id,
     // Plain words: the raw in_stock / out_of_stock leaked into replies (exam 3: 2 replies). The guards read stock_status.

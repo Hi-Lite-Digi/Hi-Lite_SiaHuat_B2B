@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
-import { liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
+import { houseCode, liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
 import { codePattern, same } from "./picks";
 import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
 
@@ -141,13 +141,15 @@ const CATEGORY_ROWS = 200;
 const RESULTS_PER_SEARCH = 10; // all are live-checked: unchecked rows showed "price to be confirmed" and were called out of stock
 const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
 const DETAILS_TIMEOUT_MS = 1_500;
+const BUDGET_NOTE = "Nothing within max_price among the top matches for these words; they are all above it. Try the customer's own shorter words (one key word) with max_price, or a category from categories, before saying there is nothing cheaper.";
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
 /** A category's words as the catalogue's category filter reads them. */
 const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
-// "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size.
-const sizeText = (text: string) => text.toLowerCase().replace(/(\d)\.0(?!\d)/g, "$1");
+// "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size. Names say
+// "S/S" where customers say "stainless steel" (exam 4, s01-B idx 0: "S/S ONE-PC LADLE 6.0oz").
+const sizeText = (text: string) => text.toLowerCase().replace(/\bs\/s\b/g, "stainless steel").replace(/(\d)\.0(?!\d)/g, "$1");
 const SIZE_WORD = /^\d+(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)$/;
 // A size word is a whole number: "6oz" is not inside "16oz" or "1/2oz", and "1.5L" gives no "5l" (exam 3: s01-A T0 asked for 6oz,
 // c12-stress for 7cm and 7.5cm). A size after another unit and a slash ("16oz/500ml", '12"/30cm') is still that size.
@@ -156,7 +158,6 @@ const sizeIn = (text: string, word: string) => new RegExp(String.raw`(?<!\d)(?<!
 const COLOUR_WORDS = /\b(?:black|white|red|blue|green|yellow|brown|violet|purple|orange|pink|gr[ae]y|cream|beige|ivory|handle|hdle)\b/g;
 const variantKey = (item: Product) => `${item.name.toLowerCase().replace(COLOUR_WORDS, " ").replace(/[^\p{L}\p{N}.]+/gu, " ").trim()}|${item.size ?? item.dimensions ?? ""}|${item.list_price}`;
 const BRAND_SHARE = 4;
-const houseCode = (brand: string) => /^UB-?\d/i.test(brand); // house codes (UB-0231, UB-06MS, UB1201) are not brands
 
 /**
  * Rank order, but on a first pass one colour variant per product and at most BRAND_SHARE per brand the queries don't name. Once
@@ -267,14 +268,24 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const inScope = (item: Product) => scope.exists
     && [item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
   const phrases = input.queries.map((query) => sizeText(query).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
+  const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
   if (!category) {
+    // A row naming every word of a query first: "rice dispenser" beside "rice bin" had its one exact row 9th (exam 4, s03-B idx 1).
+    byRank(literal);
     byRank(() => true);
   } else {
-    const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
     const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => sizeText(item.name).includes(word))).size;
     const scopeByHits = [...scope.products].sort((a, b) => nameHits(b) - nameHits(a));
     const sizedPhrases = phrases.filter((words, index) => words.some((word) => SIZE_WORD.test(word) && sizeIn(sizeText(input.queries[index]), word)));
-    const sizedLiteral = (item: Product) => sizedPhrases.some((words) => words.every((word) => (SIZE_WORD.test(word) ? sizeIn(sizeText(item.name), word) : sizeText(item.name).includes(word))));
+    // Sizes of one unit are choices ("ladle 4oz 6oz 8oz": any will do, exam 4, s01-B idx 0); sizes in different units describe one
+    // product ("stock pot 40cm 50l"), so each must match.
+    const sizedLiteral = (item: Product) => sizedPhrases.some((words) => {
+      const name = sizeText(item.name);
+      const sizes = words.filter((word) => SIZE_WORD.test(word));
+      const choices = new Set(sizes.map((word) => word.replace(/^\d+/, ""))).size === 1;
+      return words.every((word) => SIZE_WORD.test(word) || name.includes(word))
+        && (choices ? sizes.some((word) => sizeIn(name, word)) : sizes.every((word) => sizeIn(name, word)));
+    });
     if (sizedPhrases.length) {
       // 0. rows naming the customer's exact size with every word of its query ("ladle 8oz" showed the 8oz ladle 10th or not at all)
       scopeByHits.filter(sizedLiteral).forEach(add);
@@ -298,8 +309,11 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   // A search that returned its full row limit may have more matches than it could return.
   const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
   ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
+  // Hits that only max_price removed are still matches, above the budget: "No catalogue matches" read as nothing cheaper (exam 4,
+  // c06-stress idx 2-3), so the note says so and categories come from them.
+  const overBudget = merged.length || !input.max_price ? [] : queryLists.flat().filter((item) => item.list_price > (input.max_price ?? Infinity));
   const leafCounts = new Map<string, number>();
-  for (const item of merged) if (item.third_category) leafCounts.set(item.third_category, (leafCounts.get(item.third_category) ?? 0) + 1);
+  for (const item of overBudget.length ? overBudget : merged) if (item.third_category) leafCounts.set(item.third_category, (leafCounts.get(item.third_category) ?? 0) + 1);
   const categories = [...leafCounts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name]) => name);
   const categoryNote = !category ? null
     : categoryOutcome?.status === "rejected" ? "Category search failed."
@@ -313,14 +327,15 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
     total_found: totalFound,
-    more_available: moreAvailable,
+    // With no products returned it would contradict the note.
+    more_available: moreAvailable && affordable.length > 0,
     complete,
     // exam 3, c01-A T9-T11: from a top 10 of two brands Claude said all our chef knives were those two.
     ...(scope.exists ? { brands: brandNames(merged) } : {}),
     ...(category ? { category_found: scope.exists } : {}),
     categories,
     ...(categoryNote ? { category_note: categoryNote } : {}),
-    ...(affordable.length ? {} : { note: "No catalogue matches for these words. Try other words the customer might mean, or ask one question." }),
+    ...(affordable.length ? {} : { note: overBudget.length ? BUDGET_NOTE : "No catalogue matches for these words. Try other words the customer might mean, or ask one question." }),
   });
 }
 

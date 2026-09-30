@@ -136,6 +136,36 @@ test("inch marks in names and sizes are shown as ″, so Claude never copies a r
   assert.ok(Object.values(fact).every((value) => typeof value !== "string" || !value.includes(`"`)));
 });
 
+test("a house code is never given as the product's brand (exam 4, c10-A idx 0-2: 'the UB-0292 Utility Tong')", () => {
+  const brand = (value: string) => productFact({ product: product({ stock_id: "A", brand: value }), verified: true }).brand;
+  assert.equal(brand("UB-0292"), null);
+  assert.equal(brand("UB0213"), null);
+  assert.equal(brand("SAFICO"), "SAFICO");
+  assert.equal(brand("UBE"), "UBE");
+});
+
+test("a store Capacity the name's volume contradicts is marked unclear, never quoted as a fact nor dropped (exam 4, c02-A idx 5: Santos 66)", () => {
+  const details = (name: string, capacity: string) => productFact({ product: product({ stock_id: "A", name }), verified: true, details: { "Country of Brand Origin": "FRANCE", Capacity: capacity } }).details;
+  assert.deepEqual(details("Santos Compact Brushless Blender 1.4L", "2.4L"), {
+    "Country of Brand Origin": "FRANCE", Capacity: "unclear: name says 1.4L, store field says 2.4L; don't quote either",
+  });
+  // The name is the wrong side here (the coffee pot holds 1.2L), so the field stays, marked unclear.
+  assert.equal(details("Royal Bone China Tyfoon Coffee Pot with Lid 12L", "1.2L")?.Capacity, "unclear: name says 12L, store field says 1.2L; don't quote either");
+  assert.equal(details("Thermo Future Box EPP Insulated Box Ext Dim:L60xW40xH26cm,2X8L, Ice-Box +2", "2x 10.6L")?.Capacity, "unclear: name says 2X8L, store field says 2x 10.6L; don't quote either");
+  for (const [name, capacity] of [
+    ["Mika Bar Blender with Pc Container, 2.0Liter", "2L"],
+    ["Cerabon Noma Mug Ø87xH103mm, 300ml", "0.3L"],
+    // A count of volumes may give the total ("2x7L" is 14L, "4 x 2.5l" is 10L) or each one (two 12L tanks).
+    ["WNK Twin Cereal Dispenser L43.5xW34xH69cm, 2x7L", "14L"],
+    ["Nemox Table Top Gelato Ice Cream Storage & Display Case 10L, L980xW505xH360mm, 220-240V/50-60Hz/200W/1Ph, 4 Magic Pro 100", "4 x 2.5l"],
+    ["Santos Cold Drink Dispenser 12L,Double Tank 240V/50/1=1 Year Warranty=", "2 X 12 LITRES (Double Tank)"],
+    // No volume in the name: the store's Capacity is the only figure.
+    ["Stock Pot Ø25xH25cm", "12L"],
+  ]) {
+    assert.equal(details(name, capacity)?.Capacity, capacity, name);
+  }
+});
+
 test("an unverified product carries no price, so Claude cannot quote it", () => {
   const item = product({ stock_id: "A", list_price: 12 });
   assert.equal(productFact({ product: item, verified: false }).price_ex_gst, null);
