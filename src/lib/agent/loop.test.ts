@@ -223,6 +223,13 @@ test("a made-up card whose repair fails still gets the backup reply", async () =
   assert.equal(reply.provider, "fallback");
 });
 
+test("an answer code can fix whose repair fails is sent fixed, not as the backup reply (r6 T-R4)", async () => {
+  const { client } = fakeClient([answer({ message: "That one is $99. Which size do you need?" }), new Error("overloaded")]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "That one is the listed price. Which size do you need?");
+});
+
 test("a made-up card next to a style problem still gets the backup reply after the repair", async () => {
   const { client } = fakeClient([
     answer({ message: "Noted. Try this.", card_ids: ["FAKE-1"] }),

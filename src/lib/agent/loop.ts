@@ -572,9 +572,10 @@ export async function runAgentTurn(input: {
       if (message.trim()) return { ...answer, message };
       return { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
     };
-    // A first answer with only style problems can still be sent, lightly tidied, when there is no usable repair.
-    const styleOnly = final && review && !review.safety.length && review.style.length ? final : null;
-    const tidiedFirst = styleOnly && { ...styleOnly, message: tidyMessage(styleOnly.message) };
+    // A first answer whose problems code can fix can still be sent, lightly tidied and fixed, when there is no usable repair: a repair
+    // that fails or runs out of time no longer turns an answer code could send into the backup reply (r6 T-R4).
+    const fixable = final && review && (review.safety.length || review.style.length) && !unfixable(review.safety, fixers).length ? final : null;
+    const tidiedFirst = fixable && { ...fixable, message: tidyMessage(fixable.message) };
     let repairCauses: string[] = [];
     let repaired = false;
     let repairFailed: string | null = null;
@@ -602,7 +603,7 @@ export async function runAgentTurn(input: {
       allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       if (tidiedFirst && unfixable(review.safety, fixers).length) {
-        // The repair brought a made-up card, but the first answer was safe to send: it goes out tidied instead.
+        // The repair brought a made-up card, but code can fix the first answer: it goes out tidied and fixed instead.
         repairFailed = "AGENT_REPLY_REJECTED";
         final = tidiedFirst;
         review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
