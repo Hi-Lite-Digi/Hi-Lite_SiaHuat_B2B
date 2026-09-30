@@ -1135,6 +1135,17 @@ test("'specifically' is not read as 'spec': the 'we don't have it' is still chec
   // runs-new3 c03-stress T1 slipped through this way.
   assert.equal(absenceOf("We don't have a tawa specifically.").length, 1);
   assert.deepEqual(absenceOf("I don't have a spec on that."), []);
+  // Plurals and long forms are still not about a product (review of D9).
+  for (const message of [
+    "I don't have any specifications for that one.",
+    "I don't have a specification sheet for it.",
+    "I don't have any ratings for it.",
+    "I don't have any messages from sales yet.",
+    "I don't have any other links for it.",
+    "We don't have any records of that.",
+    "I don't have any issues with that.",
+    "I don't have any invoices here.",
+  ]) assert.deepEqual(absenceOf(message), [], message);
 });
 
 test("'I couldn't find X' and 'we don't carry X by that name' are not repaired as unbacked, but a range 'we don't carry X' still is (r6 area N)", () => {
@@ -1150,6 +1161,9 @@ test("'I couldn't find X' and 'we don't carry X by that name' are not repaired a
     "I haven't found an actual Japan-made knife brand in our catalogue.",
     "We don't carry a dedicated 'idli steamer' by that name.",
     "We don't have a jar labelled 'kaya jar' specifically.",
+    // Curly or no quotes after "anything called" (review of D10).
+    "We don't list anything called “prata pan”.",
+    "We don't list anything called a prata pan.",
   ]) assert.deepEqual(absenceOf(message), [], message);
   for (const message of [
     // 'list' is checked like 'carry', and a name in another clause doesn't scope it.
@@ -1167,6 +1181,16 @@ test("'I couldn't find X' and 'we don't carry X by that name' are not repaired a
     "We don't carry tandoor ovens.",
     "We don't carry tandoor ovens, and I couldn't find one.",
     "I couldn't find a tandoor, so no substitute either.",
+    // A range claim in any clause, not only the first, still needs the searches (review of D10; PA10313 is a flat griddle).
+    "We don't carry tandoor ovens or anything called 'tandoor'.",
+    "We don't list anything called 'tawa'; we don't carry griddles.",
+    "We don't list anything called 'prata pan' - we don't stock griddles.",
+    "We don't list anything called 'tawa' - we don't carry flat griddle pans either.",
+    "We don't list anything called a 'tawa', and we don't carry flat griddles either.",
+    "I couldn't find anything called 'tawa', and we don't carry griddle pans either.",
+    "I couldn't find anything by that name, and we don't carry tandoor ovens.",
+    "We don't list anything called 'prata pan' - it's not in our catalogue.",
+    "We don't list anything called 'prata pan', and none of our pans would suit.",
   ]) assert.equal(absenceOf(message).length, 1, message);
   // Backed by two queries and a found category, a range 'we don't list' passes.
   assert.deepEqual(absenceOf("We don't list tandoor ovens specifically.", [search({ queries: ["tandoor oven", "clay oven"], category: "ovens", categoryFound: true })]), []);

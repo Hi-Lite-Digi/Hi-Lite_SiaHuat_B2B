@@ -604,8 +604,9 @@ const ranking = (sentence: string) => RANKING.test(sentence) || PRICE_RANK.test(
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product. Whole words
-// only: "We don't have a tawa specifically" is (runs-new3 c03-stress T1 slipped through as "spec").
-const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec|specs|info|information|details?|photos?|pictures?|images?|dates?|confirmation|figures?|rating|record|way|link|attachment|order|invoice|address|code|codes|price|prices|message|live\s+price|issue|problem)\b)`;
+// only: "We don't have a tawa specifically" is (runs-new3 c03-stress T1 slipped through as "spec"); plurals and long forms spelled out
+// ("any other links", "a specification sheet").
+const NOT_A_PRODUCT = String.raw`(?!\s+(?:\w+\s+){0,3}(?:spec(?:ification)?s?|info|information|details?|photos?|pictures?|images?|dates?|confirmations?|figures?|ratings?|records?|ways?|links?|attachments?|orders?|invoices?|address(?:es)?|codes?|prices?|messages?|live\s+prices?|issues?|problems?)\b)`;
 // "I haven't found an actual Japan-made knife brand" and "I don't have anything actually made in Japan" (exam 4, c03-A idx 6,
 // c03-persona idx 4); "I haven't found a boxed set yet" says its own scope, and "I don't have anything else to add" or "anything more
 // on its warranty" is no product. "We don't list tandoor ovens" is checked like "we don't carry" (r6 area N).
@@ -619,8 +620,9 @@ const EVERY_SUBSTITUTE_ABSENT = new RegExp(SUBSTITUTE_ABSENT.source, "gi");
 // found", a Claude round each). It is still disproved by a product seen this turn that it names.
 const EVERY_FOUND_NOTHING = /\b(?:couldn['’]?t|could\s+not|can['’]?t|cannot|didn['’]?t|did\s+not)\s+find\b|\b(?:i['’]?m|am)\s+not\s+finding\b|\b(?:I|we)\s+(?:haven['’]?t|have\s+not)\s+(?:yet\s+)?(?:found|seen|come\s+across)\b/gi;
 // "We don't carry an idli steamer by that name" or "we don't list anything called a 'prata pan'" is about names, not the range; only
-// in its own clause, so "we don't carry tandoor ovens, or anything called 'tandoor'" is still about the range (r6 area N).
-const NAME_SCOPED = /\bby\s+(?:that\s+|the\s+)?name\b|\bunder\s+that\s+name\b|\b(?:called|named|label(?:l)?ed|listed(?:\s+specifically)?\s+as|under)\s+(?:(?:an?|specifically)\s+){0,2}['‘"]/i;
+// in its own clause, so "we don't carry tandoor ovens, or anything called 'tandoor'" is still about the range (r6 area N). Curly or
+// no quotes after "anything called" count too.
+const NAME_SCOPED = /\bby\s+(?:that\s+|the\s+)?name\b|\bunder\s+that\s+name\b|\b(?:anything|nothing)\s+(?:called|named)\b|\b(?:called|named|label(?:l)?ed|listed(?:\s+specifically)?\s+as|under)\s+(?:(?:an?|specifically)\s+){0,2}['‘“"]/i;
 // A range summary beside it still needs the searches: "- the griddles we carry (...) are all electric", "our chef knives are German
 // steel" (r6 area N skeptic: base2 murtabak T1, runs-new3 c03-stress T1).
 const RANGE_TAIL = /(?<!\b(?:closest|nearest)\s+(?:\w+\s+)?)\b(?:we|I)\s+(?:do\s+)?(?:carry|stock|have|sell)\s+(?:\([^)]*\)\s+)?(?:are|is)\b|\bour\s+(?!(?:catalogue|range|listings?|search(?:es)?|results|closest|nearest|best)\b)(?:[\w&/'’-]+\s+){1,4}?(?:are|(?:range|selection|line[- ]?up)\s+is)\b|\bwhat\s+we\s+(?:do\s+)?(?:carry|stock|have|sell)\b|\bwhat['’]?s\s+available\s+(?:are|is)\b|\bsold\s+(?:piece\s+by\s+piece|individually|separately|singly)\b|\b(?:mostly|mainly)\b/i;
@@ -701,9 +703,9 @@ function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>
 /**
  * Sentences that claim more than this turn's searches and live checks back, one kind each: a budget, completeness or ranking claim
  * needs a search that listed a whole (priced) category; "we don't have it" needs two different queries and a category that
- * exists (for "no substitute", a find_alternatives run will do; one scoped to this turn's search or the customer's name for it
- * needs none), and is disproved by a product seen this turn that it names; "out
- * of stock" needs every product it points at checked live as out of stock.
+ * exists, unless it is scoped to this turn's search or the customer's name for it (for "no substitute", a find_alternatives run will
+ * do), and is disproved by a product seen this turn that it names; "out of stock" needs every product it points at checked live as
+ * out of stock.
  */
 function unbackedClaims(message: string, searches: SearchRecord[], seen: ReadonlyMap<string, CheckedProduct>) {
   const complete = searches.some((search) => search.complete);
@@ -740,10 +742,11 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     // Judged without its substitute wording, which find_alternatives backs: "we don't carry X" beside it still needs the searches.
     const withoutSubstitute = sentence.replace(EVERY_SUBSTITUTE_ABSENT, " ");
     const absent = ABSENT.test(withoutSubstitute);
-    // Scoped to this turn's search or to the customer's name for it, not the range: the clause from the absence to the first dash,
-    // comma, semicolon or "but" names it, or the absence is only a "couldn't find". A range summary beside it keeps it a range claim.
-    const clause = withoutSubstitute.slice(Math.max(0, withoutSubstitute.search(ABSENT))).split(/\s[-–—]\s|[;,]|\bbut\b/i)[0];
-    const scoped = absent && !RANGE_TAIL.test(sentence) && (NAME_SCOPED.test(clause) || !ABSENT.test(withoutSubstitute.replace(EVERY_FOUND_NOTHING, " ")));
+    // Scoped to this turn's search or to the customer's name for it, not the range: every clause (split at a dash, comma, semicolon,
+    // "but" or "or") that says we don't have it names it or is only a "couldn't find", so "we don't list anything called 'tawa' - we
+    // don't carry griddles" is still a range claim (review of D10). A range summary beside it keeps it a range claim too.
+    const clauses = withoutSubstitute.split(/\s[-–—]\s|[;,]|\bbut\b|\bor\b/i);
+    const scoped = absent && !RANGE_TAIL.test(sentence) && clauses.every((part) => NAME_SCOPED.test(part) || !ABSENT.test(part.replace(EVERY_FOUND_NOTHING, " ")));
     const absence = (absent || SUBSTITUTE_ABSENT.test(sentence)) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence);
     const found = absence ? disprovedBy(sentence, seen, absent, sources) : [];
     // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it". A backed
