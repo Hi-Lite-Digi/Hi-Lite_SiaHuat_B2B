@@ -61,8 +61,22 @@ test("Claire describes stock as the tools found it, keeps fitting products when 
   assert.ok(CLAIRE_AGENT_PROMPT.includes("- Not in our catalogue (you ran at least two different searches"));
 });
 
-test("Claire only states product facts the tools gave", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Only state a product's material, features, use, capacity, size, compatibility or origin if it appears in the tool facts (name, category, size, dimensions, description, details). If it isn't there, say you can't confirm it and share the product link. Read the whole description before saying a product lacks something."));
+test("Claire only states product facts the tools gave for that product, and works out no fits or throughputs herself", () => {
+  // exam 4: another plate's '220°C', the MX1200's drinks a day for the MX1000, '12″ vs 25cm is close' (s01-B), pans per shelf.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Only state a product's material, features, use, capacity, size, compatibility or origin if it appears in that product's own tool facts (name, category, size, dimensions, description, details). Never carry a spec over from a similar product, and never work out a throughput (drinks a day), place settings, pans per shelf or whether one item fits another yourself; if the facts don't say, say Sia Huat sales can confirm and share the product link. Never say one size is close to, fits in, or is longer than another unless both sizes are in the facts and the comparison holds in one unit (1in = 2.54cm). Read the whole description before saying a product lacks something."));
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("If it isn't there, say you can't confirm it and share the product link."));
+});
+
+test("Claire's wording on rankings, stock per item code, origin, series, earlier cards and cheaper asks (exam 4, P4-F5)", () => {
+  const lineWith = (start: string) => CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith(start)) ?? "";
+  assert.ok(lineWith("- 'The cheapest', 'the biggest', 'the only'").endsWith(" Price-order words ('the cheapest', 'the most budget', 'next up in price') and summaries of the range by brand, origin or material are whole-range claims too. Stock is per item code: one colour or size being out of stock says nothing about its brand or its other colours; name an out-of-stock product by its item code."));
+  assert.ok(lineWith("- details are the store's own fields.").endsWith(" A customer asking for <country> knives or <country>-made items wants brands from there: search the product type and check 'Country of Brand Origin' in each result's details; never say we have no <country> brand when a tool result this turn shows one."));
+  assert.ok(lineWith("- Extras and matches:").endsWith(" To find matching pieces, search the series by its brand and series name."));
+  assert.ok(lineWith("- Cards:").includes("Describe stock only as each product's stock field and available_quantity say, for that item code; give the current figure and don't guess why it differs from an earlier one; 'not checked' never means out of stock."));
+  assert.ok(lineWith("- The [cards shown: …] notes").endsWith(" 'the other one' or a feature of an earlier card is about cards already shown: get_product those cards and check their facts before searching for new products."));
+  assert.ok(lineWith("- Nearest match:").endsWith(" When they say a price is too high or ask for cheaper, search the category with max_price below the price they turned down."));
+  // No exam answers written into the prompt, no Gastronorm fit rule (owner question 10), and no "say it was your mistake".
+  for (const words of ["Global", "Diwali", "Gastronorm", "your mistake"]) assert.ok(!CLAIRE_AGENT_PROMPT.includes(words), words);
 });
 
 test("Claire keeps to the facts on extras, sizes, matches, superlatives and the nearest match (exam 3)", () => {
