@@ -618,6 +618,16 @@ test("the removal line replaces only a removal whose line is still on the enquir
   assert.equal(withoutEnquiryClaims("Removed the HET-4 and set the HET-6 to 3.", { ...removedHet4, lines: [{ ...het6Line, quantity: 1, total: 250 }] }), "That change isn't on your enquiry yet.");
   assert.equal(withoutEnquiryClaims("I've removed the torch and I'll add 2 more plates now.", { lines: [line("RS-J1009-7", 2)], changes: [{ action: "remove", code: "BTS-8026D" }], seen: shop }),
     "That change isn't on your enquiry yet.");
+  // Y4 second re-check: a pronoun, or a code not looked up this turn, leaves only the other item named; the removal that ran may be
+  // the one the claim means, so the removed line can't be said to be still there.
+  const het6One = { ...removedHet4, lines: [{ ...het6Line, quantity: 1, total: 250 }] };
+  for (const message of ["Removed it and set the HET-6 to 3.", "Removed that one and I'll add 2 more HET-6 now.", "Removed it so the HET-6 is now 3."]) {
+    assert.equal(withoutEnquiryClaims(message, het6One), "That change isn't on your enquiry yet.", message);
+  }
+  assert.equal(withoutEnquiryClaims("Removed the HET-4 and set the HET-6 to 3.", { ...het6One, seen: new Map([...toasters].filter(([code]) => code !== "HET-4")) }),
+    "That change isn't on your enquiry yet.");
+  assert.equal(withoutEnquiryClaims("I've removed it and I'll add 2 more plates now.", { lines: [line("RS-J1009-7", 2)], changes: [{ action: "remove", code: "BTS-8026D" }], seen: shop }),
+    "That change isn't on your enquiry yet.");
 });
 
 test("sums, GST, questions about what the customer wants and promises that wait are not enquiry claims", () => {
