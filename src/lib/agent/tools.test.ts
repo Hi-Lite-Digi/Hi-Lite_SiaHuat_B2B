@@ -1019,6 +1019,17 @@ test("removing a line that could not be re-checked goes through the check too", 
   assert.deepEqual(check.calls.map((p) => [p.code, p.action]), [["F46700", "remove"]]);
 });
 
+test("once the work deadline has cut the round, an update still running changes nothing", async () => {
+  // r6 review: an add that landed after the cut went onto the enquiry while the answer said it wasn't done.
+  const adding = context(undefined, { customerTexts: ["2 please"], closed: true });
+  assert.equal(bodyOf(await addSafico(adding)).error, "NOT_FINISHED");
+  assert.deepEqual([adding.lines, adding.changes], [[], []]);
+  // A line that couldn't be re-checked stays too.
+  const removing = context(undefined, { uncheckedCodes: ["F46700"], closed: true });
+  assert.equal(bodyOf(await update(removing, { action: "remove", stock_id: "F46700" })).error, "NOT_FINISHED");
+  assert.deepEqual([removing.uncheckedCodes, removing.changes], [["F46700"], []]);
+});
+
 const tong16 = product({ stock_id: "UT16HR", name: "Utility Tong 16 inch", list_price: 3.5 });
 const tong165 = product({ stock_id: "2564L", name: "Long Tong 16.5 inch", list_price: 4.2 });
 const tongLine = { item: tong16.name, code: "UT16HR", pricePerItem: 3.5, quantity: 2, total: 7, uom: "PC" };

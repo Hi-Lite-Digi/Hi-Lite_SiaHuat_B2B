@@ -59,6 +59,11 @@ export type TurnContext = {
   pickFast: number;
   /** The customer's last two typed texts ask about GST: the totals and product facts Claude sees then carry code's estimate with GST. */
   gstAsked?: boolean;
+  /**
+   * The work deadline cut this turn's tool round, and the answer was told the updates still running didn't finish: they change
+   * nothing when they land (r6 review: an add whose pick verdict came after the cut still went onto the enquiry).
+   */
+  closed?: boolean;
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -316,7 +321,6 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   const totalFound = scope.exists ? scope.total - ruledOut + merged.filter((item) => !inScope(item)).length : merged.length;
   // A search that returned its full row limit may have more matches than it could return.
   const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
-  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
   // Hits that only max_price removed are still matches, above the budget: "No catalogue matches" read as nothing cheaper (exam 4,
   // c06-stress idx 2-3), so the note says so and categories come from them. Ruled-out hits are no matches at any price.
   const overBudget = merged.length || !input.max_price ? [] : queryLists.flat().filter((item) => !ruledOutItem(item) && item.list_price > (input.max_price ?? Infinity));
@@ -331,6 +335,9 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     Promise.all(top.map((item) => liveCheck(item, ctx.deps))),
     lookupDetails(ctx, top.map((item) => item.stock_id)),
   ]);
+  // Recorded once its results are ready, not before its live checks (the slow part): a search the deadline cut while they ran backed
+  // "that's all" and "we don't carry" in an answer that was told it didn't finish (r6 review).
+  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
   const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
@@ -637,6 +644,7 @@ async function changeEnquiry(input: EnquiryInput, ctx: TurnContext) {
   if (input.action !== "clear" && ctx.uncheckedCodes.some((item) => item.toLowerCase() === code)) {
     // exam 3, c08-stress T12: a bare STOCK_UNVERIFIED led to retries, then a claim the line was removed.
     if (input.action !== "remove") return fail("STOCK_UNVERIFIED", { note: "This line is still on the customer's enquiry but couldn't be re-checked just now; don't change it this turn." });
+    if (ctx.closed) return fail("NOT_FINISHED");
     ctx.uncheckedCodes = ctx.uncheckedCodes.filter((item) => item.toLowerCase() !== code);
     ctx.changes.push({ action: "remove", code: input.stock_id ?? null });
     return ok(enquiryState(ctx));
@@ -661,6 +669,7 @@ async function changeEnquiry(input: EnquiryInput, ctx: TurnContext) {
   }, input.action === "clear" ? ctx.clearTexts : ctx.customerTexts, ctx.deps, { currentText: ctx.currentText });
   if (result.product) remember(ctx, result.product);
   if (!result.ok) return fail(result.error, { available: result.available ?? undefined, notice: result.notice || undefined });
+  if (ctx.closed) return fail("NOT_FINISHED");
   ctx.lines = result.lines;
   ctx.changes.push({ action: input.action, code: result.product?.product.stock_id ?? input.stock_id ?? null });
   if (input.action === "clear") ctx.uncheckedCodes = [];

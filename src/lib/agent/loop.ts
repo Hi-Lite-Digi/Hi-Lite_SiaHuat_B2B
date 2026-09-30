@@ -456,7 +456,8 @@ export async function runAgentTurn(input: {
     // round started with 12.6 s left and the answer was cut off. With calls and rounds up to about 3 s, lastCallMs decides.
     const roundNeedMs = () => Math.max(lastCallMs, 2.5 * slowestCall + slowestTools);
     for (let round = 0; round <= MAX_TOOL_ROUNDS && !result; round += 1) {
-      if (!stopped && listTurn && round > 0 && toolNames.length > 0) stopped = "list";
+      // A cut with nothing found gets NOTHING_FOUND_NOTE instead: the list note says to answer with what was found (r6 review).
+      if (!stopped && listTurn && round > 0 && toolNames.length > 0 && !(cut && !finishedTools)) stopped = "list";
       // The first call is never out of time; after a tool round, answer now when another round won't fit.
       const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= roundNeedMs());
       const forceAnswer = stopped !== null || outOfTime;
@@ -487,6 +488,7 @@ export async function runAgentTurn(input: {
           // (owner's chat, 2026-09-30: a cut round went straight to the backup reply).
           if (!answerAfterCut()) throw error;
           cut = "tools";
+          ctx.closed = true;
           searchCut = ctx.searches.length;
           return roundResults(content, outcomes);
         });

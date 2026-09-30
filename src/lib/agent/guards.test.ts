@@ -505,9 +505,12 @@ test("an apology before 'Got it: N' still claims an add", () => {
   // r6 rescue sample: "Sorry, got it: 2 ..." after a cut, with nothing added and the enquiry empty.
   const crepe = new Map([checked("LACOR-22", "Lacor Robust Non-Stick Crepe Pan Ø22cm", 48.81)]);
   const facts = { lines: [], changes: [], seen: crepe };
-  assert.equal(enquiryClaimIssues("Sorry, got it: 2 of the Lacor Robust Non-Stick Crepe Pan Ø22cm.", facts).length, 1);
+  // With a dash, "about that" or "Oops" too (r6 review).
+  for (const apology of ["Sorry,", "Sorry -", "Sorry —", "Sorry about that,", "Oops,"]) {
+    assert.equal(enquiryClaimIssues(`${apology} got it: 2 of the Lacor Robust Non-Stick Crepe Pan Ø22cm.`, facts).length, 1, apology);
+  }
   // Echoed numbers and plain apologies are still not claims.
-  for (const message of ["Sorry, got it, 4 pax.", "Sorry, 2 sizes are listed."]) assert.deepEqual(enquiryClaimIssues(message, facts), [], message);
+  for (const message of ["Sorry, got it, 4 pax.", "Sorry - got it, 4 pax.", "Sorry, 2 sizes are listed.", "Oops, 2 sizes are listed."]) assert.deepEqual(enquiryClaimIssues(message, facts), [], message);
 });
 
 test("claims are checked per item", () => {

@@ -9,6 +9,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { cardsNote, type AgentRequest } from "./contract";
 import { runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, fakePickCheck, product } from "./testing";
+import type { PickCheck } from "./verify";
 
 const S = 40;
 const TIMES = { deadlineMs: 45 * S, fallbackReserveMs: 10 * S, standInMs: 4 * S, lastCallMs: 12 * S };
@@ -260,38 +261,109 @@ test("a first call that never answers is tried once more without tools", async (
   assert.deepEqual(log.turnLog().map((line) => [line.cut, line.forcedEarly]), [["call", true]]);
 });
 
-test("an add whose live check stalls past the work deadline is not made after the cut", async (t) => {
-  const log = quiet(t);
-  const deps = slowSearches([]);
-  const fetchLive = deps.fetchLive;
-  // The add's lookup starts at about 2 s and its live check lands at about 36.5 s: after the cut at 35 s, before the answer at 38 s.
-  deps.fetchLive = (url, ms) => (url === blowtorch.source_url ? new Promise((resolve) => setTimeout(resolve, 34.5 * S)).then(() => fetchLive(url, ms)) : fetchLive(url, ms));
-  const { client, bodies } = timedClient([
-    { ms: 2 * S, reply: toolUse({ id: "u1", name: "update_enquiry", input: { action: "add", stock_id: "970S", quantity: 2 } }) },
-    { ms: 3 * S, reply: answer({ message: "Sorry, I couldn't add the blow torch just now. Could you send that again?" }) },
-  ]);
-  const request: AgentRequest = {
-    sessionId: "session-torch001", event: { type: "text", text: "2 of the 970S please" }, enquiry: [], shownProductIds: ["970S"],
-    history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "This one is a handheld kitchen blow torch." }],
+const torchRequest = (): AgentRequest => ({
+  sessionId: "session-torch001", event: { type: "text", text: "2 of the 970S please" }, enquiry: [], shownProductIds: ["970S"],
+  history: [{ role: "user", content: "blow torch" }, { role: "assistant", content: "This one is a handheld kitchen blow torch." }],
+});
+const addTorch = { id: "u1", name: "update_enquiry", input: { action: "add", stock_id: "970S", quantity: 2 } };
+const NOT_ADDED = answer({ message: "Sorry, I couldn't add the blow torch just now. Could you send that again?" });
+
+/** Catalogue fakes whose live check of `item` lands 34.5 s after it starts; searchDirect's calls are counted. */
+function stalledLive(catalogue: ReturnType<typeof product>[], item: ReturnType<typeof product>) {
+  const deps = Object.assign(fakeDeps(catalogue), { searches: 0 });
+  const { fetchLive, searchDirect } = deps;
+  deps.fetchLive = (url, ms) => (url === item.source_url ? new Promise((resolve) => setTimeout(resolve, 34.5 * S)).then(() => fetchLive(url, ms)) : fetchLive(url, ms));
+  deps.searchDirect = (query, limit) => {
+    deps.searches += 1;
+    return searchDirect(query, limit);
   };
-  const reply = await runAgentTurn({ request, deps, client, model: "claude-sonnet-5", pickCheck: () => fakePickCheck(), ...TIMES });
+  return deps;
+}
+
+test("an add whose live check stalls past the work deadline is not made after the cut, and no lookup starts after it", async (t) => {
+  const log = quiet(t);
+  // The add's lookup starts at about 2 s and its live check lands at about 36.5 s: after the cut at 35 s, before the answer at 38 s.
+  const deps = stalledLive([griddle, blowtorch], blowtorch);
+  const { client, bodies } = timedClient([{ ms: 2 * S, reply: toolUse(addTorch, search("s1", "griddle")) }, { ms: 3 * S, reply: NOT_ADDED }]);
+  const reply = await runAgentTurn({ request: torchRequest(), deps, client, model: "claude-sonnet-5", pickCheck: () => fakePickCheck(), ...TIMES });
   assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
   assert.deepEqual(reply.enquiry.lines, []);
-  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /NOT_FINISHED/);
+  assert.deepEqual(toolResults(bodies[1]).map((block) => [block.tool_use_id, /NOT_FINISHED/.test(String(block.content))]), [["u1", true], ["s1", true]]);
+  // r6 review: the round's search waits behind the add, so it would start at about 36.5 s, after the cut.
+  assert.equal(deps.searches, 0);
   assert.deepEqual(log.turnLog().map((line) => [line.cut, line.updates]), [["tools", ["add:NOT_FINISHED"]]]);
 });
 
+test("an add already running at the cut makes no change after it", async (t) => {
+  const log = quiet(t);
+  // r6 review: the add is past its start when its pick verdict lands at about 36.5 s, after the cut at 35 s. In production: a tapped
+  // card's add (no pick check) whose live-check retry crosses the cut.
+  const fake = fakePickCheck();
+  const slowCheck: PickCheck = (p) => new Promise((resolve) => setTimeout(resolve, 34.5 * S)).then(() => fake(p));
+  const { client, bodies } = timedClient([{ ms: 2 * S, reply: toolUse(addTorch) }, { ms: 3 * S, reply: NOT_ADDED }]);
+  const reply = await runAgentTurn({ request: torchRequest(), deps: slowSearches([]), client, model: "claude-sonnet-5", pickCheck: () => slowCheck, ...TIMES });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  assert.equal(fake.calls.length, 1);
+  // The answer was told the add didn't finish, so the enquiry must not have it.
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /NOT_FINISHED/);
+  assert.deepEqual(reply.enquiry.lines, []);
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, line.updates]), [["tools", ["add:NOT_FINISHED"]]]);
+});
+
+// A category search that finds its category (with two queries, it would back "we don't carry X").
+const crepeCategory = product({ stock_id: "CREPE-24", name: "CREPE PAN 24CM", list_price: 48.81, third_category: "Crepe pans" });
+const crepeSearch = { id: "s1", name: "search_catalogue", input: { queries: ["prata pan", "tawa"], category: "crepe pans" } };
+
 test("a search cut at the deadline that lands during the answer backs no claim", async (t) => {
   const log = quiet(t);
-  // A category search that finds its category (with two queries, it would back "we don't carry X"), landing at about 36.5 s.
-  const crepePans = product({ stock_id: "CREPE-24", name: "CREPE PAN 24CM", list_price: 48.81, third_category: "Crepe pans" });
+  // The search lands at about 36.5 s.
   const { client } = timedClient([
-    { ms: 2 * S, reply: toolUse({ id: "s1", name: "search_catalogue", input: { queries: ["prata pan", "tawa"], category: "crepe pans" } }) },
+    { ms: 2 * S, reply: toolUse(crepeSearch) },
     { ms: 3.5 * S, reply: answer({ message: "Sorry, we don't carry prata pans. Is it for home or for a shop?" }) },
   ]);
-  await runAgentTurn({ request: prata(), deps: fakeDepsWithDelay([crepePans], 34.5 * S), client, model: "claude-sonnet-5", ...TIMES });
+  await runAgentTurn({ request: prata(), deps: fakeDepsWithDelay([crepeCategory], 34.5 * S), client, model: "claude-sonnet-5", ...TIMES });
   // The answer never saw that search, so the search can't back what it says.
   assert.deepEqual(log.turnLog().map((line) => [line.cut, (line.repairCauses as string[]).includes("ABSENCE")]), [["tools", true]]);
+});
+
+// r6 review: the catalogue query answers at once and the live checks (a search's slow part) land at about 36.5 s, after the cut.
+test("a search whose live checks land after the cut backs no 'we don't carry' claim", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([
+    { ms: 2 * S, reply: toolUse(crepeSearch) },
+    { ms: 3.5 * S, reply: answer({ message: "Sorry, we don't carry prata pans. Is it for home or for a shop?" }) },
+  ]);
+  await runAgentTurn({ request: prata(), deps: stalledLive([crepeCategory], crepeCategory), client, model: "claude-sonnet-5", ...TIMES });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /NOT_FINISHED/);
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, (line.repairCauses as string[]).includes("ABSENCE")]), [["tools", true]]);
+});
+
+test("a search whose live checks land after the cut backs no 'full range' claim", async (t) => {
+  const log = quiet(t);
+  const { client } = timedClient([
+    { ms: 2 * S, reply: toolUse(crepeSearch) },
+    { ms: 3.5 * S, reply: answer({ message: "That's our full range of crepe pans. Is it for home or for a shop?" }) },
+  ]);
+  const reply = await runAgentTurn({ request: prata(), deps: stalledLive([crepeCategory], crepeCategory), client, model: "claude-sonnet-5", ...TIMES });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  // Code removes the claim: after the cut there is no time for a repair.
+  assert.equal(reply.message, "Is it for home or for a shop?");
+  assert.deepEqual(log.turnLog().map((line) => line.cut), ["tools"]);
+});
+
+test("a pasted list with nothing found by the cut gets the nothing-found note, not the list note", async (t) => {
+  const log = quiet(t);
+  const { client, bodies } = timedClient([{ ms: 2 * S, reply: toolUse(search("s1", "wok")) }, { ms: 3 * S, reply: answer({ message: "Which wok size do you need?" }) }]);
+  const request: AgentRequest = {
+    sessionId: "session-list0001", event: { type: "text", text: "need:\n1. wok\n2. ladle\n3. tongs\n4. griddle" }, enquiry: [], shownProductIds: [], history: [],
+  };
+  const reply = await runAgentTurn({ request, deps: slowSearches([HANG]), client, model: "claude-sonnet-5", ...TIMES });
+  assert.equal(reply.provider, "anthropic", JSON.stringify(log.fallbacks()));
+  // r6 review: the list note said "answer now with what you found for the first items, one card each" with nothing found.
+  const last = JSON.stringify(bodies[1].messages.at(-1));
+  assert.match(last, /Nothing could be looked up/);
+  assert.doesNotMatch(last, /all the lookups for this list/);
+  assert.deepEqual(log.turnLog().map((line) => [line.cut, line.stopped, line.forcedEarly]), [["tools", null, true]]);
 });
 
 // Real time scale (about 8 s): the nudge's 15 s minimum isn't an input, so a scaled test can't reach it.
