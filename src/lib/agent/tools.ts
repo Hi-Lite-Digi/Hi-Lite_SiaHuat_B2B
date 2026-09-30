@@ -155,7 +155,8 @@ const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
 const DETAILS_TIMEOUT_MS = 1_500;
 const BUDGET_NOTE = "Nothing within max_price among the top matches for these words; they are all above it. Try the customer's own shorter words (one key word) with max_price, or a category from categories, before saying there is nothing cheaper.";
 // A bare error read as a broken system: "Sorry, I'm having trouble searching our catalogue right now" in all 8 replayed outage turns
-// (r6, real model), each after 2-3 search retries (about 10 s). With this note: "Sorry, I couldn't check that just now...", about 5 s.
+// (r6, real model), each after 2-3 search retries (about 10 s). An earlier wording of this note gave "Sorry, I couldn't check that
+// just now...", about 5 s; this wording (no sizes, brands or products of its own) is not yet measured.
 const SEARCH_UNAVAILABLE_NOTE = "The catalogue didn't answer this time, so nothing was found or ruled out. Don't say you're having trouble, that anything is down or broken, or that we don't have it. In a few words say you couldn't check that just now and ask them to send it again, and if it helps, what it's for or the size, without suggesting sizes, brands or products yourself; set show_contact true so Sia Huat sales can help meanwhile.";
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);

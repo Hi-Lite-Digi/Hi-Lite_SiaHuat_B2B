@@ -155,6 +155,8 @@ const OFFER_ISSUE_PREFIX = "Your last reply ended with the same offer";
 const photoAgain = /\b(?:re-?send(?:ing)?|send(?:ing)? (?:it|the (?:photo|image|picture|pic)) (?:again|once more)|attach(?:ing)? (?:it|the (?:photo|image|picture)) again|try (?:attaching|sending|resending))\b|\b(?:photo|image|picture|pic)\b[^.?!]{0,40}\b(?:come|came|coming|go|goes|went|going) through\b/i;
 // Only a question counts: "Thanks for resending, the photo came through" is not an ask.
 const asksPhotoAgain = (message: string) => sentences(message).some((sentence) => /[?？]$/.test(sentence) && photoAgain.test(sentence));
+// Only when a photo is what was asked for: two catalogue outages in a row ask to "resend" the request (D7 review).
+const mentionsPhoto = /\b(?:photo|image|picture|pic)s?\b/i;
 export const PHOTO_AGAIN_ISSUE = "You already asked once for the photo. Don't ask again: ask what it looks like or what it's for (shape, size, material, any brand or label) and offer Sia Huat sales (show_contact true).";
 
 function repetitionIssues(message: string, cards: Product[], earlier: EarlierTurns, changed: boolean, needed: boolean) {
@@ -176,7 +178,7 @@ function repetitionIssues(message: string, cards: Product[], earlier: EarlierTur
   if (offer && offerBefore && earlier.currentText && !changed && !plainYes.test(earlier.currentText) && key === cardSetKey(earlier.cardSets.at(-1) ?? []) && sameOffer(offer, offerBefore)) {
     issues.push(`${OFFER_ISSUE_PREFIX} ("${offerBefore.slice(0, 160)}") and the customer didn't take it up. Don't make it again: answer what they just said, or try a different next step. Tools are off for this fix, so don't say anything was added, removed or checked.`);
   }
-  if (previous !== null && asksPhotoAgain(message) && asksPhotoAgain(previous)) issues.push(PHOTO_AGAIN_ISSUE);
+  if (previous !== null && asksPhotoAgain(message) && asksPhotoAgain(previous) && mentionsPhoto.test(`${previous} ${message}`)) issues.push(PHOTO_AGAIN_ISSUE);
   return issues;
 }
 

@@ -1233,6 +1233,16 @@ test("an answer the fixers empty with no card left gets a next step", async () =
   assert.equal(reply.showContact, true);
 });
 
+test("a cards-only line with no cards and no link complaint gets the next step, not the broken-link line", async () => {
+  // D8 review: nobody mentioned a link, so "that link isn't opening" would be a false statement.
+  const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] }), answer({ message: "Here are some options." })]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).");
+  assert.equal(reply.showContact, true);
+});
+
 test("a completeness claim backed by a complete category search is sent without a repair", async () => {
   const lighters = [
     product({ stock_id: "GL1", name: "COOKING TORCH", third_category: "Gas lighters" }),

@@ -253,7 +253,12 @@ test("asking for the photo again a second time is flagged", () => {
   // The photo arriving after one resend is not a second ask.
   assert.deepEqual(style("Thanks, the photo came through. It looks like a cassette gas torch."), []);
   assert.deepEqual(style("Thanks for resending the photo! It looks like a cassette gas torch."), []);
+  assert.deepEqual(style("Sorry, could you resend it?"), [PHOTO_AGAIN_ISSUE]);
   assert.equal(issueCode(PHOTO_AGAIN_ISSUE), "REPEAT");
+  // D7 review: two catalogue outages in a row ask to resend the request, not a photo.
+  const outage = { ...earlier, previousMessage: "Sorry, I couldn't check that just now. Could you resend your request, maybe with the size?" };
+  const outageStyle = reviewAnswer({ message: "Sorry, I couldn't check that just now. Could you try sending that again, with the length you need?", card_ids: [], chips: [], show_contact: true }, seen, allowed, outage).style;
+  assert.deepEqual(outageStyle, []);
 });
 
 test("a repeated sales pitch is dropped unless the customer asked for contact, a quote or only said thanks", () => {

@@ -546,7 +546,9 @@ export async function runAgentTurn(input: {
       const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
       // With every card dropped, the words pointing at them go too (r3 c08-stress idx 5: "the card below carries the same details").
       const message = answer.card_ids.length && !kept.length ? withoutCardPointers(answer.message) : answer.message;
-      if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: BROKEN_LINK_MESSAGE, show_contact: true };
+      // The link line only when a card was really dropped for its link: a cards-only line with no cards is not a link complaint (D8 review).
+      const nothingLeft = answer.card_ids.length ? BROKEN_LINK_MESSAGE : NOTHING_LEFT_MESSAGE;
+      if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: nothingLeft, show_contact: true };
       return withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused);
     };
     let final = result.final && await withEarlierCards(trimCards(result.final));
