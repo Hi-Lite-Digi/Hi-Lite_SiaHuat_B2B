@@ -1,5 +1,5 @@
 import { Check, Database, MessageCircleMore, ShieldCheck } from "lucide-react";
-import { ChatDemo } from "@/components/chat-demo";
+import { AgentChat } from "@/components/agent-chat";
 
 const features = [
   { icon: Database, title: "Complete website catalogue", copy: "Search all public items by code, name, brand or specification." },
@@ -17,7 +17,7 @@ export default function Home() {
         <div className="mt-7 divide-y divide-[#15362f]/12 border-y border-[#15362f]/12">{features.map(({ icon: Icon, title, copy }) => <div key={title} className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 py-3.5 xl:py-4"><div className="grid size-9 place-items-center rounded-full bg-white/70 text-[#df5c30]"><Icon className="size-4" /></div><div className="min-w-0"><h2 className="font-semibold">{title}</h2><p className="text-sm text-[#6a7d77]">{copy}</p></div><Check className="size-4 text-[#2d8a6c]" /></div>)}</div>
         <p className="mt-4 text-xs text-[#7a8984]">The demo does not place an order or notify sales automatically. Export and share the PDF summary to continue.</p>
       </section>
-      <section className="order-1 flex min-w-0 w-full justify-center lg:order-2 lg:justify-end" aria-label="Product assistant demo"><ChatDemo /></section>
+      <section className="order-1 flex min-w-0 w-full justify-center lg:order-2 lg:justify-end" aria-label="Product assistant demo"><AgentChat /></section>
     </div>
   </main>;
 }
