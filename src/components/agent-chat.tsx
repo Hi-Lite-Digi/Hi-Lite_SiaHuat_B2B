@@ -77,6 +77,7 @@ export function AgentChat() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const newChatRef = useRef<HTMLButtonElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { itemsRef.current = items; }, [items]);
@@ -259,8 +260,9 @@ export function AgentChat() {
     setNotice("");
     setShowLines(false);
     setItems([{ id: nextId.current++, role: "assistant", text: NEW_CHAT_GREETING, time: timeLabel() }]);
-    // With a mouse, back to the message box; on a phone this would pop the keyboard up, so not there.
-    window.setTimeout(() => { if (window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus(); }, 0);
+    // With a mouse, back to the message box; on a phone that would pop the keyboard up, so back to New chat instead
+    // (the confirm bar's buttons are gone, and focus would otherwise fall to the top of the page).
+    window.setTimeout(() => { (window.matchMedia("(pointer: fine)").matches ? inputRef : newChatRef).current?.focus(); }, 0);
   }
 
   return <div className="flex h-[min(860px,calc(100dvh-2rem))] w-full max-w-[460px] flex-col overflow-hidden rounded-[2rem] border-8 border-[#15362f] bg-[#f7f4ec] shadow-2xl">
@@ -272,14 +274,14 @@ export function AgentChat() {
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <Button aria-label="Download enquiry PDF" variant="ghost" className="h-11 min-w-11 flex-col gap-0.5 rounded-xl px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => void savePdf()}><FileDown className="size-4" /><span className="text-[10px] font-semibold leading-3">PDF</span></Button>
-        <Button aria-expanded={confirmingReset} variant="ghost" className="h-11 min-w-11 flex-col gap-0.5 rounded-xl px-1.5 text-white hover:bg-white/10 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white" onClick={askReset}><SquarePen className="size-4" /><span className="text-[10px] font-semibold leading-3">New chat</span></Button>
+        <Button ref={newChatRef} aria-expanded={confirmingReset} variant="ghost" className="h-11 min-w-11 flex-col gap-0.5 rounded-xl px-1.5 text-white hover:bg-white/10 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white" onClick={askReset}><SquarePen className="size-4" /><span className="text-[10px] font-semibold leading-3">New chat</span></Button>
       </div>
     </header>
     {confirmingReset && resetWarning && <div id="new-chat-confirm" role="group" aria-labelledby="new-chat-title" className="border-b border-[#15362f]/10 bg-white px-4 py-3 text-xs text-[#15362f]">
       <p id="new-chat-title" className="text-sm font-semibold">Start a new chat?</p>
       <p className="mt-0.5 leading-5 text-[#334b44]">{resetWarning}</p>
       <div className="mt-2.5 flex justify-end gap-2">
-        <Button type="button" variant="ghost" onClick={() => setConfirmingReset(false)} className="h-10 rounded-full border border-[#176853]/30 px-4 text-xs font-semibold text-[#176853] hover:bg-[#eef7f3]">Cancel</Button>
+        <Button type="button" variant="ghost" onClick={() => { setConfirmingReset(false); newChatRef.current?.focus(); }} className="h-10 rounded-full border border-[#176853]/30 px-4 text-xs font-semibold text-[#176853] hover:bg-[#eef7f3]">Cancel</Button>
         <Button type="button" onClick={reset} className="h-10 rounded-full bg-[#176853] px-4 text-xs font-semibold text-white hover:bg-[#125441]">Start new chat</Button>
       </div>
     </div>}
