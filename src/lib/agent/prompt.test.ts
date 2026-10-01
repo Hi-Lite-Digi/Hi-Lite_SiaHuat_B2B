@@ -273,3 +273,8 @@ test("Claire only gives store links from the tools or the chat, and handles a li
   assert.ok(CLAIRE_AGENT_PROMPT.includes("never build one from an item code"));
   assert.ok(CLAIRE_AGENT_PROMPT.includes("don't send that link again and don't blame their browser or network"));
 });
+
+test("asked for a new chat, Claire points to the New chat button and clears the enquiry only when asked", () => {
+  // Reset check (2026-10-01): typed "reset" only got "Your enquiry is already empty", and typed "new chat" was ignored.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("say in a few words that the New chat button at the top starts a fresh one. Clear the enquiry (update_enquiry) only when they asked to clear it, start over or reset; 'new chat' alone isn't that."));
+});
