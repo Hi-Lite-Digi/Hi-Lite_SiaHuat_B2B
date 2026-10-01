@@ -1084,6 +1084,13 @@ test("a doubly escaped character reaches the customer as the character (r4 c11-A
   assert.equal(smiled.message, "Happy cooking 😊");
 });
 
+test("a doubly escaped quote reaches the customer as an inch mark or a quote, not a backslash (live, 1 Oct: 'Ø5\\\" up to Ø21\\\"')", async () => {
+  const { client } = fakeClient([answer({ message: "We carry sizes from Ø5\\\" up to Ø21\\\" - the \\\"Hokkien Deluxe\\\" range.", chips: ["The \\\"Deluxe\\\" range"] })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "bamboo steamer" } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.message, "We carry sizes from Ø5″ up to Ø21″ - the 'Hokkien Deluxe' range.");
+  assert.deepEqual(reply.chips, ["The 'Deluxe' range"]);
+});
+
 test("a closing 'Anything else?' with no enquiry change this turn is dropped (r4 c09-persona, c03-stress)", async () => {
   const { client } = fakeClient([answer({ message: "The blow torch is for kitchen use. Anything else?" })]);
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "the blow torch for kitchen or not" } }), deps: deps(), client, model: "claude-sonnet-5" });

@@ -56,9 +56,13 @@ const finalSchema: Record<string, unknown> = {
     show_contact: { type: "boolean" },
   },
 };
-// A doubly escaped character ("\\u2014" in the JSON) reached the customer as six raw characters, not a dash (r4 c11-A idx 1).
-// Decoded here, so repairs are decoded too and the guards read the real text.
-const decodeEscapes = (text: string) => text.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+// A doubly escaped character ("\\u2014" in the JSON) reached the customer as six raw characters, not a dash (r4 c11-A idx 1),
+// and a doubly escaped quote as \" ("Ø5\" up to Ø21\"", live 1 Oct): after a number it is an inch mark, otherwise a quote
+// (the prompt asks for single quotes). Decoded here, so repairs are decoded too and the guards read the real text.
+const decodeEscapes = (text: string) => text
+  .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+  .replace(/(?<=\d)\\"/g, "″")
+  .replace(/\\"/g, "'");
 const finalAnswerSchema = z.object({
   message: z.string().trim().transform(decodeEscapes),
   card_ids: z.array(z.string()),
