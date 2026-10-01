@@ -2,13 +2,14 @@
 "use client";
 
 import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { ExternalLink, FileDown, ImagePlus, LoaderCircle, Mic, RotateCcw, Send, Square, X } from "lucide-react";
+import { ExternalLink, FileDown, ImagePlus, LoaderCircle, Mic, Send, Square, SquarePen, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
 import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, cardsToPick, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { abortAfter, newChatWarning } from "@/lib/agent/new-chat";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -28,6 +29,7 @@ type ChatItem = {
 };
 
 const GREETING = "Hi, I'm Claire from Sia Huat 👋 What are you looking for today? You can send me a photo too.";
+const NEW_CHAT_GREETING = "New chat started. What are you looking for today? You can send me a photo too.";
 const EMPTY_ENQUIRY: AgentReply["enquiry"] = { lines: [], totals: { lineCount: 0, quantitiesByUom: [], grandTotal: 0 } };
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 
@@ -63,14 +65,18 @@ export function AgentChat() {
   const [transcribing, setTranscribing] = useState(false);
   const [showLines, setShowLines] = useState(false);
   const [notice, setNotice] = useState("");
+  const [confirmingReset, setConfirmingReset] = useState(false);
   const itemsRef = useRef(items);
   const enquiryRef = useRef(enquiry);
   const loadingRef = useRef(false);
   const sessionId = useRef(newSessionId());
+  // Aborted by New chat: the old chat's reply and voice-note transcription stop (the server then stops its Claude calls).
+  const chatAbort = useRef(new AbortController());
   const nextId = useRef(2);
   const shownIds = useRef(new Set<string>());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { itemsRef.current = items; }, [items]);
@@ -78,6 +84,7 @@ export function AgentChat() {
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [items, loading]);
 
   const latestAssistantId = [...items].reverse().find((item) => item.role === "assistant")?.id;
+  const resetWarning = newChatWarning(items.some((item) => item.role === "user"), enquiry.totals);
 
   async function send(event: AgentEvent, bubble: Omit<ChatItem, "id" | "role" | "time">) {
     if (loadingRef.current) {
@@ -101,7 +108,7 @@ export function AgentChat() {
           enquiry: enquiryRef.current.lines.map((line) => ({ stockId: line.code, quantity: line.quantity })),
           shownProductIds: [...shownIds.current].slice(-100),
         }),
-        signal: AbortSignal.timeout(50_000),
+        signal: abortAfter(50_000, chatAbort.current.signal),
       });
       const json: unknown = await response.json().catch(() => null);
       if (sessionId.current !== session) return;
@@ -155,9 +162,10 @@ export function AgentChat() {
     if (!file) return;
     if (!IMAGE_TYPES.includes(file.type as (typeof IMAGE_TYPES)[number])) return setNotice("Please use a JPG, PNG or WebP photo.");
     if (file.size > 5 * 1024 * 1024) return setNotice("Please use a photo under 5 MB.");
+    const session = sessionId.current;
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === "string") setAttachment({ dataUrl: reader.result, mimeType: file.type as ImageAttachment["mimeType"], name: file.name });
+      if (typeof reader.result === "string" && sessionId.current === session) setAttachment({ dataUrl: reader.result, mimeType: file.type as ImageAttachment["mimeType"], name: file.name });
     };
     reader.readAsDataURL(file);
   }
@@ -177,32 +185,34 @@ export function AgentChat() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // The note belongs to the chat it was recorded in: after New chat it is dropped, not sent into the new chat.
+      const session = sessionId.current;
       const recorder = new MediaRecorder(stream);
       const chunks: Blob[] = [];
       recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
       recorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
-        recorderRef.current = null;
+        if (recorderRef.current === recorder) recorderRef.current = null;
+        if (sessionId.current !== session) return;
         setRecording(false);
         const audio = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
         if (audio.size === 0 || audio.size > 4 * 1024 * 1024) return setNotice("That voice note couldn't be used. Please type your message.");
         const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
-        const session = sessionId.current;
         const form = new FormData();
         form.append("audio", audio, `voice-note.${extension}`);
         form.append("sessionId", session);
         setTranscribing(true);
         try {
-          const response = await fetch("/api/transcribe", { method: "POST", body: form, signal: AbortSignal.timeout(40_000) });
+          const response = await fetch("/api/transcribe", { method: "POST", body: form, signal: abortAfter(40_000, chatAbort.current.signal) });
           const body = await response.json().catch(() => null) as { transcript?: string } | null;
           const transcript = body?.transcript?.trim().slice(0, 500) ?? "";
-          if (!response.ok || !transcript) throw new Error("VOICE_FAILED");
           if (sessionId.current !== session) return;
+          if (!response.ok || !transcript) throw new Error("VOICE_FAILED");
           await send({ type: "text", text: transcript, voice: true }, { text: `🎤 ${transcript}` });
         } catch {
-          setNotice("That voice note couldn't be transcribed. Please type your message.");
+          if (sessionId.current === session) setNotice("That voice note couldn't be transcribed. Please type your message.");
         } finally {
-          setTranscribing(false);
+          if (sessionId.current === session) setTranscribing(false);
         }
       };
       recorderRef.current = recorder;
@@ -225,8 +235,21 @@ export function AgentChat() {
     }
   }
 
+  function askReset() {
+    if (!resetWarning) return reset();
+    setConfirmingReset((open) => !open);
+  }
+
   function reset() {
-    sessionId.current = newSessionId();
+    setConfirmingReset(false);
+    sessionId.current = newSessionId(); // before the aborts, so the old handlers see a new chat and stay quiet
+    chatAbort.current.abort();
+    chatAbort.current = new AbortController();
+    const recorder = recorderRef.current;
+    recorderRef.current = null;
+    if (recorder && recorder.state !== "inactive") recorder.stop(); // its onstop turns the mic off and drops the note
+    setRecording(false);
+    setTranscribing(false);
     shownIds.current = new Set();
     loadingRef.current = false;
     setLoading(false);
@@ -235,7 +258,9 @@ export function AgentChat() {
     setQuery("");
     setNotice("");
     setShowLines(false);
-    setItems([{ id: nextId.current++, role: "assistant", text: GREETING, time: timeLabel() }]);
+    setItems([{ id: nextId.current++, role: "assistant", text: NEW_CHAT_GREETING, time: timeLabel() }]);
+    // With a mouse, back to the message box; on a phone this would pop the keyboard up, so not there.
+    window.setTimeout(() => { if (window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus(); }, 0);
   }
 
   return <div className="flex h-[min(860px,calc(100dvh-2rem))] w-full max-w-[460px] flex-col overflow-hidden rounded-[2rem] border-8 border-[#15362f] bg-[#f7f4ec] shadow-2xl">
@@ -243,11 +268,21 @@ export function AgentChat() {
       <div className="grid size-10 shrink-0 place-items-center rounded-full bg-[#efad3f] text-sm font-bold text-[#15362f]">C</div>
       <div className="min-w-0 flex-1">
         <h2 className="truncate text-sm font-semibold sm:text-base">Claire · Sia Huat</h2>
-        <p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 rounded-full bg-[#efad3f]" /> new version (test)</p>
+        <p className="flex items-center gap-1.5 text-xs text-white/75"><span className="size-2 shrink-0 rounded-full bg-[#efad3f]" /> AI assistant</p>
       </div>
-      <Button aria-label="Download enquiry PDF" variant="ghost" className="h-9 rounded-full px-2 text-white hover:bg-white/10 hover:text-white" onClick={() => void savePdf()}><FileDown className="size-4" /><span className="text-[11px] font-semibold">PDF</span></Button>
-      <Button aria-label="Reset conversation" size="icon" variant="ghost" className="size-9 rounded-full text-white hover:bg-white/10 hover:text-white" onClick={reset}><RotateCcw className="size-4" /></Button>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button aria-label="Download enquiry PDF" variant="ghost" className="h-11 min-w-11 flex-col gap-0.5 rounded-xl px-1.5 text-white hover:bg-white/10 hover:text-white" onClick={() => void savePdf()}><FileDown className="size-4" /><span className="text-[10px] font-semibold leading-3">PDF</span></Button>
+        <Button aria-expanded={confirmingReset} variant="ghost" className="h-11 min-w-11 flex-col gap-0.5 rounded-xl px-1.5 text-white hover:bg-white/10 hover:text-white aria-expanded:bg-white/15 aria-expanded:text-white" onClick={askReset}><SquarePen className="size-4" /><span className="text-[10px] font-semibold leading-3">New chat</span></Button>
+      </div>
     </header>
+    {confirmingReset && resetWarning && <div id="new-chat-confirm" role="group" aria-labelledby="new-chat-title" className="border-b border-[#15362f]/10 bg-white px-4 py-3 text-xs text-[#15362f]">
+      <p id="new-chat-title" className="text-sm font-semibold">Start a new chat?</p>
+      <p className="mt-0.5 leading-5 text-[#334b44]">{resetWarning}</p>
+      <div className="mt-2.5 flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={() => setConfirmingReset(false)} className="h-10 rounded-full border border-[#176853]/30 px-4 text-xs font-semibold text-[#176853] hover:bg-[#eef7f3]">Cancel</Button>
+        <Button type="button" onClick={reset} className="h-10 rounded-full bg-[#176853] px-4 text-xs font-semibold text-white hover:bg-[#125441]">Start new chat</Button>
+      </div>
+    </div>}
 
     <div className="chat-transcript flex-1 space-y-4 overflow-y-auto p-3 sm:p-4">
       {items.map((item) => <div key={item.id} className={`min-w-0 ${item.role === "user" ? "ml-auto max-w-[85%]" : "max-w-[94%]"}`}>
@@ -305,7 +340,7 @@ export function AgentChat() {
       <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label="Choose product image" onChange={(event: ChangeEvent<HTMLInputElement>) => { acceptImage(event.target.files?.[0]); event.target.value = ""; }} />
       <form onSubmit={submit} className="flex min-w-0 gap-2">
         <Button type="button" size="icon" variant="ghost" aria-label="Add a product photo" onClick={() => fileInputRef.current?.click()} className="size-12 shrink-0 rounded-full"><ImagePlus className="size-5" /></Button>
-        <Input aria-label="Product question" value={query} maxLength={500} onChange={(event) => setQuery(event.target.value)} onPaste={handlePaste} placeholder={recording ? "Recording… tap stop when done" : "Type a message…"} disabled={recording || transcribing} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4" />
+        <Input ref={inputRef} aria-label="Product question" value={query} maxLength={500} onChange={(event) => setQuery(event.target.value)} onPaste={handlePaste} placeholder={recording ? "Recording… tap stop when done" : "Type a message…"} disabled={recording || transcribing} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4" />
         {query.trim() || attachment
           ? <Button type="submit" aria-label="Send question" disabled={loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button>
           : <Button type="button" aria-label={recording ? "Stop voice recording" : "Record voice note"} disabled={loading || transcribing} onClick={() => void toggleRecording()} size="icon" className="size-12 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]">{transcribing ? <LoaderCircle className="size-4 animate-spin" /> : recording ? <Square className="size-4 fill-current" /> : <Mic className="size-5" />}</Button>}
