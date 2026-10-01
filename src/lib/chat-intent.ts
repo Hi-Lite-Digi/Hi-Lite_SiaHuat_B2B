@@ -2,6 +2,7 @@ import type { ChatStage, HistoryItem, ImageAttachment, Product } from "@/lib/cha
 import { normalizeClaireMessage } from "@/lib/claire-voice";
 import { resolveRiceDispenserModels } from "@/lib/image-comparison";
 import { answersNoPreference } from "./catalogue-followup";
+import { catalogueNouns } from "./catalogue-nouns";
 
 export type FastChatInput = {
   sessionId: string;
@@ -234,6 +235,20 @@ export function simplifyMessage(message: string) {
     .trim();
 }
 
+/**
+ * True when the message names a product type from the catalogue's own
+ * category names (e.g. "scaler" from "Fish scalers"), which the hand-written
+ * productWords list cannot fully cover. Words after "for"/"with" describe a
+ * use or add-on ("for the grill", "with a stand"), not the product itself.
+ */
+export function namesCatalogueNoun(message: string) {
+  const productPart = simplifyMessage(message).replace(/\b(?:for|with|without)\b(?:\s+\S+){1,3}/g, " ");
+  return productPart.split(" ").filter(Boolean).some((word) => catalogueNouns.has(word)
+    || catalogueNouns.has(word.replace(/ies$/, "y"))
+    || catalogueNouns.has(word.replace(/(ches|shes|sses|xes)$/, (ending) => ending.slice(0, -2)))
+    || catalogueNouns.has(word.replace(/s$/, "")));
+}
+
 export function isCatalogueRequest(message: string) {
   const normalizedMessage = normalizeCommonProductTypos(message);
   const simple = normalizedMessage
@@ -243,6 +258,7 @@ export function isCatalogueRequest(message: string) {
     .trim();
 
   return productWords.test(normalizedMessage)
+    || namesCatalogueNoun(normalizedMessage)
     || /\b(?:strainners?|straners?|noodal|noodel)\b/i.test(normalizedMessage)
     || productCategory(normalizedMessage) !== null
     || /\b(?:che+f+f?|knfie|kinife|knive)\b/i.test(normalizedMessage)

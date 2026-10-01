@@ -45,6 +45,7 @@ import {
 import {
   catalogueHistoryWithClarification,
   catalogueMessageWithContext,
+  namesCatalogueNoun,
   explicitKnifeBrand,
   isExactStockQuestion,
   isTradePriceQuestion,
@@ -358,6 +359,7 @@ function isConcreteCatalogueRequest(message: string) {
     || /\b(?:coffee|spice)[ -]?grinders?\b|\bgrinders?\b/i.test(message)
     || /\b(?:stockpot|stockpots|stock\s+pots?)\b/i.test(message)
     || /\bwoks?\b/i.test(message)
+    || namesCatalogueNoun(message)
     || /\b(?:shoe|shoes|shows|footwear)\b/i.test(message)
     || /\b(?:chef\s+)?(?:pants|trousers)\b/i.test(message)
     || /\b(?:water\s+(?:dispenser|urn|boiler)|(?:electric|thermal)\s+airpot|drinking\s+fountain)\b/i.test(message)

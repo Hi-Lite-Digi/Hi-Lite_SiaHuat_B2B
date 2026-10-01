@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "node --conditions=react-server --import tsx --test \"src/**/*.test.ts\"",
     "qa:text": "tsx scripts/qa-regression.ts",
     "qa:quality": "tsx scripts/qa-response-quality.ts",
     "qa:history": "tsx scripts/qa-history.ts",
@@ -21,9 +22,11 @@
     "catalogue:crawl": "tsx scripts/crawl-siahuat.ts",
     "catalogue:import": "tsx scripts/crawl-siahuat.ts --limit=1 --import",
     "catalogue:images": "tsx scripts/index-catalogue-images.ts",
+    "catalogue:nouns": "tsx scripts/generate-catalogue-nouns.ts",
     "qa:claude": "tsx scripts/qa-claude.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@base-ui/react": "^1.7.0",
     "cheerio": "1.1.2",
     "class-variance-authority": "^0.7.1",
