@@ -10,6 +10,13 @@ export function newChatWarning(customerWrote: boolean, totals: AgentReply["enqui
   return customerWrote ? "This clears the messages so far." : null;
 }
 
+// A whole message that only asks for a fresh chat. Claire answered a typed "start over" by pointing to the button but left the
+// enquiry (reset check, 2026-10-01), so the screen handles these itself, the same way as the button; longer sentences go to Claire.
+const newChatCommand = /^(?:pls\s+|please\s+)?(?:start\s*over|restart|reset(?:\s+(?:the\s+)?chat)?|new\s+chat|clear\s+(?:all|everything))(?:\s+(?:pls|please|la|lah))?[\s.!]*$/i;
+
+/** True when the customer's whole message only asks for a new chat ("start over", "reset", "new chat", "clear everything"). */
+export const isNewChatCommand = (text: string) => newChatCommand.test(text.trim());
+
 /** Aborts after ms, or as soon as `chat` aborts (New chat). Not AbortSignal.any: iPhones before iOS 17.4 don't have it. */
 export function abortAfter(ms: number, chat: AbortSignal): AbortSignal {
   const controller = new AbortController();

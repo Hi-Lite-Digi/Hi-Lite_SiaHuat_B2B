@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
 import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, cardsToPick, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
-import { abortAfter, newChatWarning } from "@/lib/agent/new-chat";
+import { abortAfter, isNewChatCommand, newChatWarning } from "@/lib/agent/new-chat";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -152,6 +152,8 @@ export function AgentChat() {
     }
     if (!text) return;
     setQuery("");
+    // "start over", "reset", "new chat" typed on their own do what the New chat button does, asking first when there's anything to lose.
+    if (isNewChatCommand(text)) return resetWarning ? setConfirmingReset(true) : reset();
     void send({ type: "text", text }, { text });
   }
 

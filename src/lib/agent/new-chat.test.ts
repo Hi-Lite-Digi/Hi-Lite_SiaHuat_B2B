@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import test from "node:test";
-import { abortAfter, newChatWarning } from "./new-chat";
+import { abortAfter, isNewChatCommand, newChatWarning } from "./new-chat";
 
 const totals = (lineCount: number, grandTotal: number) => ({ lineCount, quantitiesByUom: [], grandTotal });
 
@@ -42,4 +42,14 @@ test("a request signal for a chat already reset starts aborted", () => {
   const chat = new AbortController();
   chat.abort();
   assert.equal(abortAfter(60_000, chat.signal).aborted, true);
+});
+
+test("a short typed new-chat command does what the New chat button does; a sentence still goes to Claire", () => {
+  // Reset check (2026-10-01, real turns): Claire answered a typed "start over" by pointing to the button but left the enquiry.
+  for (const text of ["start over", "Start over!", "reset", "Reset chat", "reset the chat", "new chat", "New chat pls", "restart", "clear all", "clear everything", "pls start over", "start over lah", "  NEW CHAT.  "]) {
+    assert.equal(isNewChatCommand(text), true, text);
+  }
+  for (const text of ["start over with plates instead", "can we start over? i want plates", "reset button not working", "clear the torch", "new chat about plates", "restart the blender", "how to reset", "clear", "new"]) {
+    assert.equal(isNewChatCommand(text), false, text);
+  }
 });
