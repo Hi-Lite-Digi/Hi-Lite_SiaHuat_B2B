@@ -656,20 +656,22 @@ export async function searchCatalogueDirect(query: string, limit = 10) {
 }
 
 /**
- * Products in a catalogue category ("kitchen tongs", "GN pan trolleys"): every word must appear
- * in the same field, either third_category or subcategory. Most stocked first, then by name; a budget
+ * Products in a catalogue category ("kitchen tongs", "GN pan trolleys", "Furniture & Banquet Equipment"): every word must
+ * appear in the same field, the top-level category, third_category or subcategory. Most stocked first, then by name; a budget
  * is applied before the limit. `total` counts every match; `exists` says whether the category has
  * products at any price. Used by the agent.
  */
 export async function searchCatalogueByCategory(words: string, limit = 200, maxPrice?: number | null) {
-  // PostgREST filter syntax reserves , . : ( ) and *, so only letters, digits and hyphens are kept.
-  const terms = words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+  // PostgREST filter syntax reserves , . : ( ) and *, so only letters, digits and hyphens are kept. "/" and apostrophes split
+  // words too ("Gastronorm/steam pans" and "Children's dinnerware" matched nothing), and the top-level range is searched
+  // ("Furniture & Banquet Equipment" found nothing and "furniture" only wax fuel, owner 2 Oct).
+  const terms = words.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
   if (!terms.length) return { products: [], total: 0, exists: false };
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
   const allIn = (field: string) => `and(${terms.map((term) => `${field}.ilike.*${term}*`).join(",")})`;
-  const filter = { status: "in.(Active,New)", or: `(${allIn("third_category")},${allIn("subcategory")})` };
+  const filter = { status: "in.(Active,New)", or: `(${allIn("category")},${allIn("third_category")},${allIn("subcategory")})` };
   const counted = async (query: URLSearchParams) => {
     const response = await fetch(`${url}/rest/v1/products?${query}`, {
       headers: { apikey: key, authorization: `Bearer ${key}`, Prefer: "count=exact" },

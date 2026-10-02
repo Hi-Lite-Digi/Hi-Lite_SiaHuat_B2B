@@ -162,7 +162,7 @@ const SEARCH_UNAVAILABLE_NOTE = "The catalogue didn't answer this time, so nothi
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
 /** A category's words as the catalogue's category filter reads them. */
-const categoryTerms = (words: string) => words.toLowerCase().split(/\s+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+const categoryTerms = (words: string) => words.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
 // "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size. Names say
 // "S/S" where customers say "stainless steel" (exam 4, s01-B idx 0: "S/S ONE-PC LADLE 6.0oz").
 const sizeText = (text: string) => text.toLowerCase().replace(/\bs\/s\b/g, "stainless steel").replace(/(\d)\.0(?!\d)/g, "$1");
@@ -283,7 +283,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   };
   const terms = categoryTerms(category ?? "");
   const inScope = (item: Product) => scope.exists
-    && [item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
+    && [item.category, item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
   const phrases = input.queries.map((query) => sizeText(query).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
   const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
   if (!category) {

@@ -452,6 +452,34 @@ test("a short brand inside a query word is not named by the customer, so it is s
   assert.deepEqual(idsOf(await searchBody({ queries: ["storage bag"], category: "storage bags" }, fakeDeps(bags))), ["AG0", "AG1", "AG2", "AG3", "ZIP", "AG4", "AG5"]);
 });
 
+test("a category search reaches the top-level range and counts its rows once (owner, 2 Oct: furniture)", async () => {
+  const table = product({ stock_id: "122C", name: "FOLDING TABLE 122CM", category: "Furniture & Banquet Equipment", subcategory: "Tables", third_category: "Folding tables" });
+  const fuel = product({ stock_id: "GEL1", name: "GEL FUEL 2HR", category: "Buffet & Catering", subcategory: "Buffet and catering furniture", third_category: "Wax and Gel Fuel" });
+  const body = await searchBody({ queries: ["folding table"], category: "Furniture & Banquet Equipment" }, fakeDeps([table, fuel]));
+  assert.equal(body.category_found, true);
+  assert.deepEqual(idsOf(body), ["122C"]);
+  assert.deepEqual([body.total_found, body.complete], [1, true]);
+});
+
+test("category names with a slash or an apostrophe match their rows", async () => {
+  const pan = product({ stock_id: "GN11", name: "GASTRONORM PAN 1/1 65MM", category: "Kitchen Equipment", subcategory: "Gastronorm/steam pans", third_category: "Stainless steel GN pans" });
+  const gn = await searchBody({ queries: ["gastronorm pan"], category: "Gastronorm/steam pans" }, fakeDeps([pan]));
+  assert.deepEqual([gn.category_found, idsOf(gn), gn.total_found], [true, ["GN11"], 1]);
+  const bowl = product({ stock_id: "KB1", name: "KIDS MELAMINE BOWL", category: "Tableware", subcategory: "Melamine", third_category: "Children's dinnerware" });
+  for (const category of ["Children's dinnerware", "Children’s dinnerware"]) {
+    const kids = await searchBody({ queries: ["kids bowl"], category }, fakeDeps([bowl]));
+    assert.deepEqual([kids.category_found, idsOf(kids), kids.total_found], [true, ["KB1"], 1], category);
+  }
+});
+
+test("a subcategory search ranks as before when rows carry their top-level range", async () => {
+  const kitchenTongs = product({ stock_id: "TG1", name: "SALAD TONGS 30CM", category: "Kitchen Tools", subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
+  const clamp = product({ stock_id: "TG2", name: "BBQ GRILL CLAMP", category: "Kitchen Tools", subcategory: "Cooking utensils", third_category: "Kitchen tongs and tweezers" });
+  const servingTongs = product({ stock_id: "TG3", name: "BUFFET SERVING TONGS", category: "Buffet & Catering", subcategory: "Serving utensils", third_category: "Serving tongs" });
+  const body = await searchBody({ queries: ["tongs"], category: "kitchen tongs" }, fakeDeps([kitchenTongs, clamp, servingTongs]));
+  assert.deepEqual([idsOf(body), body.total_found, body.complete], [["TG1", "TG2", "TG3"], 3, true]);
+});
+
 test("a category that matches nothing is reported with the categories of the results", async () => {
   const torches = [
     product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", subcategory: "Kitchen tools", third_category: "Gas lighters" }),

@@ -40,9 +40,10 @@ export function fakeDeps(
     },
     async searchCategory(query, limit, maxPrice) {
       calls.push(`category:${query}`);
-      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      // As catalogue.ts searchCatalogueByCategory reads it.
+      const words = query.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
       const inField = (field: string | null | undefined) => words.every((word) => (field ?? "").toLowerCase().includes(word));
-      const all = catalogue.filter((item) => inField(item.third_category) || inField(item.subcategory));
+      const all = catalogue.filter((item) => inField(item.category) || inField(item.third_category) || inField(item.subcategory));
       const priced = maxPrice == null ? all : all.filter((item) => item.list_price <= maxPrice);
       return { products: priced.slice(0, limit), total: priced.length, exists: all.length > 0 };
     },
