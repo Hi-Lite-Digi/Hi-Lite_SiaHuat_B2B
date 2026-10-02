@@ -169,6 +169,14 @@ test("Claire asks how many only after a pick, and answers a which-one question b
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Never take a quantity from an option number"));
 });
 
+test("a number given only as a condition for a discount isn't an order, but a take or a quote with a number still is (owner, 2 Oct)", () => {
+  // "If i get 3, can i get a better price?" added 3 ice shavers ($9,238.08); "4 x 5.69 how much la" and "quote me 50" stay picks.
+  const choosing = CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith("- Choosing:")) ?? "";
+  assert.ok(choosing.includes("A number given only as a condition for a discount or a better price"));
+  assert.ok(choosing.includes("is not an order: don't call update_enquiry; say discounts and bulk prices are quoted by Sia Huat sales (show_contact true), never promise or guess one, and ask if they want the N on their enquiry for that quote; a yes adds it."));
+  assert.ok(choosing.includes("is still a pick"));
+});
+
 test("the old engine's one-item-at-a-time queue rule is not in the agent prompt", () => {
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /the app works through them one at a time/);
 });
