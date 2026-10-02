@@ -317,6 +317,34 @@ export function withoutRepeatedSet(answer: FinalAnswer, earlier: EarlierTurns, r
   const key = cardSetKey(answer.card_ids);
   return earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2 ? { ...answer, card_ids: [] } : answer;
 }
+/** The catalogue's name for a chip ("Folding table" → "folding table"), when it names a range's section or type. */
+const chipName = (chip: string) => {
+  const words = (chip.toLowerCase().match(/[a-z'-]+/g) ?? []).map((word) => word.replace(/'s$/, ""));
+  if (!words.length) return null;
+  const key = [...words.slice(0, -1), singular(words[words.length - 1])].join(" ");
+  const path = catalogueIndex.names.get(key);
+  return path ? { key, path, range: path.split(" > ")[0] } : null;
+};
+// "Here are a few: the 6ft and 4ft foldable tables" (r7 replay A3) points at the cards too.
+const listsCards = (sentence: string) => pointsAtCard(sentence) || /^here(?:'s|\s+is|\s+are)\b/i.test(sentence);
+/**
+ * The answer without its cards while it still asks which type of one range the customer needs: its chips name two or more of that
+ * range's sections or types, the customer's message names none of their kinds (the last word: 'table', 'toaster') and doesn't ask to
+ * see cards again, and the reply asks for no tap. Owner, 2 Oct: after "how about furniture" and a photo of the range page, each reply
+ * re-attached the same tables and chair ("then started pushing furniture"); the prompt's "no cards until they say" was ignored in 7
+ * of 7 replay turns. The sentences that present the cards go with them. A customer who named the kind ("any other toaster to
+ * recommend?", "spoon n fork got?") asked about it, not the range: past replies recommending or picking from those cards keep them.
+ */
+export function withoutRangeCards(answer: FinalAnswer, currentText: string): FinalAnswer {
+  if (!answer.card_ids.length || asksAgain.test(currentText) || sentences(answer.message).some(asksForTap)) return answer;
+  const names = answer.chips.map(chipName).filter((name) => name !== null);
+  const range = names.find((name) => new Set(names.filter((other) => other.range === name.range).map((other) => other.path)).size >= 2)?.range;
+  if (!range) return answer;
+  const said = ` ${(currentText.toLowerCase().match(/[a-z'-]+/g) ?? []).map(singular).join(" ")} `;
+  if (names.some((name) => name.range === range && said.includes(` ${name.key.split(" ").at(-1)} `))) return answer;
+  const message = removeSentences(answer.message, listsCards);
+  return message ? { ...answer, message, card_ids: [] } : answer;
+}
 const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
 const NO_CARD_SHOW_ISSUE = `${NO_CARD_PREFIX}: you promised to show products but attached none. Attach them now or don't promise.`;
 /** After the repair, a tap request or show promise with no card attached is cut out. */

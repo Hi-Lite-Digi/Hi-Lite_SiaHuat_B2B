@@ -8,7 +8,7 @@ import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -448,6 +448,37 @@ test("a card set shown twice already is dropped unless the customer asks for it,
   assert.deepEqual(withoutRepeatedSet(ask, earlier, ["ut16hr"]).card_ids, ["UT16HR"]);
   // Another set is a new showing.
   assert.deepEqual(withoutRepeatedSet({ ...ask, card_ids: ["UT16HR", "UT12HR"] }, earlier, []).card_ids, ["UT16HR", "UT12HR"]);
+});
+
+test("withoutRangeCards drops the cards of a reply that still asks which type of a range, with the words presenting them", () => {
+  // r7 replay A3: a photo of the Furniture & Banquet page; the owner called this "pushing furniture".
+  const asks: FinalAnswer = {
+    message: "That's our Furniture & Banquet Equipment catalogue page: folding tables, Q-posts and baby chairs. Here are a few: the 6ft and 4ft foldable tables, and a Q-Post. Which type did you want to look at?",
+    card_ids: ["180CZ", "122C", "90-5118"], chips: ["Folding tables", "Q-posts", "Baby chairs"], show_contact: false,
+  };
+  assert.deepEqual(withoutRangeCards(asks, "Bro then what is this"), {
+    ...asks, card_ids: [], message: "That's our Furniture & Banquet Equipment catalogue page: folding tables, Q-posts and baby chairs. Which type did you want to look at?",
+  });
+  // Singular chips name the same types (r7 replay A5).
+  assert.deepEqual(withoutRangeCards({ ...asks, chips: ["Folding table", "Baby chair"] }, "This").card_ids, []);
+  // The customer named a kind the chips split, or asked to see the cards again: they stay.
+  for (const text of ["need folding tables for an event", "ok the baby chairs", "any other table to recommend?", "show me those again"]) {
+    assert.deepEqual(withoutRangeCards(asks, text).card_ids, asks.card_ids, text);
+  }
+  // Past replies that keep their cards: a toaster recommendation (s02-B) and a tap request (c05-stress).
+  const toasters: FinalAnswer = {
+    message: "Are you looking at a conveyor type or a pop-up toaster? For stability, I'd suggest the Waring 4-Slot Pop-up Toaster.",
+    card_ids: ["WCT708K", "CTS1000K"], chips: ["Pop-up toaster", "Conveyor toaster"], show_contact: false,
+  };
+  assert.deepEqual(withoutRangeCards(toasters, "You have any other toaster to recommend? The one we have not stable").card_ids, toasters.card_ids);
+  assert.deepEqual(withoutRangeCards({ ...asks, message: "Which type? Tap the cards below to pick one." }, "how about furniture").card_ids, asks.card_ids);
+  // Chips that aren't two types of one range: product names, or a single type.
+  for (const chips of [["Block Ice Shaver", "Hatsuyuki", "Santos"], ["Folding tables", "Something else"], []]) {
+    assert.deepEqual(withoutRangeCards({ ...asks, chips }, "how about furniture").card_ids, asks.card_ids, chips.join());
+  }
+  // A message that is only the cards' introduction keeps them.
+  const only = { ...asks, message: "Here they are." };
+  assert.deepEqual(withoutRangeCards(only, "how about furniture"), only);
 });
 
 test("withoutCardPointers cuts the sentences that point at a card, not those that point at the contact details", () => {

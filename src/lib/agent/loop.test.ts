@@ -744,6 +744,13 @@ test("a card shown earlier can be attached again without a tool call", async () 
   assert.ok(lookups.calls.includes("code:970S") && lookups.calls.includes("live:970S"), lookups.calls.join(" "));
 });
 
+test("a reply still asking which type of a range is sent without cards (r7: pushing furniture)", async () => {
+  const { client } = fakeClient([answer({ message: "We carry folding tables and Q-posts. Here are a few. Which type do you need?", card_ids: ["970S"], chips: ["Folding tables", "Q-posts"] })]);
+  const reply = await runAgentTurn({ request: askedAgain("how about furniture"), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "We carry folding tables and Q-posts. Which type do you need?");
+});
+
 test("a re-shown card carries today's live price", async () => {
   const { client } = fakeClient([answer({ message: "Here it is again.", card_ids: ["970S"] })]);
   const reply = await runAgentTurn({ request: askedAgain("show me again"), deps: fakeDeps([blowtorch, safico], { "970S": { price_ex_gst: 12.34 } }), client, model: "claude-sonnet-5" });
