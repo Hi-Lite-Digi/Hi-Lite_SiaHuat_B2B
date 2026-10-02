@@ -1220,6 +1220,8 @@ test("a denial of a whole range or type the catalogue lists is repaired even wit
     "We don't sell packaging, sorry.",
     "We don't carry woks.",
     "We don't carry home furniture.",
+    "We do not carry furniture.",
+    "We do not have any Q-posts.",
   ]) {
     const review = claimReview(message, backed);
     assert.equal(denials(message).length, 1, message);
@@ -1249,6 +1251,12 @@ test("a denial of a whole range or type the catalogue lists is repaired even wit
     "Sorry, we don't sell beer - we're a kitchen and F&B equipment supplier.",
     "We don't sell ice, but we have ice machines.",
     "We don't sell coffee or other food items - Sia Huat supplies kitchen and F&B equipment.",
+    // A food word before a generic head ("Ice cream and gelato machines", "Hot drinks and specialty items") is no range either.
+    "Sorry, we don't sell ice cream - we're a kitchen and F&B equipment supplier.",
+    "We don't sell coffee or hot drinks - we supply F&B equipment like coffee machines.",
+    // A look-alike denial on a photo turn ("show close matches as options") denies one item, not the range.
+    "We don't carry a stand like that, but here are the closest ones.",
+    "We don't have any other trays like this one.",
   ]) assert.deepEqual(claimReview(message, backed).style.filter((issue) => ["RANGE_DENIAL", "ABSENCE"].includes(issueCode(issue))), [], message);
 });
 
@@ -1266,6 +1274,10 @@ test("a range denial is read against the ranges given: a range with no named sec
   assert.equal(deniedRange("We don't have any Q-posts.", ranges), "Furniture & Banquet Equipment > Hotel Equipment > Q-posts");
   assert.equal(deniedRange("We're mainly kitchen gear - no dining chairs or tables in our catalogue.", ranges), "Furniture & Banquet Equipment > Tables");
   assert.equal(deniedRange("We don't carry folding tables in that size.", ranges), null);
+  // "like that" narrows to a look-alike; "like tables" only gives examples.
+  assert.equal(deniedRange("We don't carry furniture like that.", ranges), null);
+  assert.equal(deniedRange("We don't have Q-posts like these.", ranges), null);
+  assert.equal(deniedRange("We don't carry furniture like tables.", ranges), "Furniture & Banquet Equipment");
   assert.equal(deniedRange("I don't have a guide for that.", ranges), null);
   assert.equal(deniedRange("We don't carry books.", ranges), null);
   // "Ice" only qualifies "flour scoops": we don't sell ice is true.

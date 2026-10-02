@@ -644,12 +644,15 @@ const SAYS_WHAT_WE_SUPPLY = /\bF&B\s+(?:equipment|supplies|supplier|smallwares|n
 // it a specific denial ("we don't carry Japanese dinnerware", "woks in that size"), which the searches judge as before.
 const NO_X_IN_CATALOGUE = /\bno\s+(?:[\w/'’-]+\s+){1,6}?in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b/i;
 const DENIAL = new RegExp(`${ABSENT.source}|${NO_X_IN_CATALOGUE.source}`, "i");
-const DENIAL_VERB = /\b(?:carry|stock|sell|list|have|do|supply)\b|\bno\b/i;
+const DENIAL_VERB = /\b(?:carry|stock|sell|list|have|supply)\b|\bno\b/i;
 // Words in range names that name no product, and range heads that are an activity or a food ("Pastry & Chocolate Tools").
 const GENERIC = new Set(["range", "equipment", "accessory", "supply", "tool", "item", "set", "other", "wear", "gear", "part", "spare", "machine", "essential", "need", "piece", "service", "food", "kitchen"]);
 const NOT_A_RANGE_HEAD = new Set(["pastry", "catering", "buffet", "cutting", "stewarding", "organization"]);
 // Words that end the denied thing without narrowing it; never in, for, with or that, which go on to narrow it.
 const DENIAL_END = new Set(["or", "and", "nor", "here", "sorry", "anymore", "either", "though", "like", "such", "currently", "yet", "at", "right"]);
+// "like tables" gives examples; "like that", "like this one" narrows to a look-alike (a photo's close matches).
+const LIKE_THIS = new Set(["this", "that", "these", "those", "it", "yours", "the", "one"]);
+const endsAt = (words: string[], at: number) => at === words.length || (DENIAL_END.has(words[at]) && !(words[at] === "like" && LIKE_THIS.has(words[at + 1])));
 const DETERMINERS = new Set(["any", "a", "an", "the", "real", "actual", "proper", "much", "many", "other"]);
 // Words before a range's name that don't narrow it to a product: a venue or a plain word.
 const PLAIN = new Set([...DETERMINERS, "restaurant", "restaurants", "cafe", "café", "commercial", "hotel", "home", "regular", "f", "b", "f&b", "dining", "kitchen", "general", "normal"]);
@@ -670,10 +673,13 @@ function rangeIndex(ranges: typeof catalogueRanges) {
       for (const [name, path] of [[section, `${range} > ${section}`], ...types.map((type) => [type, `${range} > ${section} > ${type}`])]) {
         // A whole name wins over part of another ("Woks" over "Serving casseroles and woks"): the repair names its path.
         const parts = nameParts(name);
+        const last = parts[parts.length - 1].trim().toLowerCase().split(/\s+/);
         for (const [at, part] of parts.entries()) {
           const words = (part.toLowerCase().match(/[a-z'-]+/g) ?? []).map((word) => word.replace(/'s$/, ""));
           if (!words.length) continue;
           if (words.length === 1 && (parts[at + 1]?.trim().split(/\s+/).length ?? 0) > 1) continue; // 'Ice and flour scoops', 'Beer and wine accessories': 'we don't sell ice/beer' is true
+          // Before a last part of two or more words, a part that shares its generic head or names no plural thing qualifies it ('Hot drinks and specialty items', 'Ice cream and soda spoons')
+          if (at < parts.length - 1 && last.length > 1 && (GENERIC.has(singular(last[last.length - 1])) || singular(words[words.length - 1]) === words[words.length - 1])) continue;
           words[words.length - 1] = singular(words[words.length - 1]);
           const key = words.join(" ");
           if ((words.length > 1 || !GENERIC.has(key)) && (parts.length === 1 || !names.has(key))) names.set(key, path);
@@ -701,7 +707,7 @@ export function deniedRange(sentence: string, ranges = catalogueRanges): string 
   const { heads, names } = ranges === catalogueRanges ? catalogueIndex : rangeIndex(ranges);
   for (const [index, word] of words.entries()) {
     const range = heads.get(singular(word));
-    if (range && (index + 1 === words.length || DENIAL_END.has(words[index + 1])) && words.slice(0, index).every((before) => PLAIN.has(before))) return range;
+    if (range && endsAt(words, index + 1) && words.slice(0, index).every((before) => PLAIN.has(before))) return range;
   }
   const items: string[][] = [[]];
   for (const word of words) {
@@ -714,7 +720,7 @@ export function deniedRange(sentence: string, ranges = catalogueRanges): string 
     for (let length = Math.min(4, item.length - start); length >= 1; length -= 1) {
       const phrase = item.slice(start, start + length);
       const path = names.get([...phrase.slice(0, -1), singular(phrase[length - 1])].join(" "));
-      if (path && (start + length === item.length || DENIAL_END.has(item[start + length]))) return path;
+      if (path && endsAt(item, start + length)) return path;
     }
   }
   return null;
