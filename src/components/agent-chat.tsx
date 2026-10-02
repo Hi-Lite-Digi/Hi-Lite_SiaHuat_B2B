@@ -10,6 +10,7 @@ import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
 import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, cardsToPick, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { abortAfter, isNewChatCommand, newChatWarning } from "@/lib/agent/new-chat";
+import { MAX_PHOTO_BYTES, photoAttachment } from "@/lib/agent/photo";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -164,13 +165,12 @@ export function AgentChat() {
   function acceptImage(file: File | undefined | null) {
     if (!file) return;
     if (!IMAGE_TYPES.includes(file.type as (typeof IMAGE_TYPES)[number])) return setNotice("Please use a JPG, PNG or WebP photo.");
-    if (file.size > 5 * 1024 * 1024) return setNotice("Please use a photo under 5 MB.");
+    if (file.size > MAX_PHOTO_BYTES) return setNotice("Please use a photo under 15 MB.");
     const session = sessionId.current;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string" && sessionId.current === session) setAttachment({ dataUrl: reader.result, mimeType: file.type as ImageAttachment["mimeType"], name: file.name });
-    };
-    reader.readAsDataURL(file);
+    void photoAttachment(file).then(
+      (image) => { if (sessionId.current === session) setAttachment(image); },
+      () => { if (sessionId.current === session) setNotice("That photo couldn't be opened. Please try another one."); },
+    );
   }
 
   function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
