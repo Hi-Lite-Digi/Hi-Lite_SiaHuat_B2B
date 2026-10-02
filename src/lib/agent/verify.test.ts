@@ -106,6 +106,8 @@ test("the check's prompt keeps v5 and adds removals, this turn's lookups, units,
   assert.doesNotMatch(PICK_CHECK_PROMPT, /by the same signs as picked/);
   // r3 c09-stress idx 6 "16 inch too long ... got shorter one with the lock thing?": its 20 tongs came off before any replacement existed.
   assert.match(PICK_CHECK_PROMPT, /Asking whether another size, type or a cheaper one exists \("too long, got shorter one\?", "got cheaper\?"\) is not asking to replace it yet: not_picked; the line comes off only when they choose the replacement or ask to remove it\./);
+  // r7, owner 2 Oct: "If i get 3, can i get a better price?" was a sure pick of 3 and added $9,238.08 of ice shavers.
+  assert.match(PICK_CHECK_PROMPT, /\n\nA number tied to a price is not an order: a number in an "if" about the price, or in a question asking for a discount, a better, lower or bulk price, or offering their own price for N units, is not_picked, even when it answers Claire's how-many question\.\n\nquantity: /);
   assert.deepEqual(PICK_SCHEMA.required, ["verdict", "sure", "code", "candidates", "quantity"]);
   assert.equal(PICK_SCHEMA.additionalProperties, false);
 });
