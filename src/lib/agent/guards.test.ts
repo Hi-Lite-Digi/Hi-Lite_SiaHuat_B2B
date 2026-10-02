@@ -1245,6 +1245,10 @@ test("a denial of a whole range or type the catalogue lists is repaired even wit
     "We don't carry sofas.",
     "I don't have a range of sizes to compare against for this model.",
     "We don't list regular dining/cafe chairs (only baby/youth seating like high chairs).",
+    // Food and drink: a word that only qualifies a type's noun ("Beer and wine accessories", "Ice and flour scoops") is no range.
+    "Sorry, we don't sell beer - we're a kitchen and F&B equipment supplier.",
+    "We don't sell ice, but we have ice machines.",
+    "We don't sell coffee or other food items - Sia Huat supplies kitchen and F&B equipment.",
   ]) assert.deepEqual(claimReview(message, backed).style.filter((issue) => ["RANGE_DENIAL", "ABSENCE"].includes(issueCode(issue))), [], message);
 });
 
@@ -1254,6 +1258,7 @@ test("a range denial is read against the ranges given: a range with no named sec
     ["Dinnerware", [["Serving dishes", ["Serving casseroles and woks"]]]],
     ["Furniture & Banquet Equipment", [["Hotel Equipment", ["Q-posts"]], ["Tables", ["Folding tables"]]]],
     ["Books & Guides", []],
+    ["Kitchen Tools", [["Food preparation equipment", ["Ice and flour scoops"]]]],
   ] as const;
   assert.equal(deniedRange("We don't carry furniture.", ranges), "Furniture & Banquet Equipment");
   // A type's whole name wins over part of another's: the repair names the range Claire should describe.
@@ -1263,6 +1268,9 @@ test("a range denial is read against the ranges given: a range with no named sec
   assert.equal(deniedRange("We don't carry folding tables in that size.", ranges), null);
   assert.equal(deniedRange("I don't have a guide for that.", ranges), null);
   assert.equal(deniedRange("We don't carry books.", ranges), null);
+  // "Ice" only qualifies "flour scoops": we don't sell ice is true.
+  assert.equal(deniedRange("We don't sell ice.", ranges), null);
+  assert.notEqual(deniedRange("We don't carry flour scoops.", ranges), null);
 });
 
 test("an out-of-stock claim needs every product it points at checked live as out of stock", () => {

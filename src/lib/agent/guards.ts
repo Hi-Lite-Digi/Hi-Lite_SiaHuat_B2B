@@ -670,9 +670,10 @@ function rangeIndex(ranges: typeof catalogueRanges) {
       for (const [name, path] of [[section, `${range} > ${section}`], ...types.map((type) => [type, `${range} > ${section} > ${type}`])]) {
         // A whole name wins over part of another ("Woks" over "Serving casseroles and woks"): the repair names its path.
         const parts = nameParts(name);
-        for (const part of parts) {
+        for (const [at, part] of parts.entries()) {
           const words = (part.toLowerCase().match(/[a-z'-]+/g) ?? []).map((word) => word.replace(/'s$/, ""));
           if (!words.length) continue;
+          if (words.length === 1 && (parts[at + 1]?.trim().split(/\s+/).length ?? 0) > 1) continue; // 'Ice and flour scoops', 'Beer and wine accessories': 'we don't sell ice/beer' is true
           words[words.length - 1] = singular(words[words.length - 1]);
           const key = words.join(" ");
           if ((words.length > 1 || !GENERIC.has(key)) && (parts.length === 1 || !names.has(key))) names.set(key, path);
