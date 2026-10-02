@@ -313,3 +313,23 @@ test("Claire is given every range the catalogue lists and never denies a whole o
   assert.ok(rule.includes("Say in one line what it covers, naming a few types from the list, and ask which type they need (up to 3 type names as chips); show products once they choose."), rule);
   assert.ok(rule.includes("(a queue stand is a Q-post) is a specific request: search with that type as category."), rule);
 });
+
+test("shown she was wrong about what we carry, Claire says they're right in one line and, for a whole range, names its sections and asks (owner, 2 Oct)", () => {
+  // Shown the store's Furniture & Banquet page, Claire said "Sorry about that" and pushed folding-table cards; called misleading,
+  // she only pointed to sales.
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const at = lines.findIndex((line) => line.startsWith("- Shown you were wrong about equipment we carry"));
+  assert.ok(at > 0, "no line for being shown wrong");
+  assert.ok(lines[at - 1].startsWith("- The customer is annoyed"), lines[at - 1]);
+  for (const words of [
+    "check it this turn (match_photo for a photo, get_product for a link, else a search)",
+    "'You're right, sorry: we do carry <it>.'",
+    "don't defend the earlier answer or add what we don't carry unless they asked for it",
+    "For a whole range (or a photo of a range page), name its sections from SIA HUAT'S CATALOGUE RANGES in one sentence and ask which they need, with no cards until they say; for a type or item, answer as usual.",
+    "if you were wrong, give the corrected answer",
+  ]) assert.ok(lines[at].includes(words), words);
+  // The line points at the range list, so both must be in the prompt.
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("SIA HUAT'S CATALOGUE RANGES ("), "range list heading");
+  assert.ok(!CLAIRE_AGENT_PROMPT.includes("no 'but we don't carry"), "no ban on true facts");
+  assert.deepEqual(replyStyleIssues({ message: "You're right, sorry: we do carry <it>.", products: [], selectedProduct: null }), []);
+});
