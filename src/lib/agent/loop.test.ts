@@ -1240,6 +1240,31 @@ test("an answer the fixers empty with no card left gets a next step", async () =
   assert.equal(reply.showContact, true);
 });
 
+test("a reply that would show as a blank bubble gets the next step", async () => {
+  // r7: a zero-width space, an escaped space decoded after the trim, or only marks (a direction mark, a soft hyphen, an emoji
+  // selector) got past every check and reached the customer as '' or an invisible bubble.
+  const zeroWidth = answer({ message: String.fromCodePoint(0x200b) });
+  const escapedSpace = rawAnswer('{"message":"\\\\u0020","card_ids":[],"chips":[],"show_contact":false}');
+  const marks = answer({ message: String.fromCodePoint(0x200e, 0xad, 0xfe0f) });
+  for (const [label, responses] of [["zero-width", [zeroWidth, zeroWidth]], ["escaped space", [escapedSpace]], ["marks", [marks, marks]]] as const) {
+    const { client } = fakeClient([...responses]);
+    const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.equal(reply.provider, "anthropic", label);
+    assert.deepEqual(reply.cards, [], label);
+    assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).", label);
+    assert.equal(reply.showContact, true, label);
+  }
+});
+
+test("a blank reply with a card keeps the card and gets the cards-only line", async () => {
+  const zeroWidth = answer({ message: String.fromCodePoint(0x200b), card_ids: ["970S"] });
+  const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] }), zeroWidth, zeroWidth]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Here are some options.");
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
+});
+
 test("a cards-only line with no cards and no link complaint gets the next step, not the broken-link line", async () => {
   // D8 review: nobody mentioned a link, so "that link isn't opening" would be a false statement.
   const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] }), answer({ message: "Here are some options." })]);

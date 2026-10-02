@@ -627,6 +627,9 @@ export async function runAgentTurn(input: {
       ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)),
     ];
     const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(final.message, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
+    // an escaped space decoded after the trim) gets past every check above (r7).
+    const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);
     // Codes and counts only, never customer or reply text. The session's tail and the cards' code:status:qty let the exam match
     // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).
     console.info("[api/agent] turn", {
@@ -636,11 +639,11 @@ export async function runAgentTurn(input: {
       cards: review.cards.map((card) => `${card.stock_id}:${card.stock_status}:${card.available_quantity ?? "?"}`),
     });
     return {
-      message: cleaned.message,
+      message: !blank ? cleaned.message : review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE,
       cards: review.cards,
       chips: review.chips,
       enquiry: replyEnquiry(ctx),
-      showContact: final.show_contact || cleaned.showContact,
+      showContact: final.show_contact || cleaned.showContact || (blank && !review.cards.length),
       provider: "anthropic",
     };
   } catch (error) {
