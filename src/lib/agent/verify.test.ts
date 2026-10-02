@@ -321,6 +321,22 @@ test("a sure pick with another number answers the retry with that number, so it 
   assert.equal(cache.settled.length, 1);
 });
 
+test("a no-number probe answers nothing for the add that follows", async () => {
+  // r7: on "if i take 4 can cheaper or not" the probe (loop.ts checkNamed) said picked q=4, and the nudged add 4 went through unchecked.
+  const fake = fakePickCheck({ quantity: 4 });
+  const cache = pickCheckCache(fake);
+  await cache(proposal({ quantity: null, requested: null }));
+  await cache(proposal({ quantity: 4, requested: 4 }));
+  assert.equal(fake.calls.length, 2);
+  assert.equal(cache.picked("UT16HR"), true); // the nudge still fires on the probe's sure pick
+  // A sure "different" from a probe: the add of the other product is checked too.
+  const other = fakePickCheck((p) => (p.code === "UT16HR" ? { verdict: "different", code: "2564L", quantity: 3 } : {}));
+  const otherCache = pickCheckCache(other);
+  await otherCache(proposal({ quantity: null, requested: null }));
+  await otherCache(proposal({ code: "2564L", name: "Long Tong 16.5 inch", quantity: 3, requested: 3 }));
+  assert.equal(other.calls.length, 2);
+});
+
 test("picked() is true only for a sure pick of that product, or a sure 'different' naming it", async () => {
   const cache = pickCheckCache(fakePickCheck((p) => ({
     UT16HR: { sure: true }, "2564L": { sure: false }, X1: { verdict: "different", code: "36670" }, OLD1: { verdict: "picked" },

@@ -1887,8 +1887,9 @@ test("a permission question about a product the customer named but Claude never 
     });
     const label = JSON.stringify(answerFor);
     assert.deepEqual([check.calls[0].code, check.calls[0].action, check.calls[0].quantity], ["BTS-8026D", "add", null], label);
-    assert.equal(check.calls.length, 1, label); // the sure pick's number answers the add that follows
+    assert.equal(check.calls.length, nudged ? 2 : 1, label); // the nudged add gets its own check with the number
     if (nudged) {
+      assert.deepEqual([check.calls[1].code, check.calls[1].action, check.calls[1].quantity], ["BTS-8026D", "add", 2], label);
       assert.match(lastMessage(bodies[1]), PERMISSION_NUDGE, label);
       assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]], label);
     } else {

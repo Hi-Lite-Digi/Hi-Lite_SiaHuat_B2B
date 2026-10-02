@@ -253,7 +253,8 @@ const pickKey = (code: string, action: PickAction, quantity: number | null) => `
 /**
  * One check per code, action and number this turn; parallel callers share it. A per-code cache blocked the second item of
  * "2 pc HET-4 and 1 pc HET-6" (r2 c11-persona idx 8), so a new number is a new check. A sure answer also answers the retry it
- * asks for (the other product, or the number the customer typed) with no second call, and never for another number.
+ * asks for (the other product, or the number the customer typed) with no second call, and never for another number or after a
+ * no-number probe.
  */
 export function pickCheckCache(check: PickCheck): PickCheckCache {
   const answers = new Map<string, Promise<PickVerdict>>();
@@ -269,12 +270,15 @@ export function pickCheckCache(check: PickCheck): PickCheckCache {
     // A check that rejects is an error verdict, so the cache never holds a rejected promise.
     const answer = check(p).catch(() => errorVerdict(p, 0)).then((v) => {
       settled.push(v);
+      // A no-number probe (loop.ts checkNamed) never judged a number as an order, so the add that follows gets its own check
+      // (r7: "if i take 4 can cheaper or not": the probe said picked q=4 and the nudged add 4 went through unchecked).
+      const probe = p.requested === null;
       // A removal's "different" names another line to take off, not a product to add.
-      if (v.sure && p.action !== "remove" && v.verdict === "different" && v.code !== null) {
+      if (v.sure && !probe && p.action !== "remove" && v.verdict === "different" && v.code !== null) {
         preAnswer(v.code, "add", v.quantity);
         preAnswer(v.code, "set", v.quantity);
       }
-      if (v.sure && p.action !== "remove" && v.verdict === "picked" && v.quantity !== p.quantity) preAnswer(p.code, p.action, v.quantity);
+      if (v.sure && !probe && p.action !== "remove" && v.verdict === "picked" && v.quantity !== p.quantity) preAnswer(p.code, p.action, v.quantity);
       return v;
     });
     answers.set(key, answer);
