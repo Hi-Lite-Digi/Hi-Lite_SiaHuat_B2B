@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, cardsNote, cardsToPick, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { agentReplySchema, cardsToPick, historyFor, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { abortAfter, isNewChatCommand, newChatWarning } from "@/lib/agent/new-chat";
+import { MAX_PHOTO_BYTES, photoAttachment } from "@/lib/agent/photo";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
 
 type ChatItem = {
@@ -26,6 +27,8 @@ type ChatItem = {
   /** false hides the contact block's PDF link and the "Tap a product" line (exam 3: both judged templated). */
   pdf?: boolean;
   pickHint?: boolean;
+  /** What Claude reads in the history instead of text (a failed photo's line). */
+  historyText?: string;
 };
 
 const GREETING = "Hi, I'm Claire from Sia Huat 👋 What are you looking for today? You can send me a photo too.";
@@ -40,19 +43,6 @@ function stockLabel(card: Product) {
   if (card.stock_status === "in_stock") return "Website: in stock";
   if (card.stock_status === "out_of_stock") return "Website: out of stock";
   return "Stock unconfirmed";
-}
-
-function historyFor(items: ChatItem[]) {
-  return items.slice(-30).map((item) => {
-    // The text is trimmed rather than the cards note, so the note survives the 2,000-character cap.
-    const note = item.role === "assistant" ? cardsNote(item.cards ?? []) : "";
-    return {
-      role: item.role,
-      content: item.role === "user"
-        ? (item.tap ? `${TAP_PREFIX} ${item.text}` : item.chip ? `${CHIP_PREFIX} ${item.text}` : item.imageUrl ? `${PHOTO_PREFIX} ${item.text || NO_CAPTION}` : item.text).slice(0, 2_000)
-        : `${item.text.slice(0, Math.max(0, 2_000 - note.length))}${note}`.slice(0, 2_000),
-    };
-  }).filter((item) => item.content.trim().length > 0);
 }
 
 export function AgentChat() {
@@ -127,10 +117,16 @@ export function AgentChat() {
       }]);
     } catch {
       if (sessionId.current !== session) return;
+      // A photo that didn't get through gets its own line (owner, 2 Oct). Claire reads it as a plain statement, not a question,
+      // so the PHOTO_AGAIN guard can't stop her own resend ask next turn, and user and assistant turns keep alternating.
+      const photo = event.type === "image";
       setItems((current) => [...current, {
         id: nextId.current++, role: "assistant", time: timeLabel(), showContact: true, pdf: enquiryRef.current.lines.length > 0,
         // No error tone (owner, 2026-09-30: a reply that gives up looks like a broken system): ask for a resend; the contact block shows below.
-        text: "Sorry, my reply didn't come through. Could you send that again? Sia Huat sales can also help (details below).",
+        text: photo
+          ? "Sorry, that photo didn't come through. Could you send it again? Sia Huat sales can also help (details below)."
+          : "Sorry, my reply didn't come through. Could you send that again? Sia Huat sales can also help (details below).",
+        ...(photo ? { historyText: "That photo didn't come through on my side." } : {}),
       }]);
     } finally {
       if (sessionId.current === session) {
@@ -164,13 +160,12 @@ export function AgentChat() {
   function acceptImage(file: File | undefined | null) {
     if (!file) return;
     if (!IMAGE_TYPES.includes(file.type as (typeof IMAGE_TYPES)[number])) return setNotice("Please use a JPG, PNG or WebP photo.");
-    if (file.size > 5 * 1024 * 1024) return setNotice("Please use a photo under 5 MB.");
+    if (file.size > MAX_PHOTO_BYTES) return setNotice("Please use a photo under 15 MB.");
     const session = sessionId.current;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string" && sessionId.current === session) setAttachment({ dataUrl: reader.result, mimeType: file.type as ImageAttachment["mimeType"], name: file.name });
-    };
-    reader.readAsDataURL(file);
+    void photoAttachment(file).then(
+      (image) => { if (sessionId.current === session) setAttachment(image); },
+      () => { if (sessionId.current === session) setNotice("That photo couldn't be opened. Please try another one."); },
+    );
   }
 
   function handlePaste(event: ClipboardEvent<HTMLInputElement>) {

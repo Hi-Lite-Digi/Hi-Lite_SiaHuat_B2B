@@ -6,9 +6,9 @@ import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -448,6 +448,37 @@ test("a card set shown twice already is dropped unless the customer asks for it,
   assert.deepEqual(withoutRepeatedSet(ask, earlier, ["ut16hr"]).card_ids, ["UT16HR"]);
   // Another set is a new showing.
   assert.deepEqual(withoutRepeatedSet({ ...ask, card_ids: ["UT16HR", "UT12HR"] }, earlier, []).card_ids, ["UT16HR", "UT12HR"]);
+});
+
+test("withoutRangeCards drops the cards of a reply that still asks which type of a range, with the words presenting them", () => {
+  // r7 replay A3: a photo of the Furniture & Banquet page; the owner called this "pushing furniture".
+  const asks: FinalAnswer = {
+    message: "That's our Furniture & Banquet Equipment catalogue page: folding tables, Q-posts and baby chairs. Here are a few: the 6ft and 4ft foldable tables, and a Q-Post. Which type did you want to look at?",
+    card_ids: ["180CZ", "122C", "90-5118"], chips: ["Folding tables", "Q-posts", "Baby chairs"], show_contact: false,
+  };
+  assert.deepEqual(withoutRangeCards(asks, "Bro then what is this"), {
+    ...asks, card_ids: [], message: "That's our Furniture & Banquet Equipment catalogue page: folding tables, Q-posts and baby chairs. Which type did you want to look at?",
+  });
+  // Singular chips name the same types (r7 replay A5).
+  assert.deepEqual(withoutRangeCards({ ...asks, chips: ["Folding table", "Baby chair"] }, "This").card_ids, []);
+  // The customer named a kind the chips split, or asked to see the cards again: they stay.
+  for (const text of ["need folding tables for an event", "ok the baby chairs", "any other table to recommend?", "show me those again"]) {
+    assert.deepEqual(withoutRangeCards(asks, text).card_ids, asks.card_ids, text);
+  }
+  // Past replies that keep their cards: a toaster recommendation (s02-B) and a tap request (c05-stress).
+  const toasters: FinalAnswer = {
+    message: "Are you looking at a conveyor type or a pop-up toaster? For stability, I'd suggest the Waring 4-Slot Pop-up Toaster.",
+    card_ids: ["WCT708K", "CTS1000K"], chips: ["Pop-up toaster", "Conveyor toaster"], show_contact: false,
+  };
+  assert.deepEqual(withoutRangeCards(toasters, "You have any other toaster to recommend? The one we have not stable").card_ids, toasters.card_ids);
+  assert.deepEqual(withoutRangeCards({ ...asks, message: "Which type? Tap the cards below to pick one." }, "how about furniture").card_ids, asks.card_ids);
+  // Chips that aren't two types of one range: product names, or a single type.
+  for (const chips of [["Block Ice Shaver", "Hatsuyuki", "Santos"], ["Folding tables", "Something else"], []]) {
+    assert.deepEqual(withoutRangeCards({ ...asks, chips }, "how about furniture").card_ids, asks.card_ids, chips.join());
+  }
+  // A message that is only the cards' introduction keeps them.
+  const only = { ...asks, message: "Here they are." };
+  assert.deepEqual(withoutRangeCards(only, "how about furniture"), only);
 });
 
 test("withoutCardPointers cuts the sentences that point at a card, not those that point at the contact details", () => {
@@ -1204,6 +1235,85 @@ test("'I couldn't find X' and 'we don't carry X by that name' are not repaired a
   ]) assert.equal(absenceOf(message).length, 1, message);
   // Backed by two queries and a found category, a range 'we don't list' passes.
   assert.deepEqual(absenceOf("We don't list tandoor ovens specifically.", [search({ queries: ["tandoor oven", "clay oven"], category: "ovens", categoryFound: true })]), []);
+});
+
+test("a denial of a whole range or type the catalogue lists is repaired even with backing searches (owner, 2 Oct: furniture)", () => {
+  // The owner's chat denied furniture beside a whole Furniture & Banquet range, saying what Sia Huat supplies, after searches that
+  // found a category ("furniture" found only wax fuel). A size, a brand, a country or a material makes it a specific denial.
+  const backed = [search({ queries: ["furniture", "restaurant furniture"], category: "furniture", categoryFound: true })];
+  const denials = (message: string) => claimReview(message, backed).style.filter((issue) => issueCode(issue) === "RANGE_DENIAL");
+  for (const message of [
+    "We don't carry restaurant furniture like tables or chairs - Sia Huat focuses on kitchen, tableware, bar and F&B equipment.",
+    "We're mainly kitchen, tableware and F&B equipment - no dining chairs or tables in our catalogue.",
+    "We don't carry furniture.",
+    "Sia Huat doesn't sell furniture or uniforms.",
+    "We don't have any Q-posts.",
+    "We don't sell packaging, sorry.",
+    "We don't carry woks.",
+    "We don't carry home furniture.",
+    "We do not carry furniture.",
+    "We do not have any Q-posts.",
+  ]) {
+    const review = claimReview(message, backed);
+    assert.equal(denials(message).length, 1, message);
+    assert.deepEqual(review.safety, [], message);
+  }
+  assert.match(denials("We don't carry furniture.")[0], /\(Furniture & Banquet Equipment\)\. Don't say we don't carry it: say what that range covers \(from SIA HUAT'S CATALOGUE RANGES\) and ask which type/);
+  for (const message of [
+    "We don't have a wok in 60cm.",
+    "We don't carry woks in that size.",
+    "We don't carry plates in 31cm, the closest is 30cm.",
+    "We don't have a lid for that pot.",
+    "We don't stock tumblers in 1L.",
+    "We don't have any knives with a wooden handle in stock.",
+    "I don't have a size guide for these jackets.",
+    "We don't list a bowl in that colour.",
+    "We don't sell pastries - we supply kitchen and F&B equipment.",
+    "We don't carry Le Creuset cookware.",
+    "We don't stock Corelle dinnerware.",
+    "We don't carry Japanese dinnerware.",
+    "Sorry, we don't sell mangoes - we're a kitchen and F&B equipment supplier.",
+    "We don't carry a boxed 4-pax dinnerware set.",
+    "We don't carry Damascus knives.",
+    "We don't carry sofas.",
+    "I don't have a range of sizes to compare against for this model.",
+    "We don't list regular dining/cafe chairs (only baby/youth seating like high chairs).",
+    // Food and drink: a word that only qualifies a type's noun ("Beer and wine accessories", "Ice and flour scoops") is no range.
+    "Sorry, we don't sell beer - we're a kitchen and F&B equipment supplier.",
+    "We don't sell ice, but we have ice machines.",
+    "We don't sell coffee or other food items - Sia Huat supplies kitchen and F&B equipment.",
+    // A food word before a generic head ("Ice cream and gelato machines", "Hot drinks and specialty items") is no range either.
+    "Sorry, we don't sell ice cream - we're a kitchen and F&B equipment supplier.",
+    "We don't sell coffee or hot drinks - we supply F&B equipment like coffee machines.",
+    // A look-alike denial on a photo turn ("show close matches as options") denies one item, not the range.
+    "We don't carry a stand like that, but here are the closest ones.",
+    "We don't have any other trays like this one.",
+  ]) assert.deepEqual(claimReview(message, backed).style.filter((issue) => ["RANGE_DENIAL", "ABSENCE"].includes(issueCode(issue))), [], message);
+});
+
+test("a range denial is read against the ranges given: a range with no named section is no range", () => {
+  const ranges = [
+    ["Cookware", [["Asian Cookware", ["Woks"]]]],
+    ["Dinnerware", [["Serving dishes", ["Serving casseroles and woks"]]]],
+    ["Furniture & Banquet Equipment", [["Hotel Equipment", ["Q-posts"]], ["Tables", ["Folding tables"]]]],
+    ["Books & Guides", []],
+    ["Kitchen Tools", [["Food preparation equipment", ["Ice and flour scoops"]]]],
+  ] as const;
+  assert.equal(deniedRange("We don't carry furniture.", ranges), "Furniture & Banquet Equipment");
+  // A type's whole name wins over part of another's: the repair names the range Claire should describe.
+  assert.equal(deniedRange("We don't carry woks.", ranges), "Cookware > Asian Cookware > Woks");
+  assert.equal(deniedRange("We don't have any Q-posts.", ranges), "Furniture & Banquet Equipment > Hotel Equipment > Q-posts");
+  assert.equal(deniedRange("We're mainly kitchen gear - no dining chairs or tables in our catalogue.", ranges), "Furniture & Banquet Equipment > Tables");
+  assert.equal(deniedRange("We don't carry folding tables in that size.", ranges), null);
+  // "like that" narrows to a look-alike; "like tables" only gives examples.
+  assert.equal(deniedRange("We don't carry furniture like that.", ranges), null);
+  assert.equal(deniedRange("We don't have Q-posts like these.", ranges), null);
+  assert.equal(deniedRange("We don't carry furniture like tables.", ranges), "Furniture & Banquet Equipment");
+  assert.equal(deniedRange("I don't have a guide for that.", ranges), null);
+  assert.equal(deniedRange("We don't carry books.", ranges), null);
+  // "Ice" only qualifies "flour scoops": we don't sell ice is true.
+  assert.equal(deniedRange("We don't sell ice.", ranges), null);
+  assert.notEqual(deniedRange("We don't carry flour scoops.", ranges), null);
 });
 
 test("an out-of-stock claim needs every product it points at checked live as out of stock", () => {

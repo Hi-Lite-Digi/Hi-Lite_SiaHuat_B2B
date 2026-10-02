@@ -119,6 +119,24 @@ export function parseCardsNote(content: string): ShownCard[] {
   });
 }
 
+/** A chat bubble as the browser keeps it. historyText, when set, is what Claude reads instead of the shown text. */
+export type ChatBubble = { role: "user" | "assistant"; text: string; cards?: Product[]; imageUrl?: string; tap?: boolean; chip?: boolean; historyText?: string };
+
+/** The history the browser sends: the last 30 bubbles, each capped at 2,000 characters with the cards note kept. */
+export function historyFor(items: ChatBubble[]) {
+  return items.slice(-30).map((item) => {
+    // The text is trimmed rather than the cards note, so the note survives the 2,000-character cap.
+    const note = item.role === "assistant" ? cardsNote(item.cards ?? []) : "";
+    const said = item.historyText ?? item.text;
+    return {
+      role: item.role,
+      content: item.role === "user"
+        ? (item.tap ? `${TAP_PREFIX} ${item.text}` : item.chip ? `${CHIP_PREFIX} ${item.text}` : item.imageUrl ? `${PHOTO_PREFIX} ${item.text || NO_CAPTION}` : item.text).slice(0, 2_000)
+        : `${said.slice(0, Math.max(0, 2_000 - note.length))}${note}`.slice(0, 2_000),
+    };
+  }).filter((item) => item.content.trim().length > 0);
+}
+
 /** An assistant history entry's message without its cards note. */
 export function withoutCardsNote(content: string) {
   const start = content.lastIndexOf(CARDS_NOTE);

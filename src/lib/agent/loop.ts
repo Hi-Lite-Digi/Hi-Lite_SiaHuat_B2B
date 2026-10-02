@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -553,7 +553,7 @@ export async function runAgentTurn(input: {
       // The link line only when a card was really dropped for its link: a cards-only line with no cards is not a link complaint (D8 review).
       const nothingLeft = answer.card_ids.length ? BROKEN_LINK_MESSAGE : NOTHING_LEFT_MESSAGE;
       if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: nothingLeft, show_contact: true };
-      return withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused);
+      return withoutRangeCards(withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused), earlier.currentText);
     };
     let final = result.final && await withEarlierCards(trimCards(result.final));
     let allowed = currentAllowed();
@@ -627,6 +627,9 @@ export async function runAgentTurn(input: {
       ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)),
     ];
     const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(final.message, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
+    // an escaped space decoded after the trim) gets past every check above (r7).
+    const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);
     // Codes and counts only, never customer or reply text. The session's tail and the cards' code:status:qty let the exam match
     // a line to its transcript turn and settle price and "only N left" disputes (exam 3, c01-stress T13).
     console.info("[api/agent] turn", {
@@ -636,11 +639,11 @@ export async function runAgentTurn(input: {
       cards: review.cards.map((card) => `${card.stock_id}:${card.stock_status}:${card.available_quantity ?? "?"}`),
     });
     return {
-      message: cleaned.message,
+      message: !blank ? cleaned.message : review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE,
       cards: review.cards,
       chips: review.chips,
       enquiry: replyEnquiry(ctx),
-      showContact: final.show_contact || cleaned.showContact,
+      showContact: final.show_contact || cleaned.showContact || (blank && !review.cards.length),
       provider: "anthropic",
     };
   } catch (error) {

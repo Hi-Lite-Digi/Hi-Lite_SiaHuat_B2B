@@ -744,6 +744,13 @@ test("a card shown earlier can be attached again without a tool call", async () 
   assert.ok(lookups.calls.includes("code:970S") && lookups.calls.includes("live:970S"), lookups.calls.join(" "));
 });
 
+test("a reply still asking which type of a range is sent without cards (r7: pushing furniture)", async () => {
+  const { client } = fakeClient([answer({ message: "We carry folding tables and Q-posts. Here are a few. Which type do you need?", card_ids: ["970S"], chips: ["Folding tables", "Q-posts"] })]);
+  const reply = await runAgentTurn({ request: askedAgain("how about furniture"), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "We carry folding tables and Q-posts. Which type do you need?");
+});
+
 test("a re-shown card carries today's live price", async () => {
   const { client } = fakeClient([answer({ message: "Here it is again.", card_ids: ["970S"] })]);
   const reply = await runAgentTurn({ request: askedAgain("show me again"), deps: fakeDeps([blowtorch, safico], { "970S": { price_ex_gst: 12.34 } }), client, model: "claude-sonnet-5" });
@@ -1238,6 +1245,31 @@ test("an answer the fixers empty with no card left gets a next step", async () =
   assert.deepEqual(reply.cards, []);
   assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).");
   assert.equal(reply.showContact, true);
+});
+
+test("a reply that would show as a blank bubble gets the next step", async () => {
+  // r7: a zero-width space, an escaped space decoded after the trim, or only marks (a direction mark, a soft hyphen, an emoji
+  // selector) got past every check and reached the customer as '' or an invisible bubble.
+  const zeroWidth = answer({ message: String.fromCodePoint(0x200b) });
+  const escapedSpace = rawAnswer('{"message":"\\\\u0020","card_ids":[],"chips":[],"show_contact":false}');
+  const marks = answer({ message: String.fromCodePoint(0x200e, 0xad, 0xfe0f) });
+  for (const [label, responses] of [["zero-width", [zeroWidth, zeroWidth]], ["escaped space", [escapedSpace]], ["marks", [marks, marks]]] as const) {
+    const { client } = fakeClient([...responses]);
+    const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.equal(reply.provider, "anthropic", label);
+    assert.deepEqual(reply.cards, [], label);
+    assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).", label);
+    assert.equal(reply.showContact, true, label);
+  }
+});
+
+test("a blank reply with a card keeps the card and gets the cards-only line", async () => {
+  const zeroWidth = answer({ message: String.fromCodePoint(0x200b), card_ids: ["970S"] });
+  const { client } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["blow torch"] }), zeroWidth, zeroWidth]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(reply.message, "Here are some options.");
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["970S"]);
 });
 
 test("a cards-only line with no cards and no link complaint gets the next step, not the broken-link line", async () => {
@@ -1862,8 +1894,9 @@ test("a permission question about a product the customer named but Claude never 
     });
     const label = JSON.stringify(answerFor);
     assert.deepEqual([check.calls[0].code, check.calls[0].action, check.calls[0].quantity], ["BTS-8026D", "add", null], label);
-    assert.equal(check.calls.length, 1, label); // the sure pick's number answers the add that follows
+    assert.equal(check.calls.length, nudged ? 2 : 1, label); // the nudged add gets its own check with the number
     if (nudged) {
+      assert.deepEqual([check.calls[1].code, check.calls[1].action, check.calls[1].quantity], ["BTS-8026D", "add", 2], label);
       assert.match(lastMessage(bodies[1]), PERMISSION_NUDGE, label);
       assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["BTS-8026D", 2]], label);
     } else {

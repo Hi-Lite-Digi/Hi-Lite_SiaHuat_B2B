@@ -1,4 +1,5 @@
 // src/lib/agent/guards.ts
+import { catalogueRanges } from "@/lib/catalogue-ranges";
 import type { Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { honestManualHandoff } from "@/lib/honest-handoff";
@@ -316,6 +317,34 @@ export function withoutRepeatedSet(answer: FinalAnswer, earlier: EarlierTurns, r
   const key = cardSetKey(answer.card_ids);
   return earlier.cardSets.filter((codes) => cardSetKey(codes) === key).length >= 2 ? { ...answer, card_ids: [] } : answer;
 }
+/** The catalogue's name for a chip ("Folding table" → "folding table"), when it names a range's section or type. */
+const chipName = (chip: string) => {
+  const words = (chip.toLowerCase().match(/[a-z'-]+/g) ?? []).map((word) => word.replace(/'s$/, ""));
+  if (!words.length) return null;
+  const key = [...words.slice(0, -1), singular(words[words.length - 1])].join(" ");
+  const path = catalogueIndex.names.get(key);
+  return path ? { key, path, range: path.split(" > ")[0] } : null;
+};
+// "Here are a few: the 6ft and 4ft foldable tables" (r7 replay A3) points at the cards too.
+const listsCards = (sentence: string) => pointsAtCard(sentence) || /^here(?:'s|\s+is|\s+are)\b/i.test(sentence);
+/**
+ * The answer without its cards while it still asks which type of one range the customer needs: its chips name two or more of that
+ * range's sections or types, the customer's message names none of their kinds (the last word: 'table', 'toaster') and doesn't ask to
+ * see cards again, and the reply asks for no tap. Owner, 2 Oct: after "how about furniture" and a photo of the range page, each reply
+ * re-attached the same tables and chair ("then started pushing furniture"); the prompt's "no cards until they say" was ignored in 7
+ * of 7 replay turns. The sentences that present the cards go with them. A customer who named the kind ("any other toaster to
+ * recommend?", "spoon n fork got?") asked about it, not the range: past replies recommending or picking from those cards keep them.
+ */
+export function withoutRangeCards(answer: FinalAnswer, currentText: string): FinalAnswer {
+  if (!answer.card_ids.length || asksAgain.test(currentText) || sentences(answer.message).some(asksForTap)) return answer;
+  const names = answer.chips.map(chipName).filter((name) => name !== null);
+  const range = names.find((name) => new Set(names.filter((other) => other.range === name.range).map((other) => other.path)).size >= 2)?.range;
+  if (!range) return answer;
+  const said = ` ${(currentText.toLowerCase().match(/[a-z'-]+/g) ?? []).map(singular).join(" ")} `;
+  if (names.some((name) => name.range === range && said.includes(` ${name.key.split(" ").at(-1)} `))) return answer;
+  const message = removeSentences(answer.message, listsCards);
+  return message ? { ...answer, message, card_ids: [] } : answer;
+}
 const NO_CARD_TAP_ISSUE = `${NO_CARD_PREFIX}: you asked the customer to tap a card but card_ids is empty. Put its code in card_ids (any card shown earlier in this chat can be attached) or don't ask for a tap.`;
 const NO_CARD_SHOW_ISSUE = `${NO_CARD_PREFIX}: you promised to show products but attached none. Attach them now or don't promise.`;
 /** After the repair, a tap request or show promise with no card attached is cut out. */
@@ -548,6 +577,7 @@ export function withoutKeptLineClaims(message: string, unchecked: string[], chan
 
 export const CLAIM_ISSUE_PREFIX = "This claim";
 const ABSENCE_ISSUE_PREFIX = "This 'we don't have it'";
+const RANGE_DENIAL_PREFIX = "This denies a whole range Sia Huat lists";
 // Claims about the range that no code checked (exam 2: "That covers our tong range", "Comes in two sizes", "Nothing cheaper in that
 // longer length", "our listings are aluminium step ladders"). Talk about the enquiry ("No other changes to your enquiry") is neither
 // a completeness nor an absence claim, and "the only one of these" is about the cards shown.
@@ -635,6 +665,95 @@ const BUDGET = new RegExp(String.raw`\b(?:no(?:ne)?|nothing)\s+(?:[\w-]+\s+){0,6
 // "We don't sell mangoes - we're a kitchen and F&B equipment supplier" already says what Sia Huat supplies, as the prompt asks;
 // "F&B-grade vacuum sealers" is product talk.
 const SAYS_WHAT_WE_SUPPLY = /\bF&B\s+(?:equipment|supplies|supplier|smallwares|needs)\b|\b(?:equipment|tableware)\s+supplier\b/i;
+
+// A denial of a whole range, section or type the catalogue lists ("We don't carry restaurant furniture like tables or chairs - Sia
+// Huat focuses on kitchen, tableware, bar and F&B equipment", "no dining chairs or tables in our catalogue": owner, 2 Oct) is never
+// backed: searches with the customer's words miss whole ranges. Narrow on purpose: a size, model, brand, country or material makes
+// it a specific denial ("we don't carry Japanese dinnerware", "woks in that size"), which the searches judge as before.
+const NO_X_IN_CATALOGUE = /\bno\s+(?:[\w/'’-]+\s+){1,6}?in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b/i;
+const DENIAL = new RegExp(`${ABSENT.source}|${NO_X_IN_CATALOGUE.source}`, "i");
+const DENIAL_VERB = /\b(?:carry|stock|sell|list|have|supply)\b|\bno\b/i;
+// Words in range names that name no product, and range heads that are an activity or a food ("Pastry & Chocolate Tools").
+const GENERIC = new Set(["range", "equipment", "accessory", "supply", "tool", "item", "set", "other", "wear", "gear", "part", "spare", "machine", "essential", "need", "piece", "service", "food", "kitchen"]);
+const NOT_A_RANGE_HEAD = new Set(["pastry", "catering", "buffet", "cutting", "stewarding", "organization"]);
+// Words that end the denied thing without narrowing it; never in, for, with or that, which go on to narrow it.
+const DENIAL_END = new Set(["or", "and", "nor", "here", "sorry", "anymore", "either", "though", "like", "such", "currently", "yet", "at", "right"]);
+// "like tables" gives examples; "like that", "like this one" narrows to a look-alike (a photo's close matches).
+const LIKE_THIS = new Set(["this", "that", "these", "those", "it", "yours", "the", "one"]);
+const endsAt = (words: string[], at: number) => at === words.length || (DENIAL_END.has(words[at]) && !(words[at] === "like" && LIKE_THIS.has(words[at + 1])));
+const DETERMINERS = new Set(["any", "a", "an", "the", "real", "actual", "proper", "much", "many", "other"]);
+// Words before a range's name that don't narrow it to a product: a venue or a plain word.
+const PLAIN = new Set([...DETERMINERS, "restaurant", "restaurants", "cafe", "café", "commercial", "hotel", "home", "regular", "f", "b", "f&b", "dining", "kitchen", "general", "normal"]);
+const singular = (word: string) => word.replace(/ies$/, "y").replace(/(?:ches|shes|sses|xes)$/, (end) => end.slice(0, -2)).replace(/(?<!s)s$/, "");
+const nameParts = (name: string) => name.split(/,|\band\b|&|\//i);
+
+/** The singular head of each range's name, and each section and type name, with the range path they belong to. */
+function rangeIndex(ranges: typeof catalogueRanges) {
+  const heads = new Map<string, string>();
+  const names = new Map<string, string>();
+  for (const [range, sections] of ranges) {
+    // A range with no named section (Books & Guides) gives no head: "a size guide" is no range.
+    if (sections.length) for (const part of nameParts(range)) {
+      const head = part.split(/\b(?:for|to|with)\b/i)[0].trim().toLowerCase().split(/\s+/).at(-1) ?? "";
+      if (/^[a-z-]{3,}$/.test(head) && !GENERIC.has(singular(head)) && !NOT_A_RANGE_HEAD.has(singular(head))) heads.set(singular(head), range);
+    }
+    for (const [section, types] of sections) {
+      for (const [name, path] of [[section, `${range} > ${section}`], ...types.map((type) => [type, `${range} > ${section} > ${type}`])]) {
+        // A whole name wins over part of another ("Woks" over "Serving casseroles and woks"): the repair names its path.
+        const parts = nameParts(name);
+        const last = parts[parts.length - 1].trim().toLowerCase().split(/\s+/);
+        for (const [at, part] of parts.entries()) {
+          const words = (part.toLowerCase().match(/[a-z'-]+/g) ?? []).map((word) => word.replace(/'s$/, ""));
+          if (!words.length) continue;
+          if (words.length === 1 && (parts[at + 1]?.trim().split(/\s+/).length ?? 0) > 1) continue; // 'Ice and flour scoops', 'Beer and wine accessories': 'we don't sell ice/beer' is true
+          // Before a last part of two or more words, a part that shares its generic head or names no plural thing qualifies it ('Hot drinks and specialty items', 'Ice cream and soda spoons')
+          if (at < parts.length - 1 && last.length > 1 && (GENERIC.has(singular(last[last.length - 1])) || singular(words[words.length - 1]) === words[words.length - 1])) continue;
+          words[words.length - 1] = singular(words[words.length - 1]);
+          const key = words.join(" ");
+          if ((words.length > 1 || !GENERIC.has(key)) && (parts.length === 1 || !names.has(key))) names.set(key, path);
+        }
+      }
+    }
+  }
+  return { heads, names };
+}
+const catalogueIndex = rangeIndex(catalogueRanges);
+
+/**
+ * The range path a "we don't carry it" denies whole, or null: (A) a range's head with only plain words before it ("we don't carry
+ * restaurant furniture"), or (B) a section or type by its exact name ("we don't have any Q-posts", "no dining chairs or tables in
+ * our catalogue"), each with nothing after it but an end word ("like tables", "sorry").
+ */
+export function deniedRange(sentence: string, ranges = catalogueRanges): string | null {
+  const at = sentence.search(DENIAL);
+  if (at < 0) return null;
+  // Only the denying clause, without a trailing "in our catalogue".
+  const clause = sentence.slice(at).split(/\s[-–—]\s|—|[;:(]|\bbut\b|\binstead\b/i)[0].replace(/\s+in\s+(?:our|the)\s+(?:catalogue|range|listings?)\b.*$/i, "");
+  const verbAt = clause.search(DENIAL_VERB);
+  if (verbAt < 0) return null;
+  const words = (clause.slice(verbAt).toLowerCase().match(/[a-z&'-]+/g) ?? []).slice(1).map((word) => word.replace(/'s$/, ""));
+  const { heads, names } = ranges === catalogueRanges ? catalogueIndex : rangeIndex(ranges);
+  for (const [index, word] of words.entries()) {
+    const range = heads.get(singular(word));
+    if (range && endsAt(words, index + 1) && words.slice(0, index).every((before) => PLAIN.has(before))) return range;
+  }
+  const items: string[][] = [[]];
+  for (const word of words) {
+    if (word === "or" || word === "and" || word === "nor") items.push([]);
+    else items[items.length - 1].push(word);
+  }
+  for (const item of items) {
+    const start = item.findIndex((word) => !DETERMINERS.has(word));
+    if (start < 0) continue;
+    for (let length = Math.min(4, item.length - start); length >= 1; length -= 1) {
+      const phrase = item.slice(start, start + length);
+      const path = names.get([...phrase.slice(0, -1), singular(phrase[length - 1])].join(" "));
+      if (path && endsAt(item, start + length)) return path;
+    }
+  }
+  return null;
+}
+
 const NOT = String.raw`(?:not|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?t)`;
 const STOCK = new RegExp(String.raw`\b(?:out\s+of\s+stock|sold\s+out|${NOT}\s+in\s+stock)\b|\bno\s+stock\b(?!\s+(?:figure|info|information|count|data|details?|level))`, "i");
 const IN_STOCK = new RegExp(String.raw`(?<!\b${NOT}\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b`, "i");
@@ -715,8 +834,8 @@ function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>
  * Sentences that claim more than this turn's searches and live checks back, one kind each: a budget, completeness or ranking claim
  * needs a search that listed a whole (priced) category; "we don't have it" needs two different queries and a category that
  * exists, unless it is scoped to this turn's search or the customer's name for it (for "no substitute", a find_alternatives run will
- * do), and is disproved by a product seen this turn that it names; "out of stock" needs every product it points at checked live as
- * out of stock.
+ * do), and is disproved by a product seen this turn that it names; a denial of a whole range the catalogue lists is never backed;
+ * "out of stock" needs every product it points at checked live as out of stock.
  */
 function unbackedClaims(message: string, searches: SearchRecord[], seen: ReadonlyMap<string, CheckedProduct>) {
   const complete = searches.some((search) => search.complete);
@@ -761,18 +880,21 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     const scoped = absent && !RANGE_TAIL.test(sentence) && clauses.every((part) => NAME_SCOPED.test(part) || !ABSENT.test(part.replace(EVERY_FOUND_NOTHING, " ")));
     const absence = (absent || SUBSTITUTE_ABSENT.test(sentence)) && !talk && !SAYS_WHAT_WE_SUPPLY.test(sentence);
     const found = absence ? disprovedBy(sentence, seen, absent, sources) : [];
+    // A denial of a whole listed range is judged first: no search backs it, and saying what we supply doesn't excuse it.
+    const denied = !talk && (absent || NO_X_IN_CATALOGUE.test(sentence)) ? deniedRange(sentence) : null;
     // The first range claim a sentence makes decides it: a backed budget claim isn't judged again as a "we don't have it". A backed
     // ranking backs no absence, so "the cheapest ..., as we don't carry Japanese knives" is still judged as one.
-    const range = BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
+    const range = denied ? "rangeDenied" as const
+      : BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
       : (COMPLETE.test(sentence) || rangeSummary(sentence)) && aboutRange ? (complete ? null : "complete" as const)
       : !complete && ranking(sentence) && !SCOPED.test(sentence) && !AMONG_SHOWN.test(sentence) && aboutRange ? "ranking" as const
       : absence ? (found.length ? "disproved" as const : (absent && !scoped ? absenceBacked : !SUBSTITUTE_ABSENT.test(sentence) || substituteBacked) ? null : "absence" as const)
       : null;
     // An unbacked stock claim is removed if it survives the repair, so it outranks the kinds that are only reworded.
     const stock = STOCK.test(sentence) && !stockBacked(sentence);
-    const reworded = range === "absence" || range === "disproved" || range === "ranking";
+    const reworded = range === "absence" || range === "disproved" || range === "ranking" || range === "rangeDenied";
     const kind = reworded && stock ? "stock" as const : range ?? (stock ? "stock" as const : null);
-    return kind ? [{ sentence, kind, found }] : [];
+    return kind ? [{ sentence, kind, found, denied }] : [];
   });
 }
 
@@ -993,10 +1115,11 @@ export function reviewAnswer(
   for (const { sentence, code } of keptLineClaims(answer.message, turn.unchecked ?? [], turn.changes ?? [])) {
     safety.push(`${KEPT_LINE_PREFIX}: "${sentence}". ${code} wasn't re-checked this turn but is still on the customer's enquiry: don't say it was removed or is missing.`);
   }
-  for (const { sentence, kind, found } of turn.searches ? unbackedClaims(answer.message, turn.searches, seen) : []) {
+  for (const { sentence, kind, found, denied } of turn.searches ? unbackedClaims(answer.message, turn.searches, seen) : []) {
     // A "we don't have it" can be honest about a product type the searches missed, and a ranking may be the answer to "got cheaper?",
     // so they are reworded, never removed.
-    if (kind === "absence") style.push(`${ABSENCE_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${absenceFix(sentence)}`);
+    if (kind === "rangeDenied") style.push(`${RANGE_DENIAL_PREFIX}: "${sentence}" (${denied}). Don't say we don't carry it: say what that range covers (from SIA HUAT'S CATALOGUE RANGES) and ask which type; if the customer wants something it doesn't have (sofas), name only that item as not listed.`);
+    else if (kind === "absence") style.push(`${ABSENCE_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${absenceFix(sentence)}`);
     else if (kind === "disproved") {
       const named = found.slice(0, 3).map((item) => `${item.stock_id} (${item.name.replace(/"/g, "″")})`).join(", ");
       style.push(`${ABSENCE_ISSUE_PREFIX}: "${sentence}". ${named} came up in this turn's results: if it is what the customer asked for, name it with its stock; if not, keep your sentence.`);
@@ -1053,6 +1176,7 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [CLAIM_ISSUE_PREFIX, "CLAIM"],
   [ALL_IN_STOCK_ISSUE_PREFIX, "CLAIM"],
   [ABSENCE_ISSUE_PREFIX, "ABSENCE"],
+  [RANGE_DENIAL_PREFIX, "RANGE_DENIAL"],
   [MID_SENTENCE_ISSUE, "MID_SENTENCE"],
   [DANGLING_CURRENCY_ISSUE, "DANGLING_CURRENCY"],
   [NO_CARD_PREFIX, "NO_CARD"],

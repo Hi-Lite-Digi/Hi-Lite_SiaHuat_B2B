@@ -106,6 +106,8 @@ test("the check's prompt keeps v5 and adds removals, this turn's lookups, units,
   assert.doesNotMatch(PICK_CHECK_PROMPT, /by the same signs as picked/);
   // r3 c09-stress idx 6 "16 inch too long ... got shorter one with the lock thing?": its 20 tongs came off before any replacement existed.
   assert.match(PICK_CHECK_PROMPT, /Asking whether another size, type or a cheaper one exists \("too long, got shorter one\?", "got cheaper\?"\) is not asking to replace it yet: not_picked; the line comes off only when they choose the replacement or ask to remove it\./);
+  // r7, owner 2 Oct: "If i get 3, can i get a better price?" was a sure pick of 3 and added $9,238.08 of ice shavers.
+  assert.match(PICK_CHECK_PROMPT, /\n\nA number tied to a price is not an order: a number in an "if" about the price, or in a question asking for a discount, a better, lower or bulk price, or offering their own price for N units, is not_picked, even when it answers Claire's how-many question\.\n\nquantity: /);
   assert.deepEqual(PICK_SCHEMA.required, ["verdict", "sure", "code", "candidates", "quantity"]);
   assert.equal(PICK_SCHEMA.additionalProperties, false);
 });
@@ -319,6 +321,22 @@ test("a sure pick with another number answers the retry with that number, so it 
   assert.deepEqual([retry.verdict, retry.sure, retry.quantity], ["picked", true, 6]);
   assert.equal(fake.calls.length, 1);
   assert.equal(cache.settled.length, 1);
+});
+
+test("a no-number probe answers nothing for the add that follows", async () => {
+  // r7: on "if i take 4 can cheaper or not" the probe (loop.ts checkNamed) said picked q=4, and the nudged add 4 went through unchecked.
+  const fake = fakePickCheck({ quantity: 4 });
+  const cache = pickCheckCache(fake);
+  await cache(proposal({ quantity: null, requested: null }));
+  await cache(proposal({ quantity: 4, requested: 4 }));
+  assert.equal(fake.calls.length, 2);
+  assert.equal(cache.picked("UT16HR"), true); // the nudge still fires on the probe's sure pick
+  // A sure "different" from a probe: the add of the other product is checked too.
+  const other = fakePickCheck((p) => (p.code === "UT16HR" ? { verdict: "different", code: "2564L", quantity: 3 } : {}));
+  const otherCache = pickCheckCache(other);
+  await otherCache(proposal({ quantity: null, requested: null }));
+  await otherCache(proposal({ code: "2564L", name: "Long Tong 16.5 inch", quantity: 3, requested: 3 }));
+  assert.equal(other.calls.length, 2);
 });
 
 test("picked() is true only for a sure pick of that product, or a sure 'different' naming it", async () => {

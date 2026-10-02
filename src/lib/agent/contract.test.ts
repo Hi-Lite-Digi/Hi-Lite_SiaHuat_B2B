@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
-import { agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote } from "./contract";
+import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, historyFor, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote, type ChatBubble } from "./contract";
 import { product } from "./testing";
 
 test("a card tap is a product choice, never text", () => {
@@ -107,4 +107,41 @@ test("a card tap's history entry gives its item code", () => {
   assert.equal(tappedCode("[tap] Picked: Cassette Gas Torch (Safico) (code BTS-8026D)"), "BTS-8026D");
   assert.equal(tappedCode("[tap] Picked: Blow Torch (code 970S)  "), "970S");
   assert.equal(tappedCode("[tap] Picked: Blow Torch"), null);
+});
+
+test("the history the browser sends: the last 30 bubbles, each marked and capped, with the cards note kept", () => {
+  const earlier = Array.from({ length: 23 }, (_, index): ChatBubble => ({ role: "user", text: `earlier ${index}` }));
+  const bubbles: ChatBubble[] = [
+    { role: "user", text: "too old 1" },
+    { role: "user", text: "too old 2" },
+    ...earlier,
+    { role: "assistant", text: "Hi, I'm Claire from Sia Huat. What are you looking for today?" },
+    { role: "user", text: "Picked: KITCHEN BLOW TORCH 970S (code 970S)", tap: true },
+    { role: "user", text: "Folding tables", chip: true },
+    { role: "user", text: "Bro then what is this", imageUrl: "data:image/png;base64,AA" },
+    { role: "user", text: "", imageUrl: "data:image/png;base64,AA" },
+    { role: "assistant", text: "x".repeat(2_100), cards: [torch] },
+    { role: "assistant", text: "" },
+  ];
+  const note = cardsNote([torch]);
+  assert.deepEqual(historyFor(bubbles), [
+    ...earlier.map((bubble) => ({ role: "user", content: bubble.text })),
+    { role: "assistant", content: "Hi, I'm Claire from Sia Huat. What are you looking for today?" },
+    { role: "user", content: `${TAP_PREFIX} Picked: KITCHEN BLOW TORCH 970S (code 970S)` },
+    { role: "user", content: `${CHIP_PREFIX} Folding tables` },
+    { role: "user", content: `${PHOTO_PREFIX} Bro then what is this` },
+    { role: "user", content: `${PHOTO_PREFIX} ${NO_CAPTION}` },
+    { role: "assistant", content: `${"x".repeat(2_000 - note.length)}${note}` },
+  ]);
+});
+
+test("a failed photo's line reads as a plain statement in the history", () => {
+  // Owner, 2 Oct: after a photo got lost Claire read her own "Sorry, my reply didn't come through" and said she never got one.
+  assert.deepEqual(historyFor([
+    { role: "user", text: "Bro then what is this", imageUrl: "data:image/png;base64,AA" },
+    { role: "assistant", text: "Sorry, that photo didn't come through. Could you send it again? Sia Huat sales can also help (details below).", historyText: "That photo didn't come through on my side." },
+  ]), [
+    { role: "user", content: `${PHOTO_PREFIX} Bro then what is this` },
+    { role: "assistant", content: "That photo didn't come through on my side." },
+  ]);
 });
