@@ -1,10 +1,11 @@
 // src/lib/agent/prompt.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
+import { catalogueRanges } from "@/lib/catalogue-ranges";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import { withGstCents } from "./enquiry";
-import { CLAIRE_AGENT_PROMPT } from "./prompt";
+import { CLAIRE_AGENT_PROMPT, renderRanges } from "./prompt";
 
 test("Claire's agent prompt carries the sales voice and the hard rules", () => {
   assert.match(CLAIRE_AGENT_PROMPT, /SIA HUAT SALES VOICE/);
@@ -91,8 +92,10 @@ test("Claire's wording on rankings, stock per item code, origin, series, earlier
   assert.ok(lineWith("- Cards:").includes("Describe stock only as each product's stock field and available_quantity say, for that item code; give the current figure and don't guess why it differs from an earlier one; 'not checked' never means out of stock."));
   assert.ok(lineWith("- The [cards shown: …] notes").endsWith(" 'the other one' or a feature of an earlier card is about cards already shown: get_product those cards and check their facts before searching for new products."));
   assert.ok(lineWith("- Nearest match:").endsWith(" When they say a price is too high or ask for cheaper, search the category with max_price below the price they turned down."));
-  // No exam answers written into the prompt, no Gastronorm fit rule (owner question 10), and no "say it was your mistake".
-  for (const words of ["Global", "Diwali", "Gastronorm", "your mistake"]) assert.ok(!CLAIRE_AGENT_PROMPT.includes(words), words);
+  // No exam answers written into the prompt, no Gastronorm fit rule (owner question 10), and no "say it was your mistake". The
+  // generated range list names the catalogue's own sections ("Gastronorm/steam pans"), so only the written rules are checked.
+  const rules = CLAIRE_AGENT_PROMPT.replace(renderRanges(catalogueRanges), "");
+  for (const words of ["Global", "Diwali", "Gastronorm", "your mistake"]) assert.ok(!rules.includes(words), words);
 });
 
 test("Claire keeps to the facts on extras, sizes, matches, superlatives and the nearest match (exam 3)", () => {
@@ -285,4 +288,28 @@ test("Claire only gives store links from the tools or the chat, and handles a li
 test("asked for a new chat, Claire points to the New chat button and clears the enquiry only when asked", () => {
   // Reset check (2026-10-01): typed "reset" only got "Your enquiry is already empty", and typed "new chat" was ignored.
   assert.ok(CLAIRE_AGENT_PROMPT.includes("say in a few words that the New chat button at the top starts a fresh one. Clear the enquiry (update_enquiry) only when they asked to clear it, start over or reset; 'new chat' alone isn't that."));
+});
+
+test("the catalogue's ranges render one line per range, each section with its types in brackets", () => {
+  const ranges = renderRanges([
+    ["Furniture & Banquet Equipment", [["Hotel Equipment", ["Q-posts"]], ["Tables", ["Folding tables", "Lazy susans"]]]],
+    ["Books", [["Guides", []]]],
+  ]);
+  assert.equal(ranges, "- Furniture & Banquet Equipment: Hotel Equipment (Q-posts); Tables (Folding tables, Lazy susans)\n- Books: Guides");
+});
+
+test("Claire is given every range the catalogue lists and never denies a whole one (owner, 2 Oct: furniture)", () => {
+  // "How about furniture" got "We don't carry dining tables or chairs here", and a queue stand was "not that exact one",
+  // while the store lists Furniture & Banquet Equipment with Q-posts.
+  // Each assert.ok has a message: a failing one without it hung the runner while it built its own.
+  assert.ok(catalogueRanges.length > 0, "no ranges");
+  for (const [range] of catalogueRanges) assert.ok(CLAIRE_AGENT_PROMPT.includes(`\n- ${range}: `), range);
+  assert.ok(CLAIRE_AGENT_PROMPT.includes(`\n\nSIA HUAT'S CATALOGUE RANGES (range: section (types); ...)\n${renderRanges(catalogueRanges)}\n\nHOW YOU WORK\n`), "range list");
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  assert.ok(lines[0].endsWith("Sia Huat supplies kitchen, tableware, bar, buffet and F&B equipment, and the other ranges listed below, to restaurants, cafes, hotels and home cooks in Singapore."), lines[0]);
+  const rule = lines[lines.findIndex((line) => line.startsWith("- Broad request (")) + 1];
+  assert.ok(rule.startsWith("- A request for a whole range or section in SIA HUAT'S CATALOGUE RANGES, or in other words for one ('furniture', 'uniforms', 'housekeeping stuff'): "), rule);
+  assert.ok(rule.includes("never say we don't carry it, even when a search with the customer's words misses it"), rule);
+  assert.ok(rule.includes("Say in one line what it covers, naming a few types from the list, and ask which type they need (up to 3 type names as chips); show products once they choose."), rule);
+  assert.ok(rule.includes("(a queue stand is a Q-post) is a specific request: search with that type as category."), rule);
 });

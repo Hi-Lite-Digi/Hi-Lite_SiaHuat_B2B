@@ -502,6 +502,13 @@ test("a failed category search is reported and the query results are still used"
   assert.equal(body.category_note, "Category search failed.");
 });
 
+test("the category description offers a range or section name from the prompt's list (owner, 2 Oct: furniture)", () => {
+  const search = agentTools.find((tool) => tool.name === "search_catalogue")!;
+  const properties = search.input_schema.properties as Record<string, { description?: string }>;
+  const description = properties.category.description ?? "";
+  assert.ok(description.includes("or a range or section name from SIA HUAT'S CATALOGUE RANGES ('Furniture & Banquet Equipment', 'Chef & Crew Wear')."), description);
+});
+
 test("the tool description no longer suggests a category that matches nothing, and queries take 1-3 phrases", () => {
   const search = agentTools.find((tool) => tool.name === "search_catalogue")!;
   const properties = search.input_schema.properties as Record<string, { description?: string; minItems?: number; maxItems?: number }>;

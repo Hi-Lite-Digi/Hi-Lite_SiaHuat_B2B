@@ -74,7 +74,7 @@ export const agentTools: Anthropic.Tool[] = [
       type: "object",
       properties: {
         queries: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3, description: "1-3 short search phrases" },
-        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets'. Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first. If category_found is false, use a name from categories." },
+        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets', or a range or section name from SIA HUAT'S CATALOGUE RANGES ('Furniture & Banquet Equipment', 'Chef & Crew Wear'). Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first. If category_found is false, use a name from categories." },
         max_price: { type: "number", description: "Optional budget ceiling per unit, SGD ex GST" },
         exclude_ids: { type: "array", items: { type: "string" }, description: "Item codes the customer rejected" },
         exclude_brands: { type: "array", items: { type: "string" }, description: "Brands the customer ruled out, or every brand of a country they don't want (details 'Country of Brand Origin')" },
