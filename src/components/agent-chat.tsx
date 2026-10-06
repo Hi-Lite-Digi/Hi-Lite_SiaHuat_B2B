@@ -163,7 +163,11 @@ export function AgentChat() {
     if (file.size > MAX_PHOTO_BYTES) return setNotice("Please use a photo under 15 MB.");
     const session = sessionId.current;
     void photoAttachment(file).then(
-      (image) => { if (sessionId.current === session) setAttachment(image); },
+      (image) => {
+        if (sessionId.current !== session) return;
+        setAttachment(image);
+        setNotice(""); // a good photo clears the warning a rejected one left (F8)
+      },
       () => { if (sessionId.current === session) setNotice("That photo couldn't be opened. Please try another one."); },
     );
   }
@@ -216,6 +220,7 @@ export function AgentChat() {
       recorderRef.current = recorder;
       recorder.start();
       setRecording(true);
+      setNotice("");
       window.setTimeout(() => { if (recorderRef.current === recorder) recorder.stop(); }, 60_000);
     } catch {
       setNotice("Microphone access is needed for voice notes.");
@@ -228,6 +233,7 @@ export function AgentChat() {
         lines: enquiryRef.current.lines,
         transcript: itemsRef.current.map((item) => ({ role: item.role, time: item.time, text: item.text, cards: item.cards, image: Boolean(item.imageUrl) })),
       });
+      setNotice("");
     } catch {
       setNotice("The PDF could not be downloaded. Please try again.");
     }
