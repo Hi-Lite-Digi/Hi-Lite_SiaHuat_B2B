@@ -29,8 +29,8 @@ function clean(value: string | null | undefined) {
   return normalized && normalized !== "-" ? normalized : null;
 }
 
-function decodeFlightData(html: string) {
-  const $ = cheerio.load(html);
+// The page loaded once: a second load cost 26-104 ms of event loop per page while the round's other reads waited (r8).
+function decodeFlightData($: cheerio.CheerioAPI) {
   return $("script")
     .map((_index, element) => {
       const script = $(element).html() ?? "";
@@ -79,7 +79,7 @@ function originalImageUrl(src: string | undefined, productUrl: string) {
 
 export function parseSiaHuatProductPage(html: string, productUrl: string): ScrapedSiaHuatProduct {
   const $ = cheerio.load(html);
-  const flightData = decodeFlightData(html);
+  const flightData = decodeFlightData($);
   const sourceProductId = new URL(productUrl).pathname.split("/").filter(Boolean).at(-1) ?? "";
   const title = $("h5").filter((_index, element) => $(element).closest("div").text().includes("code:")).first();
   const name = clean(title.text()) ?? clean($("title").text().replace(/\s*\|\s*Sia Huat E-store\s*$/i, ""));
