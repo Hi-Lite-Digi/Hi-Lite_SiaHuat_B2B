@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { cardsNote, type AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
 import { searchSlots } from "./facts";
-import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX, PRICE_HEDGE_PREFIX } from "./guards";
+import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, PRICE_HEDGE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, fakePickCheck, product } from "./testing";
 import { PICK_CHECK_PROMPT, type PickCheck } from "./verify";
@@ -2308,7 +2308,7 @@ test("this turn's card whose read ran late is read again before the reply goes o
   assert.equal(bodies.length, 2);
   assert.deepEqual(reads(lookups, "970S"), ["late:970S", "live:970S"]);
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status, card.list_price]), [["970S", "in_stock", 31.31]]);
-  // Named by its code without a card (a 6th item past the card cap), it is read again too; an unnamed one isn't.
+  // Named by its code without a card (a 7th item past the card cap), it is read again too; an unnamed one isn't.
   const lighter = product({ stock_id: "L1", name: "TORCH LIGHTER" });
   const named = fakeDeps([blowtorch, safico, lighter], { "970S": "timeout-once", L1: "timeout-once" });
   const second = fakeClient([torchSearch, answer({ message: "970S is a handheld kitchen torch." })]);
@@ -2427,14 +2427,115 @@ const toolRound = (calls: Array<[name: string, input: unknown]>) => ({
   ...toolCall("t0", calls[0][0], calls[0][1]), content: calls.map(([name, input], i) => ({ type: "tool_use", id: `t${i}`, name, input })),
 }) as unknown as Anthropic.Message;
 
-test("a list of six searches whose answer ends 'None added yet' goes out as it is (r8 R02)", async () => {
-  const words = ["coffee grinder", "shelf liner", "nitrile glove", "cut resistant glove", "mini sauce pan", "cast iron casserole"];
-  const message = `${six.map((item, i) => `${i + 1}. ${item.name}, ${item.stock_id} - $${item.list_price.toFixed(2)}`).join("\n")}\nNone added yet.`;
-  const { client, bodies } = fakeClient([toolRound(words.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.slice(0, 5).map((item) => item.stock_id) })]);
+const sixWords = ["coffee grinder", "shelf liner", "nitrile glove", "cut resistant glove", "mini sauce pan", "cast iron casserole"];
+const sixLines = six.map((item, i) => `${i + 1}. ${item.name}, ${item.stock_id} - $${item.list_price.toFixed(2)}`).join("\n");
+
+test("a list of six is answered in one round with six cards, and 'None added yet' goes out as it is (r8 M03, R02)", async () => {
+  const message = `${sixLines}\nNone added yet.`;
+  const { client, bodies } = fakeClient([toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.map((item) => item.stock_id) })]);
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
   // No nudge and no repair: R02 took four Claude calls and ended "That change isn't on your enquiry yet. Which item and how many would you like?"
   assert.equal(bodies.length, 2);
-  assert.equal(reply.message, message);
+  assert.equal(reply.message, `${message}\n\n${LIST_QUOTE_LINE}`);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), six.map((item) => item.stock_id));
+});
+
+test("a list answer of more than three items points once in the chat to a formal quote, with the contact (r8 C1, M03)", async () => {
+  const message = `${sixLines}\nWant me to add any of these?`;
+  const sixRound = () => toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }]));
+  const first = fakeClient([sixRound(), answer({ message, card_ids: six.map((item) => item.stock_id) })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client: first.client, model: "claude-sonnet-5" });
+  assert.equal(first.bodies.length, 2);
+  assert.equal(reply.message, `${message}\n\n${LIST_QUOTE_LINE}`);
+  assert.equal(reply.showContact, true);
+  // Codes looked up four or more at once are a list too (R03's twelve).
+  const codes = fakeClient([toolRound(six.map((item) => ["get_product", { stock_id: item.stock_id }])), answer({ message: sixLines, card_ids: six.map((item) => item.stock_id) })]);
+  const coded = await runAgentTurn({ request: request({ event: { type: "text", text: six.map((item) => item.stock_id).join(", ") } }), deps: fakeDeps(six), client: codes.client, model: "claude-sonnet-5" });
+  assert.equal(coded.message, `${sixLines}\n\n${LIST_QUOTE_LINE}`);
+  // Said once: a later list answer in the same chat gets neither the line nor the contact.
+  const history = [{ role: "user" as const, content: sixItems }, { role: "assistant" as const, content: `${reply.message}${cardsNote(reply.cards)}` }];
+  const laterMessage = `${sixLines}\nNone added yet.`;
+  const later = fakeClient([sixRound(), answer({ message: laterMessage })]);
+  const again = await runAgentTurn({
+    request: request({ event: { type: "text", text: `And these again: ${sixWords.join("; ")}` }, history }), deps: fakeDeps(six), client: later.client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual([again.message, again.showContact], [laterMessage, false]);
+  // Four options for one item from one search are no list.
+  const options = six.slice(0, 4).map((item, i) => `${i + 1}. ${item.name}`).join("\n");
+  const one = fakeClient([toolRound([["search_catalogue", { queries: ["glove"] }]]), answer({ message: options, card_ids: [] })]);
+  const single = await runAgentTurn({ request: request({ event: { type: "text", text: "gloves" } }), deps: fakeDeps(six), client: one.client, model: "claude-sonnet-5" });
+  assert.deepEqual([single.message, single.showContact], [options, false]);
+});
+
+test("Claude's own quote pointer dropped as a repeated pitch gives way to the line, with the contact (r8 review)", async () => {
+  for (const [said, own, showContact] of [
+    ["Yes. For delivery charges, please contact Sia Huat sales.", "Contact Sia Huat sales for a formal quote on the whole list.", false],
+    ["You can download the PDF of your enquiry from the panel and send it along.", "You can email this list to Sia Huat sales for a formal quote.", true],
+    ["You can download the PDF of your enquiry from the panel and send it along.", "Download the PDF and send it to Sia Huat sales for a formal quote.", true],
+  ] as const) {
+    const { client } = fakeClient([
+      toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message: `${sixLines}\n${own}`, card_ids: six.map((item) => item.stock_id), show_contact: showContact }),
+    ]);
+    const history = [{ role: "user" as const, content: "do you deliver?" }, { role: "assistant" as const, content: said }];
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems }, history }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
+    assert.deepEqual([reply.message, reply.showContact], [`${sixLines}\n\n${LIST_QUOTE_LINE}`, true], own);
+  }
+});
+
+test("a price check of four cards shown before is no list: no quote line and no forced contact (r8 review)", async () => {
+  const four = six.slice(0, 4);
+  const history = [{ role: "user" as const, content: "gloves and liners" }, { role: "assistant" as const, content: `Here are four options.${cardsNote(four)}` }];
+  const message = four.map((item, i) => `${i + 1}. ${item.name} - $${item.list_price.toFixed(2)}`).join("\n");
+  const { client, bodies } = fakeClient([toolRound(four.map((item) => ["get_product", { stock_id: item.stock_id }])), answer({ message })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "what are the prices of these 4?" }, history, shownProductIds: four.map((item) => item.stock_id) }),
+    deps: fakeDeps(six), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual([reply.message, reply.showContact], [message, false]);
+});
+
+test("an honest closing offer to add goes out with no nudge and no repair (r8 M03 run 2)", async () => {
+  for (const offer of ["Let me know if you'd like any of these added.", "Let me know which ones you'd like added."]) {
+    const { client, bodies } = fakeClient([
+      toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message: `${sixLines}\n${offer}`, card_ids: six.map((item) => item.stock_id) }),
+    ]);
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 2, offer);
+    assert.equal(reply.message, `${sixLines}\n${offer}\n\n${LIST_QUOTE_LINE}`, offer);
+    assert.deepEqual(reply.enquiry.lines, []);
+  }
+});
+
+test("a numbered list still gets one round of lookups, and a list of six may end without 'Next:' (r8 M03, M09)", async () => {
+  const leftNote = /answer now with what you found for the first items, one card each, and if items are left, end with what's next by name/;
+  // Eight items, six looked up: one round, then the answer names what's next (exam 3, s01-B T0).
+  const eight = ["stock pot", "strainer", "ladle", "half pan", "quarter pan", "oyster knife"];
+  const long = fakeClient([toolRound(eight.map((item) => ["search_catalogue", { queries: [item] }])), answer({ message: "There are 8 items on your list. Which size of stock pot do you need? Next: the lids." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: s01List } }), deps: deps(), client: long.client, model: "claude-sonnet-5" });
+  assert.deepEqual(long.bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(long.bodies[1]), leftNote);
+  // Six numbered items, all looked up: one round, and the answer has nothing left to name.
+  const message = `There are 6 items on your list:\n${sixLines}\nNone added yet.`;
+  const { client, bodies } = fakeClient([toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.map((item) => item.stock_id) })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: `Please quote these: ${sixWords.map((word, i) => `${i + 1}) ${word}`).join(" ")}` } }), deps: fakeDeps(six), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(bodies[1]), leftNote);
+  assert.equal(reply.message, `${message}\n\n${LIST_QUOTE_LINE}`);
+  assert.equal(reply.cards.length, 6);
+});
+
+test("six cards shown earlier are all looked up and attached again, with no repair (r8 R02)", async () => {
+  const codes = six.map((item) => item.stock_id);
+  const shown = { role: "assistant" as const, content: `Here are all six.\n[cards shown: ${six.map((item) => `${item.stock_id} ${item.name} ($${item.list_price.toFixed(2)})`).join("; ")}]` };
+  const { client, bodies } = fakeClient([answer({ message: "Here they are again - tap the one you want.", card_ids: codes })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "show me the six again" }, history: [{ role: "user", content: sixItems }, shown], shownProductIds: codes }), deps: fakeDeps(six), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), codes);
 });
 
 test("'all found' is said truthfully when a code wasn't found or its store page failed (r8 R03, M04)", async () => {
@@ -2530,5 +2631,46 @@ test("a promise to add beside 'none of' still gets the claim nudge (r8 review)",
     assert.equal(bodies.length, 3, message);
     assert.equal(reply.message, asked, message);
     assert.deepEqual(reply.enquiry.lines, []);
+  }
+});
+
+test("a removed listing looked up again ends the tool rounds, so the next call answers with no store read and no update (r8 R03)", async () => {
+  // R03: "Do not add anything." Claude looked 04-00820 up again, then sent update_enquiry for "placeholder", in 4 calls.
+  const lookups = chillerGone();
+  const { client, bodies } = fakeClient([
+    toolRound([["get_product", { stock_id: "04-00820" }], ["get_product", { stock_id: "970S" }]]),
+    lookUpChiller(),
+    answer({ message: "1. 04-00820 - couldn't confirm this code on the store just now\n2. 970S - $31.31", card_ids: ["970S"], show_contact: true }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "Find 04-00820 and 970S. Do not add anything." } }), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.deepEqual(bodies.map(choice), ["auto", "auto", "none"]);
+  assert.match(lastMessage(bodies[2]), /Looking that item code up again gave the same result/);
+  assert.deepEqual(lookups.calls.filter((call) => call.includes("04-00820")), ["code:04-00820", "details:04-00820"]);
+  assert.deepEqual([reply.cards.map((card) => card.stock_id), reply.enquiry.lines], [["970S"], []]);
+  // A round that also does something else keeps its tools.
+  const mixed = fakeClient([
+    lookUpChiller(),
+    toolRound([["get_product", { stock_id: "04-00820" }], ["search_catalogue", { queries: ["display chiller"] }]]),
+    answer({ message: "I couldn't confirm 04-00820 on the store just now." }),
+  ]);
+  await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client: mixed.client, model: "claude-sonnet-5" });
+  assert.deepEqual(mixed.bodies.map(choice), ["auto", "auto", "auto"]);
+  // An enquiry line the turn's re-check found gone, looked up once: no second look yet, so the tools stay on.
+  const online = fakeClient([lookUpChiller(), answer({ message: "I couldn't confirm 04-00820 on the store just now." })]);
+  await runAgentTurn({ request: { ...chillerAsked, enquiry: [{ stockId: "04-00820", quantity: 1 }] }, deps: chillerGone(), client: online.client, model: "claude-sonnet-5" });
+  assert.deepEqual(online.bodies.map(choice), ["auto", "auto"]);
+});
+
+test("a lone second look at a removed listing keeps the tools when the customer didn't say not to add (r8 review)", async () => {
+  for (const text of ["Add 2 of 970S please, and what is 04-00820?", "add 2 pcs 04-00820 and 2 pcs 970S"]) {
+    const { client, bodies } = fakeClient([
+      toolRound([["get_product", { stock_id: "04-00820" }], ["get_product", { stock_id: "970S" }]]),
+      lookUpChiller(),
+      toolCall("t2", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+      answer({ message: "Got it: 2 Kitchen Blow Torch 970S. I couldn't confirm 04-00820 on the store just now.", show_contact: true }),
+    ]);
+    const reply = await checkedTurn({ request: request({ event: { type: "text", text } }), deps: chillerGone(), client, model: "claude-sonnet-5" });
+    assert.deepEqual(bodies.map(choice), ["auto", "auto", "auto", "none"], text);
+    assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]], text);
   }
 });

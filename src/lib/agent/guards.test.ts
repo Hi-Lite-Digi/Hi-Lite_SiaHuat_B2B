@@ -5,10 +5,10 @@ import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
-  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
+  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  quotedBefore, withListQuote, withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -341,6 +341,22 @@ test("a reply saying nothing has reached Sia Huat yet keeps its route to order (
   assert.equal(dropRepeatedPitch(plain, earlier("any update on this order?"), true), "Yes, each product's store page has Add to Cart.");
 });
 
+test("a list answer points once in the chat to a formal quote from Sia Huat sales (r8 C1: M03 x2 left it out)", () => {
+  const list = "1. MC11 - $84.31\n2. 07-00019 - $37.52\n3. R52232D - $9.08\n4. 08-00840 - $18.26\nWant me to add any of these?";
+  assert.equal(withListQuote(list), `${list}\n\n${LIST_QUOTE_LINE}`);
+  // Claude's own pointer, either way round, isn't said twice.
+  for (const own of [`${list} You can send this list straight to Sia Huat sales for a formal quote.`, `${list} For a formal quote on the whole list, send it to Sia Huat sales.`]) {
+    assert.equal(withListQuote(own), own);
+  }
+  // An earlier reply gave it: nothing is added, and the contact isn't forced.
+  assert.equal(quotedBefore(["Here are the first six.", `Nothing added. ${LIST_QUOTE_LINE}`]), true);
+  // A GST estimate's "Sia Huat's quote" is no pointer to sales.
+  assert.equal(quotedBefore(["About $50.92 with GST (GST $4.20); the checkout or Sia Huat's quote shows the exact amount."]), false);
+  // A Chinese reply keeps its language: the contact block alone points to sales.
+  const chinese = "1. MC11 - $84.31\n2. 07-00019 - $37.52\n3. R52232D - $9.08\n4. 08-00840 - $18.26\n需要加入哪几样？";
+  assert.equal(withListQuote(chinese), chinese);
+});
+
 test("a closing 'Anything else?' is kept right after a change, but not with no change or twice running (r4 c09-persona)", () => {
   const added = "Got it: 2 Safico torches. Anything else?";
   assert.equal(withoutRepeatedCloser(added, "Here are two torches.", true), added);
@@ -658,6 +674,16 @@ test("honest or conditional wording is not a claim", () => {
     "No items added yet.",
     "No items were added, as requested.",
     "No items have been added to your enquiry.",
+    // r8 M03 run 2: an honest closing offer cost a repair. Offers and questions about adding wait on the customer.
+    "Let me know if you'd like any of these added.",
+    "Let me know which ones you'd like added.",
+    "Let me know how many of each you'd like added to your enquiry.",
+    "Tell me which of these you want added, and how many.",
+    "Just say if you would like them added.",
+    "If you'd like the plates added too, tell me how many.",
+    "Let me know whether you need the torch removed.",
+    "Let me know if you'd like the plates to be added.",
+    "Say which ones you need added.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
     assert.equal(withoutEnquiryClaims(message, { lines: [], changes: [], seen: shop }), message);
@@ -797,10 +823,34 @@ test("real claims and unconditional promises are still caught", () => {
     "What you need added is now in your enquiry.",
     "Can confirm the Safico torch you need added is on your enquiry now.",
     "Can confirm the 2 you need added.",
+    // An offer beside a claim never excuses the claim (r8 tier 3).
+    "What you'd like added is now on your enquiry.",
+    "Added the Safico torch, and let me know if you'd like the plates added.",
+    "Added 2 Safico torches if you'd like more added later.",
+    "Let me know if you'd like the plates added; I added the Safico torch.",
+    "The torches you'd like added are on your enquiry now.",
+    "Let me know which ones you'd like added - I've added the Safico torch already.",
+    // An offer's words never swallow the claim's own verb or the next clause (r8 review).
+    "Got what you need added: 2 Safico torches.",
+    "Sorted what you need added - 2 Safico torches.",
+    "What you need is added: 2 Safico torches.",
+    "What you'd like is now added: 2 Safico torches.",
+    "Which ones you need have been added: the Safico torch.",
+    "Which ones you need are added: the Safico torch and the Rooster plate.",
+    "If you like these I've added 2 Safico torches.",
+    "How many you need is added: 2 Safico torches.",
+    "Let me know which ones you'd like and I've added the Safico torch.",
+    "Let me know which plates you'd like and I added 2 Safico torches.",
+    "Tell me how many plates you need and I've added the Safico torch for now.",
+    "If you'd like the plates too I added 2 Safico torches.",
     "Sorted the hiccup adding these and added 2 Safico torches.",
     // A closing "confirmed once more" set off by dashes is no condition either.
     "Adding 1 Safico torch now - confirmed once more - it's the BTS-8026D.",
   ]) assert.equal(toasterClaims(message).length, 1, message);
+  // The torch is on the enquiry and no removal ran: a removal said around an offer's words is still false (r8 review).
+  for (const message of ["What you'd like is removed: the Safico torch.", "Which one you need is removed now, the Safico torch."]) {
+    assert.equal(claimIssues(message, { lines: [line("BTS-8026D", 2)] }).length, 1, message);
+  }
   // exam 3, c02-A T12 echoed "That change hasn't been made yet" after "what the fk": the repair says so only for an asked change.
   assert.match(toasterClaims("Confirm and I'll get 2 added.")[0], /If the customer asked for that change, say it hasn't been made yet .*; if they didn't ask for one, just leave that sentence out and answer what they said\.$/);
 });
@@ -1509,6 +1559,13 @@ test("range wordings the round-4 guard missed need a backing search (exam 4)", (
   assert.deepEqual(rangeIssues("We don't have anything else in 28cm."), ["style ABSENCE"]);
 });
 
+test("'of the six' ranks the cards shown, as 'of the five' does, now that a reply may show six (review of C2b)", () => {
+  for (const message of ["Of the five, the Zyliss is the cheapest.", "Of the six, the Zyliss is the cheapest.", "Of the six items, the Zyliss is the cheapest."]) {
+    assert.deepEqual(rangeIssues(message, [search()]), [], message);
+  }
+  assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search()]), ["style CLAIM"]);
+});
+
 test("'between these' excuses a ranking of the cards shown, not a claim about the whole range", () => {
   assert.deepEqual(rangeIssues("Between these, that's our full range of tongs."), ["safety CLAIM"]);
   assert.deepEqual(rangeIssues("Among these, the Zyliss is the cheapest."), []);
@@ -1822,6 +1879,10 @@ test("a product the words name gets its card before the card they would otherwis
 test("no card is added for an enquiry line, a product changed this turn, an unchecked or sold-out one, or one another part offers a card for (r8 F6)", () => {
   const line = { item: "Royal Bone China Verona Deep Plate 24cm", code: "N2906", pricePerItem: 14.21, quantity: 1, total: 14.21, uom: "PC" };
   assert.deepEqual(namedCards(OCT3_EN, COUPE_CARDS, plateSeen, [line]), COUPE_CARDS);
+  // It may be the sixth card, never a seventh.
+  const five = [...COUPE_CARDS, "10293", "55-12123"];
+  assert.deepEqual(namedCards(OCT3_EN, five), ["Q1930", "3500-0224", "N2906", "N0536", "10293", "55-12123"]);
+  assert.deepEqual(namedCards(OCT3_EN, [...five, "RS-J1006-6"]), [...five, "RS-J1006-6"]);
   // "Removed the Verona and added 12 of this one" would otherwise put the removed Verona back.
   assert.deepEqual(namedCards("Swapped: removed the Royal Bone China Verona Deep Plate and added 12 of this bone china plate.", ["N0536"], plateSeen, [], [{ action: "remove", code: "N2906" }]), ["N0536"]);
   const verona = plateSeen.get("N2906")!;
@@ -1853,6 +1914,8 @@ test("saying all the cards are in stock when one isn't is a style issue", () => 
   const [inStock, out, unchecked] = [card("IN", "in_stock"), card("OUT", "out_of_stock"), card("UNK", "unknown")];
   assert.match(stockIssues("Here are 3 porcelain options in stock.", [inStock, out]).join(" "), /OUT \(out of stock\)/);
   assert.match(stockIssues("These are all confirmed in stock.", [inStock, unchecked]).join(" "), /stock not checked/);
+  // A list of six, one card each (r8 M03).
+  for (const message of ["Six items in stock.", "Here are 6 picks, available now."]) assert.match(stockIssues(message, [inStock, unchecked]).join(" "), /stock not checked/, message);
   assert.deepEqual(stockIssues("Both are in stock.", [inStock, card("IN2", "in_stock")]), []);
   for (const message of ["The first is in stock; the second is out of stock.", "Both are 0 in stock.", "Both are not available now.", "All in stock except the Severin, which is out of stock."]) {
     assert.deepEqual(stockIssues(message, [inStock, out]), [], message);
@@ -2066,12 +2129,15 @@ test("a list answer of 4 or more items isn't sent back for its length or its car
   const inline = `Here are the four: ${[1, 2, 3, 4].map((n) => `${n}) CODE-${n} - Stainless steel gastronorm pan with lid, 1/1 size, 150mm deep, heavy gauge, dishwasher safe, stackable for hot or cold holding on a buffet line or in a bain-marie`).join(" ")} None added yet.`;
   assert.ok(inline.length > 600 && inline.length <= 1_000, String(inline.length));
   assert.equal(tooLong(inline), false);
-  // 12 card_ids under a 12-line list: no repair, and the first 5 are shown.
+  const tooManyCards = ({ style }: { style: string[] }) => style.some((issue) => issue.startsWith("Show at most"));
+  // 12 card_ids under a 12-line list: no repair, and the first 6 are shown (r8 R02: one card each for a list of six).
   const twelve = review(`Here are all 12:\n${codes.map((code, i) => `${i + 1}. ${code} - Product ${i + 1}`).join("\n")}\nNone added yet.`, codes);
-  assert.ok(!twelve.style.includes("Show at most 5 cards."));
-  assert.equal(twelve.cards.length, 5);
+  assert.equal(tooManyCards(twelve), false);
+  assert.deepEqual(twelve.cards.map((card) => card.stock_id), codes.slice(0, 6));
+  // A plain reply may show 6 cards.
+  assert.equal(tooManyCards(review("Here are the closest matches I found.", codes.slice(0, 6))), false);
   // Not a list answer: 7 cards under a plain reply, a plain 700-character reply, and a list past 1,000 characters.
-  assert.ok(review("Here are the closest matches I found.", codes.slice(0, 7)).style.includes("Show at most 5 cards."));
+  assert.ok(review("Here are the closest matches I found.", codes.slice(0, 7)).style.includes("Show at most 6 cards."));
   assert.ok(tooLong("A long reply about the steamers. ".repeat(22)));
   assert.ok(tooLong(`${inline}\n${"More words here. ".repeat(30)}`));
 });

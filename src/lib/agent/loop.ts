@@ -4,14 +4,14 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
-import { CHIP_PREFIX, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
+import { CHIP_PREFIX, MAX_CARDS, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, gstWords, listItemCount, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  quotedBefore, withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -42,6 +42,7 @@ const EARLIER_CARD_CHECK_MS = 2_000;
 const CARD_RECHECK_MS = 4_000; // a lone store read from the function took 0.9-3.6 s (r8)
 const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
 // A pasted list longer than this gets one round of lookups (exam 3, s01-B T0: 8 items ran 2-3 tool rounds and got a stand-in).
+// That round may look up six items (r8 M03, M09).
 const LIST_ITEMS_PER_TURN = 3;
 // A plain thank-you needs no lookups (exam 3, s01-B T3: 3-4 tool rounds, then a stand-in); "thank u", "tysm" and a trailing emoji too.
 const THANKS_ONLY = /^\s*(?:ok(?:ay)?[\s,.]+)?(?:thanks?|thank (?:you|u)|thx|ty|tq|tysm)(?:\s+(?:so much|a lot|lah?|you))?[\s.!\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}]*$/iu;
@@ -87,7 +88,8 @@ const ASK_NOTE = "[Context from the system, not the customer] update_enquiry nee
 const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry couldn't settle which product the customer means. No more tools this turn: ask the one question its result asked for (which of the fitting cards, naming them, or whether it's the named product), with those cards. Don't ask them to confirm a number they typed.";
 const ANSWER_NOTE = "[Context from the system, not the customer] The customer hasn't picked this product. No more tools this turn: answer what they said; don't add it, don't ask them to confirm it, and don't say it was added.";
 const KEEP_NOTE = "[Context from the system, not the customer] That line stays on the enquiry. No more tools this turn: say plainly it's still on, answer what they said, and don't ask them to confirm again.";
-const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
+const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and if items are left, end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
+const GONE_NOTE = "[Context from the system, not the customer] Looking that item code up again gave the same result: its store listing has been removed. No more tools this turn: answer now with what you found.";
 const NOT_FINISHED: ToolOutcome = {
   content: JSON.stringify({ error: "NOT_FINISHED", note: "This didn't finish in time, so there is no result. Don't say what it found or changed." }), isError: true, error: "NOT_FINISHED",
 };
@@ -211,7 +213,7 @@ async function attachEarlierCards(
   ];
   // A code tried earlier this turn isn't looked up again after the repair: a stalled check would stall again.
   const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
-    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, 5);
+    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, MAX_CARDS);
   for (const id of wanted) tried.add(id);
   // One time limit covers each card's code lookup and live check together; a read of this turn's own product gets longer.
   const limit = wanted.some((id) => again.some((code) => same(code, id))) ? CARD_RECHECK_MS : EARLIER_CARD_CHECK_MS;
@@ -258,6 +260,8 @@ type ToolCallDone = { name: string; input: unknown; error?: string };
 /** An update_enquiry call's fields as Claude sent them (not yet checked). */
 const updateFields = (input: unknown) => input as { action?: unknown; stock_id?: unknown; quantity?: unknown };
 const updateCode = (input: unknown) => codeOf(updateFields(input));
+/** A get_product call's item code as the tool read it (trimmed); "" for a link. */
+const lookupCode = (input: unknown) => String((input as { stock_id?: unknown }).stock_id ?? "").trim();
 /** An update_enquiry call's action for the turn log: one of the four, never other text. */
 const updateAction = (input: unknown) => {
   const { action } = updateFields(input);
@@ -311,21 +315,30 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   return roundResults(content, outcomes);
 }
 
-type Stop = "which" | "ask" | "answer" | "keep";
+type Stop = "which" | "ask" | "answer" | "keep" | "gone";
 // A refusal again for a code refused before this round: only the customer can settle it. Exam 4: 23 forced "which" stops asked
 // "Just to confirm...?" about products the customer never picked, so a plain "not picked" is answered instead.
 const STUCK: Partial<Record<string, Stop>> = { NOT_PICKED: "answer", PICK_UNCLEAR: "which", PICK_UNCONFIRMED: "which", PICK_UNCHECKED: "which", REMOVE_REFUSED: "keep", SWAP_NOT_DONE: "keep" };
 // The same code, action and number refused again (another number is a new call).
 const BY_KEY: Partial<Record<string, Stop>> = { PICKED_OTHER: "which", QTY_NOT_FOR_ITEM: "which" };
+// "Do not add anything" (r8 R03), "don't add yet", "dun add", "no need to add".
+const noAddAsked = /\b(?:do\s+not|don['’]?t|dun|no\s+need(?:\s+to)?)\s+add\b/i;
 
 /**
  * Why the tool rounds stop when only the customer can unblock update_enquiry: every call refused again (STUCK, BY_KEY; "which"
  * before "keep" before "answer"), or an add or set of a product the customer picked that needs a number they never typed ("ask")
  * (exam 3, c09-stress T7: three update rounds, 13.4 s). A swap's held remove waits on its add, so the add's error decides. Errors
  * another call can fix (OVER_STOCK, UNIT_MISMATCH, a missing stock_id, a quantity sent in pieces for cartons) leave the tools on,
- * and so does any other tool call in the round. before: the codes refused or kept, and the calls refused, before this round.
+ * and so does any other tool call in the round. A round that only looks up again codes an earlier round found gone ("gone") has
+ * nothing left to learn, when the customer said not to add: otherwise an add they asked for may still follow (r8 review).
+ * before: the codes refused or kept, the calls refused, and the codes get_product found gone, before this round.
  */
-function stopNote(done: ToolCallDone[], ctx: TurnContext, before: { codes: ReadonlySet<string>; keys: ReadonlySet<string> }, picked: (code: string) => boolean): Stop | null {
+function stopNote(
+  done: ToolCallDone[], ctx: TurnContext, before: { codes: ReadonlySet<string>; keys: ReadonlySet<string>; gone: ReadonlySet<string> }, picked: (code: string) => boolean,
+): Stop | null {
+  // r8 R03: after its second look at 04-00820 Claude sent update_enquiry for "placeholder", though the customer said not to add.
+  if (done.length && noAddAsked.test(ctx.currentText ?? "")
+    && done.every((call) => call.name === "get_product" && call.error === "LISTING_GONE" && before.gone.has(lookupCode(call.input)))) return "gone";
   if (!done.length || done.some((call) => call.name !== "update_enquiry" || !call.error)) return null;
   const judged = done.some((call) => call.error !== "SWAP_NOT_DONE") ? done.filter((call) => call.error !== "SWAP_NOT_DONE") : done;
   const stuck = judged.map((call) => (before.codes.has(updateCode(call.input)) && STUCK[call.error!])
@@ -440,6 +453,10 @@ export async function runAgentTurn(input: {
     const updateResults: string[] = [];
     // Item codes whose get_product failed this turn (not found, gone, or cut by the deadline): the answer can't say every lookup worked.
     const missingCodes: string[] = [];
+    // The most searches and code lookups one round asked for: more than three at once look up a list (r8 M03, R03).
+    let mostLookups = 0;
+    // Item codes a get_product found gone this turn: a second look learns nothing (r8 R03).
+    const lookedGone = new Set<string>();
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
@@ -450,6 +467,8 @@ export async function runAgentTurn(input: {
     // attaching it, so the nudge and the review both get the earlier replies' cards: an unknown card would count as the confirm
     // step (exam 3, c09-stress T1).
     const earlierCards = picks.replies.flatMap((reply) => reply.cards);
+    const knownBefore = (code: string) => [...request.shownProductIds, ...earlierCards.map((card) => card.code), ...request.enquiry.map((line) => line.stockId)]
+      .some((known) => same(known, code));
     // What the work deadline cut, if anything, and how many tool calls finished this turn. A search the cut left running may land
     // while Claude answers: only the searches before the cut back a claim, as Claude never saw the rest.
     let cut: "call" | "tools" | null = null;
@@ -486,7 +505,7 @@ export async function runAgentTurn(input: {
       const outOfTime = round >= MAX_TOOL_ROUNDS || (round > 0 && timeLeft() <= roundNeedMs());
       const forceAnswer = stopped !== null || outOfTime;
       const note = stopped === "which" ? WHICH_NOTE : stopped === "ask" ? ASK_NOTE : stopped === "answer" ? ANSWER_NOTE : stopped === "keep" ? KEEP_NOTE
-        : stopped === "list" ? LIST_NOTE : outOfTime && round < MAX_TOOL_ROUNDS ? (cut && !finishedTools ? NOTHING_FOUND_NOTE : TIME_NOTE) : null;
+        : stopped === "list" ? LIST_NOTE : stopped === "gone" ? GONE_NOTE : outOfTime && round < MAX_TOOL_ROUNDS ? (cut && !finishedTools ? NOTHING_FOUND_NOTE : TIME_NOTE) : null;
       if (!stopped && outOfTime && round < MAX_TOOL_ROUNDS) forcedEarly = true;
       // After the tool results (or the nudge): every user message this loop sends has array content.
       if (note) (messages.at(-1)!.content as Anthropic.ContentBlockParam[]).push({ type: "text", text: note });
@@ -503,7 +522,7 @@ export async function runAgentTurn(input: {
       }
       slowestCall = Math.max(slowestCall, performance.now() - callStarted);
       if (response.stop_reason === "tool_use") {
-        const before = { codes: new Set([...ctx.refused, ...ctx.kept].map((code) => code.toLowerCase())), keys: new Set(ctx.refusedKeys) };
+        const before = { codes: new Set([...ctx.refused, ...ctx.kept].map((code) => code.toLowerCase())), keys: new Set(ctx.refusedKeys), gone: new Set(lookedGone) };
         const content = response.content;
         const toolsStarted = performance.now();
         const outcomes = new Map<string, ToolOutcome>();
@@ -520,6 +539,9 @@ export async function runAgentTurn(input: {
         slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
         missingCodes.push(...done.flatMap((call) => (call.name === "get_product" && call.error ? [String((call.input as { stock_id?: unknown }).stock_id ?? "")].filter(Boolean) : [])));
+        // A get_product for a code shown or on the enquiry before this turn re-checks it ("what are the prices of these 4?"): no new item.
+        mostLookups = Math.max(mostLookups, done.filter((call) => call.name === "search_catalogue" || (call.name === "get_product" && !knownBefore(lookupCode(call.input)))).length);
+        for (const call of done) if (call.name === "get_product" && call.error === "LISTING_GONE") lookedGone.add(lookupCode(call.input));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
         stopped = stopped ?? stopNote(done, ctx, before, picked);
         continue;
@@ -666,7 +688,14 @@ export async function runAgentTurn(input: {
     const unconfirmed = [...missingCodes.filter((code) => !checkedLater(code)), ...[...ctx.seen.values()].filter(({ product, verified }) => !verified
       && (review.cards.some((card) => same(card.stock_id, product.stock_id)) || codePattern(product.stock_id).test(final.message))).map(({ product }) => product.stock_id)];
     const truthful = withoutAllFoundClaims(final.message, unconfirmed);
-    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(truthful, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    // An answer to a list of more than three items, from the customer's numbered list or a round that looked four or more up, points
+    // once in the chat to a formal quote from Sia Huat sales, with the contact (r8 C1: both M03 runs left it out).
+    const listAnswer = (listTurn || mostLookups > LIST_ITEMS_PER_TURN) && Math.max(listItemCount(truthful), review.cards.length) > LIST_ITEMS_PER_TURN;
+    const quoteDue = listAnswer && !quotedBefore(earlier.replies ?? []);
+    const showContact = final.show_contact || quoteDue;
+    // Claude's own pointer can go as a repeated pitch: the line, which is no pitch, stands in for it then (r8 review).
+    const pitched = dropRepeatedPitch(truthful, earlier, showContact);
+    const cleaned = customerMessage(withoutRepeatedCloser(quoteDue ? withListQuote(pitched) : pitched, earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
     // an escaped space decoded after the trim) gets past every check above (r7).
     const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);
@@ -683,7 +712,7 @@ export async function runAgentTurn(input: {
       cards: review.cards,
       chips: review.chips,
       enquiry: replyEnquiry(ctx),
-      showContact: final.show_contact || cleaned.showContact || (blank && !review.cards.length),
+      showContact: showContact || cleaned.showContact || (blank && !review.cards.length),
       provider: "anthropic",
     };
   } catch (error) {

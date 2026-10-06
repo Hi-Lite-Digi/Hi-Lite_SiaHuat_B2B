@@ -5,7 +5,7 @@ import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { honestManualHandoff } from "@/lib/honest-handoff";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
-import type { ShownCard } from "./contract";
+import { MAX_CARDS, type ShownCard } from "./contract";
 import { listItemCount, withGstCents } from "./enquiry";
 import type { CheckedProduct } from "./facts";
 import { codePattern, hits, measures, pointedCards, same } from "./picks";
@@ -218,6 +218,20 @@ export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showCo
   return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence) && !apology.test(sentence) && !answersTopic(sentence)) || message;
 }
 
+// A list of more than three items gets one pointer to a formal quote from Sia Huat sales (r8 C1, OD-9). Said in code: the prompt
+// alone left it out of both M03 runs on deploy 2.
+export const LIST_QUOTE_LINE = "You can send this list straight to Sia Huat sales for a formal quote.";
+const quotePointer = /\bsales\b[^.?!\n]{0,40}\bquot(?:e|ation)s?\b|\bquot(?:e|ation)s?\b[^.?!\n]{0,40}\bsales\b/i;
+/** Whether an earlier reply in the chat gave the sales-quote pointer: it is said once. */
+export const quotedBefore = (replies: readonly string[]) => replies.some((reply) => quotePointer.test(reply));
+/**
+ * A list answer with the sales-quote pointer at its end; as it is when it gives the pointer itself, or is in Chinese (the contact
+ * block alone points to sales then).
+ */
+export function withListQuote(message: string) {
+  return quotePointer.test(message) || /\p{Script=Han}/u.test(message) ? message : `${message}\n\n${LIST_QUOTE_LINE}`;
+}
+
 // A closing "Anything else ...?" as its own sentence ("Want the Kenwood, or anything else?" is a real question).
 const closingAsk = /(?:^|(?<=[.!?]\s+)|(?<=\n))anything else\b[^.?!\n]{0,40}\?\s*$/i;
 /**
@@ -397,6 +411,13 @@ const deniedChange = /\b(?:none|no\s+(?:items?|products?|lines?|changes?))\b(?:\
 // your enquiry now" and "Can confirm the 2 you need added" are claims.
 const wantsChange = /\b(?:want|like|need)s?\s+(?:[\w'’″-]+\s+){0,5}(?:added|removed|updated)\b/i;
 const questionOpen = /^(?:is|are|was|were|do|does|did|which|what|how many|should|shall|can|could|would)\b/i;
+// An offer that waits on the customer is no claim either: "Let me know if you'd like any of these added", "which ones you'd like
+// added" (r8 M03 run 2: an honest closing offer cost a repair). Only the offer itself: "What you'd like added is now on your
+// enquiry" and "Added 2 torches if you'd like more added" still claim. A "which" or "what" offer is asked of the customer ("let me
+// know which ..."): "Got what you need added" claims. Its words are never a claim's verb or subject, nor a joint into the next
+// clause: "What you need is added", "If you like these I've added 2" and "... which ones you'd like and I've added ..." (r8 review).
+const offerGapWord = String.raw`(?!(?:and|but|so|then|now|is|are|was|were|been|has|have|had|I|we|\w+['’](?:ve|re|ll|d))\b)[\w'’″-]+`;
+const offerToChange = new RegExp(String.raw`(?:\b(?:if|whether)|\b(?:let me know|tell me|say|pick|choose)\s+(?:which|what|how many))\b(?:\s+${offerGapWord}){0,4}?\s+you(?:['’]d)?(?:\s+\w+)?\s+(?:want|like|need)s?\s+(?:${offerGapWord}\s+){0,5}?(?:added|removed|updated)\b`, "i");
 // A clause saying an add failed ("having a hiccup adding these", exam 3, c05-persona T10); it never excuses a whole sentence, so
 // "Sorry for the hiccup, I'll add 2 now" is still a promise.
 const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updating|removing)\b/i;
@@ -404,6 +425,7 @@ const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updat
 const notAClaim = (clause: string, question: boolean) => honestWording.test(clause)
   || (failedWording.test(clause) && !changeClaim.test(clause.replace(failedWording, " ")))
   || (deniedChange.test(clause) && !changeClaim.test(clause.replace(deniedChange, " ")))
+  || (offerToChange.test(clause) && !changeClaim.test(clause.replace(offerToChange, " ")))
   || (question && questionOpen.test(clause) && wantsChange.test(clause) && !changeClaim.test(clause.replace(wantsChange, " ")));
 // GST sums are not enquiry changes: "Adding 9% to $119.09 gets you the GST-inclusive total" (exam 3, c12-persona T11). Stripped like
 // featureWording, so "Added 2 torches - adding 9% GST, about $153.72" is still judged on its add; "I'll add GST and 2 torches now"
@@ -590,7 +612,7 @@ const ENQUIRY_TALK = /\b(?:enquiry|added|removed|updated|your\s+(?:list|order|ca
 // The list rule's pointer to sales ("send the whole list to Sia Huat sales for a formal quote", exam 3, s01-A/B T0) is about the
 // customer's list, not the range.
 const LIST_TO_SALES = /\b(?:send|forward|email|share)\b[^.!?]{0,30}\blist\b|\bquot(?:e|ation)\b[^.!?]{0,30}\blist\b|\blist\b[^.!?]{0,30}\b(?:to\s+(?:sia\s+huat\s+)?sales|quot(?:e|ation))\b/i;
-const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
+const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|six|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
 // "Between these two, the Zyliss is the cheapest" ranks the cards shown; "Between these, that's our full range" still claims the range.
 const AMONG_SHOWN = /\b(?:between|among|of)\s+(?:these|those|the\s+(?:two|three|cards?|ones?\s+(?:above|shown)))\b/i;
 // "Nothing else to add?", "No other questions", "Everything else looks fine" and "The only option now is to ask sales" aren't about the range,
@@ -1003,7 +1025,7 @@ function givesFacts(text: string, checked: CheckedProduct | undefined, cards: re
  * part (partsOf's breaks) points at that product among all looked up this turn, by its whole name or with its stock or price in the
  * rest of the sentence, and stands for one card that no other part names and the message doesn't type. r8 F6, 3 Oct: "Royal Bone
  * China Verona Deep Plate ... only 1 left" over the N0536 Coupe Plate card, and the tap added 12 N0536. Never an enquiry line, nor a
- * sixth card.
+ * card past MAX_CARDS.
  */
 export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, lines: readonly EnquiryReceiptLine[], changes: readonly EnquiryChange[]): FinalAnswer {
   const all = seenCards(seen);
@@ -1014,7 +1036,7 @@ export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, Ch
     const product = named[at].length === 1 ? named[at][0] : null;
     const checked = product && seen.get(product.code);
     // Never an unchecked or sold-out product, an enquiry line, or one changed this turn ("removed the Verona and added 12 of this one").
-    if (!product || !checked?.verified || soldOutProduct(checked) || ids.length >= 5 || ids.some((id) => same(id, product.code))
+    if (!product || !checked?.verified || soldOutProduct(checked) || ids.length >= MAX_CARDS || ids.some((id) => same(id, product.code))
       || lines.some((line) => same(line.code, product.code)) || changes.some((change) => change.code && same(change.code, product.code))) continue;
     const shown = ids.flatMap((id) => (seen.has(id) ? [seen.get(id)!] : []));
     const cards = shown.map((item) => asCard(item.product));
@@ -1130,7 +1152,7 @@ const stockNumberIssue = (wrong: ReturnType<typeof wrongStockCounts>) => `${STOC
 
 const ALL_IN_STOCK_ISSUE_PREFIX = "You wrote that the cards are all in stock";
 // "All confirmed in stock", "both available", "3 porcelain options in stock"; not "Both are 0 in stock" or "not available".
-const everyCardInStock = /\b(?:all|both|every(?:thing|one)|(?:two|three|four|five|[2-5])\s+(?:[\w-]+\s+){0,3}(?:options?|ones?|models?|sizes?|picks?|items?|choices?))\b[^.?!\n]{0,60}?(?<!\b(?:0|no|not|zero)\s+)\b(?:in\s+stock|available)\b|\b(?:in\s+stock|available)\b[^.?!\n]{0,3}\b(?:all|both)\b/i;
+const everyCardInStock = /\b(?:all|both|every(?:thing|one)|(?:two|three|four|five|six|[2-6])\s+(?:[\w-]+\s+){0,3}(?:options?|ones?|models?|sizes?|picks?|items?|choices?))\b[^.?!\n]{0,60}?(?<!\b(?:0|no|not|zero)\s+)\b(?:in\s+stock|available)\b|\b(?:in\s+stock|available)\b[^.?!\n]{0,3}\b(?:all|both)\b/i;
 
 /** A style issue when the message says every card is in stock but a card isn't (or wasn't checked), unless it says which is out. */
 export function stockIssues(message: string, cards: Product[]) {
@@ -1270,8 +1292,8 @@ export function reviewAnswer(
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn or shown earlier in this chat; not found: ${unknown.join(", ")}.`);
   // A list answer's cards are its first items; the message names the rest (r8 R03: 12 card_ids cost a repair).
-  if (ids.length > 5 && !longListAnswer(answer.message)) style.push("Show at most 5 cards.");
-  const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
+  if (ids.length > MAX_CARDS && !longListAnswer(answer.message)) style.push(`Show at most ${MAX_CARDS} cards.`);
+  const cards = ids.filter((id) => seen.has(id)).slice(0, MAX_CARDS).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A long chip or a 'Yes, add it' chip (the confirm step the owner
   // ruled out; 'Add more items' is not) is dropped alone, and a fourth chip moves up. A chip with a number or amount among the
   // three shown takes the set along: a lone 'with silicone grip' under an either/or question reads as the only answer (exam 3: 43

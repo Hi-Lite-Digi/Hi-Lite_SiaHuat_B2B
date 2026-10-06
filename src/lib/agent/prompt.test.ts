@@ -218,7 +218,7 @@ test("Claire uses the prices in the cards notes only to tell which product the c
 
 test("Claire attaches a card she mentions or asks the customer to tap, and never promises to pull it up later", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("any card shown earlier in this chat can be attached again"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("card_ids (0-5 item codes from tool results in this turn, or of cards already shown in this chat)"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("card_ids (0-6 item codes from tool results in this turn, or of cards already shown in this chat)"));
 });
 
 test("Claire attaches an earlier card only when it's needed, not again for an item she just changed", () => {
@@ -232,15 +232,19 @@ test("Claire attaches an earlier card only when it's needed, not again for an it
 
 test("Claire only reports enquiry changes that happened, never promises them, and paces a list", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("Only say something was added, changed or removed after update_enquiry succeeded in this turn"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are and handle only the first three this turn"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- A list of items: say how many there are and handle up to six this turn"));
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /keep the rest in mind/);
 });
 
-test("Claire looks a list's first three items up in one response and points a long list to sales once", () => {
-  // exam 3, s01-B T0: an 8-item list ran 2-3 tool rounds and got a stand-in reply.
+test("Claire looks up to six list items up in one response and points a long list to sales once", () => {
+  // exam 3, s01-B T0: an 8-item list ran 2-3 tool rounds and got a stand-in reply. r8 M03, M09: a list of six got only the first three.
   const line = CLAIRE_AGENT_PROMPT.split("\n").find((item) => item.startsWith("- A list of items:")) ?? "";
-  assert.ok(line.includes("look all three up in your first response (one search_catalogue call each)"));
+  assert.ok(line.includes("handle up to six this turn: look them all up in your first response (one search_catalogue call each)"));
   assert.ok(line.includes("with no second round of searches"));
+  assert.ok(line.includes("A list of item codes (up to 12): one get_product call each, all in your first response"));
+  // The long-list exemption counts numbered lines, not plain ones: a plain 627-character code list cost a repair (review of C1).
+  assert.ok(line.includes("give each code's short name and price on its own numbered line (1. CODE - name - $price)"));
+  // The owner's round-4 default: the sales pointer stays at more than three.
   assert.ok(line.includes("In your first reply to a list of more than three items, also say once that they can send the list straight to Sia Huat sales for a formal quote (show_contact true)."));
   assert.ok(line.includes("In later turns, answer the customer's new message first"));
 });

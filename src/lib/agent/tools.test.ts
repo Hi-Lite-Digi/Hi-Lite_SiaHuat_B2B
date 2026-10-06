@@ -834,6 +834,18 @@ test("get_product of a removed listing gives LISTING_GONE with no name or link, 
   }
 });
 
+test("a code whose listing came back gone this turn gives the same result again with no read, and the note says not to look again (r8 R03)", async () => {
+  const lookups = fakeDeps([chiller, product({ stock_id: "04-00820a" })], { "04-00820": "gone" });
+  const ctx = context(lookups);
+  const first = await runTool("get_product", { stock_id: "04-00820" }, ctx);
+  assert.match(JSON.parse(first.content).note, /Looking it up again this turn gives this same result: don't call get_product for it again\./);
+  const reads = lookups.calls.length;
+  assert.deepEqual(await runTool("get_product", { stock_id: "04-00820" }, ctx), first);
+  assert.equal(lookups.calls.length, reads);
+  // Another code is still looked up.
+  assert.equal((await runTool("get_product", { stock_id: "04-00820a" }, ctx)).isError, false);
+});
+
 test("search_catalogue and match_photo leave a removed listing out (r8 R01)", async () => {
   const searched = context(fakeDeps([blowtorch, mastrad, safico], { "970S": "gone" }));
   const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, searched)).content) as { products: FactBody[] };
