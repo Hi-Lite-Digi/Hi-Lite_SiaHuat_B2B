@@ -218,6 +218,19 @@ export function dropRepeatedPitch(message: string, earlier: EarlierTurns, showCo
   return removeSentences(message, (sentence) => handoffPitch.test(sentence) && !limitation.test(sentence) && !apology.test(sentence) && !answersTopic(sentence)) || message;
 }
 
+// A list of more than three items gets one pointer to a formal quote from Sia Huat sales (r8 C1, OD-9). Said in code: the prompt
+// alone left it out of both M03 runs on deploy 2.
+export const LIST_QUOTE_LINE = "You can send this list straight to Sia Huat sales for a formal quote.";
+const quotePointer = /\bsales\b[^.?!\n]{0,40}\bquot(?:e|ation)s?\b|\bquot(?:e|ation)s?\b[^.?!\n]{0,40}\bsales\b/i;
+/**
+ * A list answer with the sales-quote pointer at its end; as it is when it gives the pointer itself, or is in Chinese (the contact
+ * block alone points to sales then). Null when an earlier reply in the chat gave the pointer: it is said once.
+ */
+export function withListQuote(message: string, replies: readonly string[]) {
+  if (replies.some((reply) => quotePointer.test(reply))) return null;
+  return quotePointer.test(message) || /\p{Script=Han}/u.test(message) ? message : `${message}\n\n${LIST_QUOTE_LINE}`;
+}
+
 // A closing "Anything else ...?" as its own sentence ("Want the Kenwood, or anything else?" is a real question).
 const closingAsk = /(?:^|(?<=[.!?]\s+)|(?<=\n))anything else\b[^.?!\n]{0,40}\?\s*$/i;
 /**

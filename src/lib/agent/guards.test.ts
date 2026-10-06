@@ -5,10 +5,10 @@ import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
-  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
+  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  withListQuote, withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -339,6 +339,22 @@ test("a reply saying nothing has reached Sia Huat yet keeps its route to order (
   }
   const plain = "Yes, each product's store page has Add to Cart. You can contact Sia Huat sales with the PDF.";
   assert.equal(dropRepeatedPitch(plain, earlier("any update on this order?"), true), "Yes, each product's store page has Add to Cart.");
+});
+
+test("a list answer points once in the chat to a formal quote from Sia Huat sales (r8 C1: M03 x2 left it out)", () => {
+  const list = "1. MC11 - $84.31\n2. 07-00019 - $37.52\n3. R52232D - $9.08\n4. 08-00840 - $18.26\nWant me to add any of these?";
+  assert.equal(withListQuote(list, []), `${list}\n\n${LIST_QUOTE_LINE}`);
+  // Claude's own pointer, either way round, isn't said twice.
+  for (const own of [`${list} You can send this list straight to Sia Huat sales for a formal quote.`, `${list} For a formal quote on the whole list, send it to Sia Huat sales.`]) {
+    assert.equal(withListQuote(own, []), own);
+  }
+  // An earlier reply gave it: nothing is added, and the contact isn't forced (null).
+  assert.equal(withListQuote(list, ["Here are the first six.", `Nothing added. ${LIST_QUOTE_LINE}`]), null);
+  // A GST estimate's "Sia Huat's quote" is no pointer to sales.
+  assert.equal(withListQuote(list, ["About $50.92 with GST (GST $4.20); the checkout or Sia Huat's quote shows the exact amount."]), `${list}\n\n${LIST_QUOTE_LINE}`);
+  // A Chinese reply keeps its language: the contact block alone points to sales.
+  const chinese = "1. MC11 - $84.31\n2. 07-00019 - $37.52\n3. R52232D - $9.08\n4. 08-00840 - $18.26\n需要加入哪几样？";
+  assert.equal(withListQuote(chinese, []), chinese);
 });
 
 test("a closing 'Anything else?' is kept right after a change, but not with no change or twice running (r4 c09-persona)", () => {

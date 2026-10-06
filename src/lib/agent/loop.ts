@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -441,6 +441,8 @@ export async function runAgentTurn(input: {
     const updateResults: string[] = [];
     // Item codes whose get_product failed this turn (not found, gone, or cut by the deadline): the answer can't say every lookup worked.
     const missingCodes: string[] = [];
+    // The most searches and code lookups one round asked for: more than three at once look up a list (r8 M03, R03).
+    let mostLookups = 0;
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
@@ -521,6 +523,7 @@ export async function runAgentTurn(input: {
         slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
         missingCodes.push(...done.flatMap((call) => (call.name === "get_product" && call.error ? [String((call.input as { stock_id?: unknown }).stock_id ?? "")].filter(Boolean) : [])));
+        mostLookups = Math.max(mostLookups, done.filter((call) => call.name === "search_catalogue" || call.name === "get_product").length);
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
         stopped = stopped ?? stopNote(done, ctx, before, picked);
         continue;
@@ -667,7 +670,12 @@ export async function runAgentTurn(input: {
     const unconfirmed = [...missingCodes.filter((code) => !checkedLater(code)), ...[...ctx.seen.values()].filter(({ product, verified }) => !verified
       && (review.cards.some((card) => same(card.stock_id, product.stock_id)) || codePattern(product.stock_id).test(final.message))).map(({ product }) => product.stock_id)];
     const truthful = withoutAllFoundClaims(final.message, unconfirmed);
-    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(truthful, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    // An answer to a list of more than three items, from the customer's numbered list or a round that looked four or more up, points
+    // once in the chat to a formal quote from Sia Huat sales, with the contact (r8 C1: both M03 runs left it out).
+    const listAnswer = (listTurn || mostLookups > LIST_ITEMS_PER_TURN) && Math.max(listItemCount(truthful), review.cards.length) > LIST_ITEMS_PER_TURN;
+    const quoted = listAnswer ? withListQuote(truthful, earlier.replies ?? []) : null;
+    const showContact = final.show_contact || quoted !== null;
+    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(quoted ?? truthful, earlier, showContact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
     // an escaped space decoded after the trim) gets past every check above (r7).
     const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);
@@ -684,7 +692,7 @@ export async function runAgentTurn(input: {
       cards: review.cards,
       chips: review.chips,
       enquiry: replyEnquiry(ctx),
-      showContact: final.show_contact || cleaned.showContact || (blank && !review.cards.length),
+      showContact: showContact || cleaned.showContact || (blank && !review.cards.length),
       provider: "anthropic",
     };
   } catch (error) {

@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { cardsNote, type AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
 import { searchSlots } from "./facts";
-import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX, PRICE_HEDGE_PREFIX } from "./guards";
+import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, PRICE_HEDGE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, fakePickCheck, product } from "./testing";
 import { PICK_CHECK_PROMPT, type PickCheck } from "./verify";
@@ -2436,8 +2436,35 @@ test("a list of six is answered in one round with six cards, and 'None added yet
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
   // No nudge and no repair: R02 took four Claude calls and ended "That change isn't on your enquiry yet. Which item and how many would you like?"
   assert.equal(bodies.length, 2);
-  assert.equal(reply.message, message);
+  assert.equal(reply.message, `${message}\n\n${LIST_QUOTE_LINE}`);
   assert.deepEqual(reply.cards.map((card) => card.stock_id), six.map((item) => item.stock_id));
+});
+
+test("a list answer of more than three items points once in the chat to a formal quote, with the contact (r8 C1, M03)", async () => {
+  const message = `${sixLines}\nWant me to add any of these?`;
+  const sixRound = () => toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }]));
+  const first = fakeClient([sixRound(), answer({ message, card_ids: six.map((item) => item.stock_id) })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client: first.client, model: "claude-sonnet-5" });
+  assert.equal(first.bodies.length, 2);
+  assert.equal(reply.message, `${message}\n\n${LIST_QUOTE_LINE}`);
+  assert.equal(reply.showContact, true);
+  // Codes looked up four or more at once are a list too (R03's twelve).
+  const codes = fakeClient([toolRound(six.map((item) => ["get_product", { stock_id: item.stock_id }])), answer({ message: sixLines, card_ids: six.map((item) => item.stock_id) })]);
+  const coded = await runAgentTurn({ request: request({ event: { type: "text", text: six.map((item) => item.stock_id).join(", ") } }), deps: fakeDeps(six), client: codes.client, model: "claude-sonnet-5" });
+  assert.equal(coded.message, `${sixLines}\n\n${LIST_QUOTE_LINE}`);
+  // Said once: a later list answer in the same chat gets neither the line nor the contact.
+  const history = [{ role: "user" as const, content: sixItems }, { role: "assistant" as const, content: `${reply.message}${cardsNote(reply.cards)}` }];
+  const laterMessage = `${sixLines}\nNone added yet.`;
+  const later = fakeClient([sixRound(), answer({ message: laterMessage })]);
+  const again = await runAgentTurn({
+    request: request({ event: { type: "text", text: `And these again: ${sixWords.join("; ")}` }, history }), deps: fakeDeps(six), client: later.client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual([again.message, again.showContact], [laterMessage, false]);
+  // Four options for one item from one search are no list.
+  const options = six.slice(0, 4).map((item, i) => `${i + 1}. ${item.name}`).join("\n");
+  const one = fakeClient([toolRound([["search_catalogue", { queries: ["glove"] }]]), answer({ message: options, card_ids: [] })]);
+  const single = await runAgentTurn({ request: request({ event: { type: "text", text: "gloves" } }), deps: fakeDeps(six), client: one.client, model: "claude-sonnet-5" });
+  assert.deepEqual([single.message, single.showContact], [options, false]);
 });
 
 test("a numbered list still gets one round of lookups, and a list of six may end without 'Next:' (r8 M03, M09)", async () => {
@@ -2456,7 +2483,7 @@ test("a numbered list still gets one round of lookups, and a list of six may end
   });
   assert.deepEqual(bodies.map(choice), ["auto", "none"]);
   assert.match(lastMessage(bodies[1]), leftNote);
-  assert.equal(reply.message, message);
+  assert.equal(reply.message, `${message}\n\n${LIST_QUOTE_LINE}`);
   assert.equal(reply.cards.length, 6);
 });
 
