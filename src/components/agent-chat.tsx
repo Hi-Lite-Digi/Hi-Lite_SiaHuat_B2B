@@ -260,7 +260,7 @@ export function AgentChat() {
     try {
       await downloadEnquiryPdf({
         lines: enquiryRef.current.lines,
-        transcript: itemsRef.current.map((item) => ({ role: item.role, time: item.time, text: item.text, cards: item.cards, image: Boolean(item.imageUrl) })),
+        transcript: itemsRef.current.map((item) => ({ role: item.role, time: item.time, text: item.text, cards: item.cards, imageUrl: item.imageUrl })),
       });
       setNotice("");
     } catch {

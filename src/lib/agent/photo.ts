@@ -12,9 +12,9 @@ export const AS_IS_FALLBACK_BYTES = 3_000_000;
 /** The largest photo the picker takes; anything over SEND_AS_IS_BYTES is shrunk first. */
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
 
-/** The size a photo is shrunk to: at most PHOTO_EDGE on its longest side, never enlarged. */
-export function shrunkSize(width: number, height: number) {
-  const scale = Math.min(1, PHOTO_EDGE / Math.max(width, height));
+/** The size a photo is shrunk to: at most `edge` (PHOTO_EDGE) on its longest side, never enlarged. */
+export function shrunkSize(width: number, height: number, edge = PHOTO_EDGE) {
+  const scale = Math.min(1, edge / Math.max(width, height));
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
@@ -25,23 +25,28 @@ const readAsIs = (file: File) => new Promise<string>((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+/** A JPEG of the image at `src`, at most `edge` px on its longest side. Also draws the photo into the enquiry PDF. */
+export async function jpegOf(src: string, edge = PHOTO_EDGE, quality = 0.85) {
+  // onload rather than decode(): the safer choice on older WebKit. drawImage follows EXIF orientation (Chrome 81+, iOS 13.4+).
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = () => reject(new Error("PHOTO_UNREADABLE")); img.src = src; });
+  const { width, height } = shrunkSize(img.naturalWidth, img.naturalHeight, edge);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("PHOTO_UNREADABLE");
+  context.fillStyle = "#ffffff"; // a transparent PNG would otherwise turn black as a JPEG
+  context.fillRect(0, 0, width, height);
+  context.imageSmoothingQuality = "high";
+  context.drawImage(img, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
 async function shrink(file: File) {
   const url = URL.createObjectURL(file);
   try {
-    // onload rather than decode(): the safer choice on older WebKit. drawImage follows EXIF orientation (Chrome 81+, iOS 13.4+).
-    const img = new Image();
-    await new Promise<void>((resolve, reject) => { img.onload = () => resolve(); img.onerror = () => reject(new Error("PHOTO_UNREADABLE")); img.src = url; });
-    const { width, height } = shrunkSize(img.naturalWidth, img.naturalHeight);
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("PHOTO_UNREADABLE");
-    context.fillStyle = "#ffffff"; // a transparent PNG would otherwise turn black as a JPEG
-    context.fillRect(0, 0, width, height);
-    context.imageSmoothingQuality = "high";
-    context.drawImage(img, 0, 0, width, height);
-    return canvas.toDataURL("image/jpeg", 0.85);
+    return await jpegOf(url);
   } finally {
     URL.revokeObjectURL(url);
   }

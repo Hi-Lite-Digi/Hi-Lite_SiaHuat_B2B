@@ -16,6 +16,12 @@ test("a big photo is shrunk to at most 1,600 px on its longest side, and a small
   assert.deepEqual(shrunkSize(480, 480), { width: 480, height: 480 });
 });
 
+test("the enquiry PDF's copy of a photo is at most 1,200 px on its longest side", () => {
+  // r8 F3: the PDF draws the customer's photo, not "[Product photo attached]" (OD-13: up to 1,200 px).
+  assert.deepEqual(shrunkSize(1600, 1200, 1200), { width: 1200, height: 900 });
+  assert.deepEqual(shrunkSize(480, 480, 1200), { width: 480, height: 480 });
+});
+
 test("shrinking in the browser loses nothing Claude sees", async () => {
   // The owner's screenshot (2 Oct) got a 413 before Claire saw it; the server gives Claude at most 1,400 px / 1 MP anyway.
   for (const [width, height, seen] of [[1170, 2532, [646, 1400]], [2880, 1800, [1264, 790]], [1920, 1080, [1333, 750]]] as const) {

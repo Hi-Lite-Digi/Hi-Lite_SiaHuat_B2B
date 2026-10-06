@@ -1,5 +1,6 @@
 // src/lib/enquiry-pdf.ts
 import type { Product } from "@/lib/chat-contract";
+import { jpegOf } from "@/lib/agent/photo";
 import {
   conversationPdfText,
   enquiryReceiptTotals,
@@ -13,8 +14,13 @@ export type PdfTranscriptItem = {
   time: string;
   text: string;
   cards?: Product[];
-  image?: boolean;
+  /** The customer's photo (the chat's data URL), drawn where it was sent so sales see it (r8 F3). */
+  imageUrl?: string;
 };
+
+/** The photo's longest side in the PDF, and the most room it takes on the page. */
+const PHOTO_EDGE_PX = 1200;
+const PHOTO_MAX_MM = { width: 120, height: 100 };
 
 function stockLabel(product: Product) {
   if (product.stock_status === "in_stock") return "Website: in stock";
@@ -120,7 +126,9 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
       stockLabel(card),
       card.source_url ?? "",
     ].filter(Boolean).join("\n")).join("\n\n");
-    const body = conversationPdfText([item.image ? "[Product photo attached]" : "", item.text, cardText].filter(Boolean).join("\n\n"));
+    // A photo that can't be drawn keeps the old line, so sales still know one was sent.
+    const photo = item.imageUrl ? await jpegOf(item.imageUrl, PHOTO_EDGE_PX).catch(() => null) : null;
+    const body = conversationPdfText([item.imageUrl && !photo ? "[Product photo attached]" : "", item.text, cardText].filter(Boolean).join("\n\n"));
     const needsCanvasText = needsUnicodePdfRendering(body);
     const canvasScale = 2;
     const pixelsPerMm = 96 / 25.4;
@@ -132,13 +140,22 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
     const lines = needsCanvasText && measureContext
       ? wrapMeasuredText(body, textWidth * pixelsPerMm * canvasScale, (value) => measureContext.measureText(value).width)
       : pdf.splitTextToSize(body, textWidth) as string[];
+    // The photo goes in the message's first box, as large as PHOTO_MAX_MM allows.
+    let photoWidth = 0;
+    let photoHeight = 0;
+    if (photo) {
+      const { width, height } = pdf.getImageProperties(photo);
+      const scale = Math.min(PHOTO_MAX_MM.width / width, PHOTO_MAX_MM.height / height);
+      photoWidth = width * scale;
+      photoHeight = height * scale + 3;
+    }
     const label = `${item.role === "user" ? "You (customer)" : "Claire (assistant)"} - ${item.time}`;
     let lineIndex = 0;
     while (lineIndex < lines.length) {
-      if (pageHeight - margin - y < 30) addPage();
-      const linesOnPage = Math.max(1, Math.floor((pageHeight - margin - y - 15) / lineHeight));
+      if (pageHeight - margin - y < 30 + photoHeight) addPage();
+      const linesOnPage = Math.max(1, Math.floor((pageHeight - margin - y - 15 - photoHeight) / lineHeight));
       const chunk = lines.slice(lineIndex, lineIndex + linesOnPage);
-      const boxHeight = 15 + chunk.length * lineHeight;
+      const boxHeight = 15 + photoHeight + chunk.length * lineHeight;
       pdf.setFillColor(item.role === "user" ? 223 : 247, item.role === "user" ? 243 : 247, item.role === "user" ? 233 : 245);
       pdf.setDrawColor(210, 220, 216);
       pdf.rect(margin, y, boxWidth, boxHeight, "FD");
@@ -146,6 +163,7 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
       pdf.setFontSize(9);
       pdf.setTextColor(23, 104, 83);
       pdf.text(lineIndex === 0 ? label : `${label} (continued)`, margin + 5, y + 6);
+      if (photo && photoHeight) pdf.addImage(photo, "JPEG", margin + 5, y + 9, photoWidth, photoHeight - 3);
       if (needsCanvasText) {
         const lineHeightPixels = lineHeight * pixelsPerMm * canvasScale;
         const canvas = document.createElement("canvas");
@@ -159,15 +177,16 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
         chunk.forEach((line, index) => {
           context.fillText(line, 0, (index + 1) * lineHeightPixels - (lineHeightPixels - fontSizePixels) * 0.45);
         });
-        pdf.addImage(canvas.toDataURL("image/png"), "PNG", margin + 5, y + 9, textWidth, chunk.length * lineHeight);
+        pdf.addImage(canvas.toDataURL("image/png"), "PNG", margin + 5, y + 9 + photoHeight, textWidth, chunk.length * lineHeight);
       } else {
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(9.5);
         pdf.setTextColor(51, 75, 68);
-        pdf.text(chunk, margin + 5, y + 12, { lineHeightFactor: 1.25 });
+        pdf.text(chunk, margin + 5, y + 12 + photoHeight, { lineHeightFactor: 1.25 });
       }
       y += boxHeight + 5;
       lineIndex += chunk.length;
+      photoHeight = 0;
       if (lineIndex < lines.length) addPage();
     }
   }
