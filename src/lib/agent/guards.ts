@@ -387,8 +387,11 @@ const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|up
 // "I'll get 2 added" and "I'll have it updated" promise a change; they don't report one (exam 3, c06-persona T8 replayed). Lazy, so
 // it ends at the promise's own "added": "I'll get 2 added - I've added the torch" still reports one.
 const futureChange = /\b(?:I'?ll|I will|let me|going to|can)\s+(?:get|have)\s+(?:[\w'’″-]+\s+){0,4}?(?:added|removed|updated)\b/i;
-// "None added yet", "No items added" and "held off adding them" deny a change (r8 R02: "do not add them yet" got the fixed line).
-const honestWording = /\b(?:not|never|nothing|none|no longer|no (?:items?|products?|lines?|changes?)|yet to|held off|holding off|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
+const honestWording = /\b(?:not|never|nothing|no longer|yet to|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
+// "None added yet", "No items added" and "held off adding them" deny a change (r8 R02: "do not add them yet" got the fixed line). Only
+// the denial itself, never a promise or an add beside it: "I'll add 2 torches now, none of the plates", "Added 2 torches and held off
+// on the plates" (r8 review).
+const deniedChange = /\b(?:none|no\s+(?:items?|products?|lines?|changes?))\b(?:\s+(?:of\s+)?[\w'’]+){0,4}?\s+(?:(?:were|was|have\s+been|has\s+been|are|is)\s+)?(?:added|on\s+(?:your|the)\s+enquiry)\b|\b(?:held|holding)\s+off(?:\s+on)?\s+adding\b/i;
 // A question about what the customer wants: "is it the HET-4 you want added, qty 1?" (exam 3, c11-stress T9 replayed: split from its
 // "?" by the comma). Only a clause that opens as a question in a sentence that ends as one counts, so "The torch you want added is on
 // your enquiry now" and "Can confirm the 2 you need added" are claims.
@@ -400,6 +403,7 @@ const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updat
 // Neither phrase excuses a claim made beside it in the same clause: "Sorted the hiccup adding these and added 2 torches".
 const notAClaim = (clause: string, question: boolean) => honestWording.test(clause)
   || (failedWording.test(clause) && !changeClaim.test(clause.replace(failedWording, " ")))
+  || (deniedChange.test(clause) && !changeClaim.test(clause.replace(deniedChange, " ")))
   || (question && questionOpen.test(clause) && wantsChange.test(clause) && !changeClaim.test(clause.replace(wantsChange, " ")));
 // GST sums are not enquiry changes: "Adding 9% to $119.09 gets you the GST-inclusive total" (exam 3, c12-persona T11). Stripped like
 // featureWording, so "Added 2 torches - adding 9% GST, about $153.72" is still judged on its add; "I'll add GST and 2 torches now"
@@ -1017,8 +1021,13 @@ export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, Ch
     const [card] = standIn(part, cards);
     if (!card || codePattern(card.code).test(answer.message)) continue;
     // Another part about the card keeps it the product the words offer: "Instead of the Verona (only 1 left), I'd go with this bone china plate".
+    // So does one that points at it, by its own stock or price or "this one instead" ("换这款"), as "…只剩1个，不够12个，推荐这款（库存74个）"
+    // does (r8 review). A bare "this one" or "推荐这款" may be the named product itself, as may "tap the card".
     const about = (k: number) => (named[k].length ? named[k] : standIn(parts[k].part, cards));
-    if (parts.some((_, k) => k !== at && about(k).length === 1 && same(about(k)[0].code, card.code))) continue;
+    const others = shown.filter((item) => !same(item.product.stock_id, card.code));
+    const pointsAt = (k: number) => givesFacts(parts[k].part, seen.get(card.code), others)
+      || (/\b(?:this|that) one\b|这款/i.test(parts[k].part) && /\binstead\b|[换改]/i.test(parts[k].part));
+    if (parts.some((_, k) => k !== at && ((about(k).length === 1 && same(about(k)[0].code, card.code)) || pointsAt(k)))) continue;
     // Feature words fit a card's short name too ("stainless" for "S/S UTILITY TONG 12″", "keypad"): only the product's whole name, or
     // its own stock or price in the rest of the sentence, names it (43 of 3,676 past replies with cards would gain one without this).
     const sentence = text.slice(start).split(/[.!?](?=\s|\p{Script=Han}|$)|[。！？]|\n/u)[0];
@@ -1086,8 +1095,9 @@ export function withoutWrongStockCounts(message: string, cards: readonly Product
   return text;
 }
 
-// A Chinese count is said as 有现货 or 缺货, with a 够 or 不够 claim made from it: "（骨瓷这款只剩1个，不够12个）" → "（骨瓷这款有现货）".
-const COVERAGE_ZH = /^\s*[，,、；;]?\s*(?:可能|也|都|还)?(?:不够|不足|足够|够)(?:\s*\d+\s*[个件只套张把支条]?)?/u;
+// A Chinese count is said as 有现货 or 缺货, with the whole 够 or 不够 clause made from it (OD-8): "（骨瓷这款只剩1个，不够12个）" →
+// "（骨瓷这款有现货）", and "，恐怕不够12个", "，12个不够", "，够您用", "，满足不了12个的需求" (r8 review). A closing 吗 or 呢 stays; 能够 is "can".
+const COVERAGE_ZH = /^了?\s*[，,、；;]?[^，,、；;。！？!?（）()\n]{0,4}?(?:不够|不足|足够|(?<!能)够|满足)[^吗呢，,、；;。！？!?（）()\n]*/u;
 
 /** The message with this one wrong count dropped from its bracket, or said as "in stock" or "out of stock". */
 function withoutStockCount(text: string, { said, index, code }: ReturnType<typeof wrongStockCounts>[number], seen: ReadonlyMap<string, CheckedProduct>) {
@@ -1133,18 +1143,47 @@ export function stockIssues(message: string, cards: Product[]) {
 // "All 12 lookups succeeded", "All 12 found, none failed" (r8 R03, M04): 04-00820's store page had failed its live check.
 const allFound = /\b(?:all|every|each)\b(?:\s+[\w-]+){0,3}?\s+(?:(?:were|are|was|have been)\s+)?(?<!\bI\s)(?:found|succeeded|resolved|worked|matched|checked|confirmed|verified|came back|went through)\b|\b(?:none|no\s+(?:lookups?|codes?|items?))\s+(?:of\s+them\s+)?failed\b|\bnothing\s+failed\b/i;
 /**
+ * The message cut before each list label, so a claim is judged on its own item: "All 12 found, none failed: 1) 04-00820 ..." is one
+ * sentence when the list runs inline. Labels count up from 1, so a number ending a sentence ("so I couldn't add 3.", "2 of 2. Nothing
+ * added.") labels nothing (r8 review).
+ */
+function listParts(message: string) {
+  const parts: string[] = [];
+  let last = 0;
+  for (const piece of message.split(/(?<=\s)(?=\d{1,2}[.)]\s)/)) {
+    const label = Number(/^(\d{1,2})[.)]\s/.exec(piece)?.[1] ?? 0);
+    const labels = label > last && (last > 0 || label === 1);
+    if (labels) last = label;
+    if (labels || !parts.length) parts.push(piece);
+    else parts[parts.length - 1] += piece;
+  }
+  return parts;
+}
+/**
  * The message with its first "all found" claim said truthfully, and any other dropped, when a code the reply names or shows wasn't
  * found or failed its live check. A claim that names every such code ("only 04-00820 is unchecked") is left as it is.
  */
 export function withoutAllFoundClaims(message: string, unconfirmed: readonly string[]) {
   const codes = [...new Map(unconfirmed.map((code) => [code.toLowerCase(), code])).values()];
-  // Judged on its own list item: "All 12 found, none failed: 1) 04-00820 ..." is one sentence when the list runs inline.
-  const claims = sentences(message).flatMap((sentence) => sentence.split(/\s(?=\d{1,2}[.)](?:\s|$))/).filter((part) => allFound.test(part)))
-    .filter((claim) => !codes.every((code) => codePattern(code).test(claim)));
+  const namesEach = (text: string) => codes.every((code) => codePattern(code).test(text));
+  // "The other 11 were all found" is true beside the failed code's own words (r8 review): left when the reply names each code.
+  const aboutOthers = (claim: string) => {
+    const found = allFound.exec(claim)!;
+    return /\b(?:others?|rest|remaining)\b/i.test(claim.slice(0, found.index + found[0].length)) && namesEach(message);
+  };
+  const claims = listParts(message).flatMap(sentences).filter((part) => allFound.test(part)).filter((claim) => !namesEach(claim) && !aboutOthers(claim));
   if (!codes.length || !claims.length) return message;
   const [first, ...rest] = claims;
-  // From the claim on: an item it shares a line with ("12. 21405 ... $11,460.00 All 12 lookups succeeded.") stays.
-  const fixed = message.replace(first, `${first.slice(0, first.search(allFound))}I couldn't confirm ${codes.join(", ")} on the store just now.`);
+  const at = first.search(allFound);
+  const before = first.slice(0, at);
+  // From the claim's own clause on, so its subject goes with it ("They all came back fine": r8 review). A claim run on after an item
+  // with no stop ("12. 21405 ... $11,460.00/pc All 12 lookups succeeded.") starts a sentence of its own: the item stays.
+  const ends = [...before.matchAll(/[,:;(–—]\s*(?:(?:and|but|so)\s+)?|\s-\s/g)].map((end) => end.index + end[0].length);
+  const kept = /^[A-Z]/.test(first.slice(at)) ? before : before.slice(0, Math.max(0, ...ends));
+  // In a bracket, only up to its ")": "Here are the three (all 3 found), with live prices below."
+  const close = /\([^()]*$/.test(before) ? first.indexOf(")", at) : -1;
+  const said = `I couldn't confirm ${codes.join(", ")} on the store just now`;
+  const fixed = message.replace(first, close >= 0 ? `${kept}${said}${first.slice(close)}` : `${kept}${said}.`);
   return rest.reduce((out, claim) => out.replace(claim, ""), fixed).replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").trim();
 }
 

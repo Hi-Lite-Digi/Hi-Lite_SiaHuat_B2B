@@ -178,6 +178,35 @@ test("a set shown twice that names the Verona still loses its cards, and none is
   assert.deepEqual(reply.cards, []);
 });
 
+test("a set shown twice with the card added for the words that name it loses its cards the third time, with no repair (r8 review)", async () => {
+  // What the earlier replies showed once this check runs: Claude's three cards and the Verona put in front of the Coupe.
+  const sent = ["Q1930", "3500-0224", "N2906", "N0536"];
+  const shown = (message: string) => ({ role: "assistant" as const, content: `${message}${cardsNote(sent.map((code) => plates.find((item) => item.stock_id === code)!))}` });
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message: OCT3, card_ids: COUPE_CARDS }), answer({ message: OCT3, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({
+    request: platesAsked({
+      event: { type: "text", text: "哪款适合汤菜？" },
+      history: [{ role: "user", content: "我要12个直径约24厘米的餐盘，每个不超过20新元。" }, shown("这几款可以参考。"), { role: "user", content: "还有别的吗？" }, shown("还是这几款最合适。")],
+      shownProductIds: sent,
+    }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.cards, []);
+  assert.equal(bodies.length, 2);
+});
+
+test("a reply that steers from the named product to the card it shows keeps its own cards (r8 review)", async () => {
+  for (const message of [
+    "Royal Bone China Verona深盘只剩1个，不够12个，推荐这款（库存74个）。",
+    "The Royal Bone China Verona Deep Plate has only 1 left, so I'd go with this one instead (74 in stock).",
+  ]) {
+    const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: ["N0536"] }), answer({ message, card_ids: ["N0536"] })]);
+    const reply = await runAgentTurn({ request: platesAsked({ event: { type: "text", text: "我要12个直径约24厘米的骨瓷盘" } }), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["N0536"], message);
+    assert.equal(bodies.length, 2, message);
+  }
+});
+
 test("a card whose link the customer says doesn't open is never added for the words that name it (r8 F6)", async () => {
   const message = "Sorry that link isn't opening. Here are other 24cm plates: the Luminarc Everyday Opal Glass Dinner Plate, the Patra Soup Plate, and the Royal Bone China Verona Deep Plate (only 1 left, not enough for 12).";
   const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: COUPE_CARDS })]);
@@ -2419,4 +2448,61 @@ test("a code whose listing is gone, or whose lookup the work deadline cut, count
   }), 3_000);
   assert.match(JSON.stringify(cut.bodies[1].messages.at(-1)), /NOT_FINISHED/);
   assert.equal(cutReply.message, "970S is $31.31. I couldn't confirm ZZ-9 on the store just now.");
+});
+
+test("an honest reply that names the failed code and says the others were found goes out as it is (r8 review)", async () => {
+  const [grinder, liner] = six;
+  const lookUp = (...codes: string[]) => toolRound(codes.map((code) => ["get_product", { stock_id: code }]));
+  const message = "1. MC11 Coffee Grinder: its store page didn't load, so I can't confirm its price.\n2. 07-00019 Shelf Liner: $37.52\nThe other one was found.\nThe rest were all found.";
+  const { client } = fakeClient([lookUp("MC11", "07-00019"), answer({ message, card_ids: ["07-00019"] })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "Find MC11, 07-00019. State explicitly if any lookup fails." } }), deps: fakeDeps([grinder, liner], { MC11: "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.message, message);
+});
+
+test("an 'all found' claim is replaced whole: its subject and a closing number go with it (r8 review)", async () => {
+  const [grinder, liner] = six;
+  const lookUp = (...codes: string[]) => toolRound(codes.map((code) => ["get_product", { stock_id: code }]));
+  for (const tail of ["They all came back fine.", "All lookups succeeded, 2 of 2."]) {
+    const message = `1. MC11 Coffee Grinder: price not checked\n2. 07-00019 Shelf Liner: $37.52\n${tail}`;
+    const { client, bodies } = fakeClient([lookUp("MC11", "07-00019"), answer({ message, card_ids: ["MC11", "07-00019"] })]);
+    const reply = await runAgentTurn({
+      request: request({ event: { type: "text", text: "Find MC11, 07-00019. Say if any lookup fails." } }), deps: fakeDeps([grinder, liner], { MC11: "fail" }), client, model: "claude-sonnet-5",
+    });
+    assert.equal(reply.message, message.replace(tail, "I couldn't confirm MC11 on the store just now."), tail);
+    assert.equal(bodies.length, 2);
+  }
+});
+
+test("a code whose lookup failed and then worked on Claude's retry is not said to be unconfirmed (r8 review)", async () => {
+  const [grinder, liner] = six;
+  const flaky = fakeDeps([grinder, liner]);
+  const findByCode = flaky.findByCode;
+  // Two throws make one TOOL_FAILED (the lookup is retried once).
+  let fails = 2;
+  flaky.findByCode = (stockId) => (stockId === "MC11" && fails-- > 0 ? Promise.reject(new Error("DB_TIMEOUT")) : findByCode(stockId));
+  const message = "1. MC11 Coffee Grinder: $84.31\n2. 07-00019 Shelf Liner: $37.52\nAll 2 lookups succeeded.";
+  const { client, bodies } = fakeClient([
+    toolRound([["get_product", { stock_id: "MC11" }], ["get_product", { stock_id: "07-00019" }]]),
+    toolRound([["get_product", { stock_id: "MC11" }]]),
+    answer({ message, card_ids: ["MC11", "07-00019"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "Find MC11, 07-00019" } }), deps: flaky, client, model: "claude-sonnet-5" });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /TOOL_FAILED/);
+  assert.equal(reply.message, message);
+  assert.deepEqual(reply.cards.map((card) => `${card.stock_id}:${card.stock_status}`), ["MC11:in_stock", "07-00019:in_stock"]);
+});
+
+test("a promise to add beside 'none of' still gets the claim nudge (r8 review)", async () => {
+  for (const message of ["I'll add the 2 Safico torches to your enquiry now, none of the blow torches.", "None of the plates fit, so I'll add 2 Safico torches."]) {
+    const asked = "Which torch and how many would you like?";
+    const { client, bodies } = fakeClient([
+      toolCall("t1", "search_catalogue", { queries: ["torch"] }), answer({ message, card_ids: ["BTS-8026D"] }), answer({ message: asked, card_ids: ["BTS-8026D"] }), answer({ message: asked, card_ids: ["BTS-8026D"] }),
+    ]);
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "2 safico torch" } }), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 3, message);
+    assert.equal(reply.message, asked, message);
+    assert.deepEqual(reply.enquiry.lines, []);
+  }
 });

@@ -668,6 +668,19 @@ test("honest or conditional wording is not a claim", () => {
 test("a false add beside 'none' is still a claim", () => {
   assert.equal(claimIssues("Added 2 Safico torches, none of the plates.").length, 1);
   assert.equal(claimIssues("None of the plates fit, so I added 2 Safico torches.").length, 1);
+  // The denial words excuse only a clause that denies an add, never a promise or an add beside them (r8 review).
+  for (const message of [
+    "Added the 2 Safico torches and held off on the plates, as you asked.",
+    "I've added 2 Safico torches and made no changes to the plates.",
+    "Added 2 Safico torches with no changes to your other lines.",
+    "I'll add the 2 Safico torches now, none of the plates.",
+    "I'll add the 2 Safico torches now; no changes to the plates.",
+    "Holding off on the plates; I'll add the 2 Safico torches now.",
+    "Let me add the 2 Safico torches now and none of the plates.",
+    "None of the plates fit, so I'll add 2 Safico torches.",
+    "I'll add 2 Safico torches now; none of the plates fit.",
+    "Let me add 2 Safico torches, no changes to the plates.",
+  ]) assert.equal(claimIssues(message).length, 1, message);
 });
 
 test("a false claim is replaced by one plain line where the first one was", () => {
@@ -1741,6 +1754,24 @@ test("approximate Chinese counts, kinds and 'the other two' are no counts; a Chi
   assert.equal(withoutWrongStockCounts("Luminarc玻璃餐盘：库存只有5个，够12个吗？", plateCards(["Q1930"]), plateSeen), "Luminarc玻璃餐盘：有现货吗？");
 });
 
+test("the whole 够 or 不够 clause made from a wrong Chinese count goes with it, however it is worded (r8 review, OD-8)", () => {
+  const fix = (message: string, ids: string[]) => withoutWrongStockCounts(message, plateCards(ids), plateSeen);
+  for (const [message, ids, fixed] of [
+    ["Luminarc玻璃餐盘库存12个，够您用。", ["Q1930"], "Luminarc玻璃餐盘有现货。"],
+    ["Luminarc玻璃餐盘库存50个，够用了。", ["Q1930"], "Luminarc玻璃餐盘有现货。"],
+    ["Patra瓷汤盘库存50个，完全够12个。", ["3500-0224"], "Patra瓷汤盘有现货。"],
+    ["Royal Bone China骨瓷圆盘（只剩1个，不够您要的12个）。", COUPE_CARDS, "Royal Bone China骨瓷圆盘（有现货）。"],
+    ["Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，12个不够）。", COUPE_CARDS, "Royal Bone China骨瓷圆盘（骨瓷这款有现货）。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，数量不够。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，恐怕不够12个。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，可能不太够。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，满足不了12个的需求。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘库存只剩1个了，不够12个。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    // A clause that makes no claim from the count stays: 能够 is "can".
+    ["Luminarc玻璃餐盘库存50个，能够当天送达。", ["Q1930"], "Luminarc玻璃餐盘有现货，能够当天送达。"],
+  ] as Array<[string, string[], string]>) assert.equal(fix(message, ids), fixed, message);
+});
+
 test("English words that fit a card and an uncarded sister alike are read as the card (r8 F6)", () => {
   assert.deepEqual(plateCounts("The Royal Bone China plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), ["only 1 left->N0536"]);
   // The "not enough" made from the wrong count goes with it.
@@ -1782,6 +1813,10 @@ test("a product the words name gets its card before the card they would otherwis
   // With no stock or price, the whole name still names it; part of it does not.
   assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style for curries.", ["N0536"]), ["N2906", "N0536"]);
   assert.deepEqual(namedCards("The Royal Bone China deep plate suits curries.", ["N0536"]), ["N0536"]);
+  // "This one" said with the named product's own stock, or a tap, points at no other card (r8 review).
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style; this one has only 1 left.", ["N0536"]), ["N2906", "N0536"]);
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style. Tap the card below to confirm and I'll add it.", ["N0536"]), ["N2906", "N0536"]);
+  assert.deepEqual(namedCards("Royal Bone China Verona Deep Plate很适合汤菜，推荐这款。", ["N0536"]), ["N2906", "N0536"]);
 });
 
 test("no card is added for an enquiry line, a product changed this turn, an unchecked or sold-out one, or one another part offers a card for (r8 F6)", () => {
@@ -1798,6 +1833,15 @@ test("no card is added for an enquiry line, a product changed this turn, an unch
   assert.deepEqual(namedCards("Instead of the Royal Bone China Verona Deep Plate (only 1 left), I'd go with this bone china plate.", ["N0536"]), ["N0536"]);
   assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate has only 1 left, so I've shown the Royal Bone China Coupe Plate instead.", ["N0536"]), ["N0536"]);
   assert.deepEqual(namedCards("Unlike the Evelin round plate, this one is porcelain white.", ["3500-0224"]), ["3500-0224"]);
+  // Or points at the card: its own stock or price, or "this one instead" (r8 review: the Verona went in front of "推荐这款").
+  for (const [message, ids] of [
+    ["Royal Bone China Verona深盘只剩1个，不够12个，推荐这款（库存74个）。", ["N0536"]],
+    ["The Royal Bone China Verona Deep Plate has only 1 left, so I'd go with this one instead (74 in stock).", ["N0536"]],
+    ["The Royal Bone China Verona Deep Plate has only 1 left, not enough for 12. The card below has plenty, at $14.77 each.", ["N0536"]],
+    ["The Royal Bone China Verona Deep Plate has only 1 left, so it can't cover 12. I'd suggest this one instead.", ["Q1930", "N0536"]],
+    ["Royal Bone China Verona深盘只剩1个，不够12个，建议换这款。", ["N0536"]],
+    ["Instead of the Royal Bone China Verona Deep Plate you said you don't want, here's this one (74 in stock).", ["N0536"]],
+  ] as Array<[string, string[]]>) assert.deepEqual(namedCards(message, ids), ids, message);
   // The reproduction's consistent replies (r1-r4) keep their cards.
   for (const [message, ids] of PLATE_REPLIES.slice(0, 4)) assert.deepEqual(namedCards(message, ids), ids, message);
 });
@@ -1979,6 +2023,38 @@ test("an 'all found' claim is said truthfully when a code the reply names or sho
   for (const message of ["All three are in stock.", "Here are all six.", "I checked all 12 codes.", "The chef knives are out of stock in every size I checked."]) {
     assert.equal(withoutAllFoundClaims(message, ["04-00820"]), message);
   }
+});
+
+test("an 'all found' claim is said in a whole sentence: its subject goes, a closing number and a bracket stay readable (r8 review)", () => {
+  const said = "I couldn't confirm MC11 on the store just now.";
+  const list = "1. MC11 Coffee Grinder: price not checked\n2. 07-00019 Shelf Liner: $37.52";
+  for (const [tail, fixed] of [
+    ["They all came back fine.", said],
+    ["Your 12 codes were all found.", said],
+    ["I looked up all 12 and they were all found.", said],
+    ["All lookups succeeded, 2 of 2.", said],
+    ["All 2 lookups worked, 2 of 2. Nothing added.", `${said} Nothing added.`],
+  ]) assert.equal(withoutAllFoundClaims(`${list}\n${tail}`, ["MC11"]), `${list}\n${fixed}`, tail);
+  const inline = "1) MC11 Coffee Grinder, price not checked 2) 07-00019 Shelf Liner $37.52";
+  assert.equal(withoutAllFoundClaims(`The codes all matched: ${inline}`, ["MC11"]), `${said} ${inline}`);
+  // A number ending a sentence labels no list item; a claim in a bracket is replaced up to its ")".
+  assert.equal(withoutAllFoundClaims("All 3 codes checked, but the HET-4 has only 2 left, so I couldn't add 3.", ["ZZ-404"]), "I couldn't confirm ZZ-404 on the store just now.");
+  assert.equal(withoutAllFoundClaims("Here are the three (all 3 found), with live prices below.", ["ZZ-404"]), "Here are the three (I couldn't confirm ZZ-404 on the store just now), with live prices below.");
+  // A clause before the claim stays, and so does an item a run-on claim shares its line with.
+  assert.equal(withoutAllFoundClaims("The HET-4 is $120.00 and in stock, and all 3 codes were found.", ["ZZ-404"]), "The HET-4 is $120.00 and in stock, and I couldn't confirm ZZ-404 on the store just now.");
+  const runOn = "12. 21405 - Robot Coupe Blixer 10E VV - price not confirmed";
+  assert.equal(withoutAllFoundClaims(`${list}\n${runOn} All 12 lookups succeeded.`, ["MC11"]), `${list}\n${runOn} ${said}`);
+});
+
+test("'the others were all found' beside the failed code's own words is true and stays (r8 review)", () => {
+  for (const message of [
+    "04-00820's store page didn't load just now, so I can't confirm its price. The other 11 were all found.",
+    "I couldn't open 04-00820's listing. The rest all came back fine:\n1. 07-00019 Shelf Liner: $37.52",
+    "04-00820 failed its live check; the other 11 were all confirmed.",
+  ]) assert.equal(withoutAllFoundClaims(message, ["04-00820"]), message);
+  // A code the reply never names makes "the others" untrue.
+  assert.equal(withoutAllFoundClaims("04-00820's store page didn't load. The other 11 were all found.", ["04-00820", "ZZ-1"]),
+    "04-00820's store page didn't load. I couldn't confirm 04-00820, ZZ-1 on the store just now.");
 });
 
 test("a list answer of 4 or more items isn't sent back for its length or its cards (r8 R03: 837 characters and 12 card_ids)", () => {

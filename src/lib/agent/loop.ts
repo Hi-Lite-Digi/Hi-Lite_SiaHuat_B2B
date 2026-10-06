@@ -578,7 +578,9 @@ export async function runAgentTurn(input: {
       const trimmed = withoutRangeCards(withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused), earlier.currentText);
       // A product the words name gets its card before the card they would otherwise stand for, once the cards kept are settled (r8 F6).
       const named = withNamedCards(trimmed, ctx.seen, ctx.lines, ctx.changes);
-      return named === trimmed ? trimmed : { ...named, card_ids: named.card_ids.filter((id) => !broken(id)) };
+      if (named === trimmed) return trimmed;
+      // Judged again as sent: the earlier replies' cards hold the card added, so that set shown twice goes too (r8 review).
+      return withoutRepeatedSet({ ...named, card_ids: named.card_ids.filter((id) => !broken(id)) }, earlier, ctx.refused);
     };
     // The lookup reads an earlier card for the first time and can find its listing gone: trimmed again then, so its words go with it
     // and a reply left with nothing gets the next step and the contact (r8 review).
@@ -658,8 +660,10 @@ export async function runAgentTurn(input: {
       ...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...request.enquiry.map((line) => line.stockId), ...ctx.shownIds,
       ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)), ...ctx.gone, ...missingCodes,
     ];
-    // The products the reply names or shows whose live check failed, and the codes found nothing for (r8 R03).
-    const unconfirmed = [...missingCodes, ...[...ctx.seen.values()].filter(({ product, verified }) => !verified
+    // The products the reply names or shows whose live check failed, and the codes found nothing for (r8 R03), unless a later lookup
+    // checked one live (r8 review: Claude's retry of a TOOL_FAILED code worked).
+    const checkedLater = (code: string) => [...ctx.seen.values()].some(({ product, verified }) => verified && same(product.stock_id, code));
+    const unconfirmed = [...missingCodes.filter((code) => !checkedLater(code)), ...[...ctx.seen.values()].filter(({ product, verified }) => !verified
       && (review.cards.some((card) => same(card.stock_id, product.stock_id)) || codePattern(product.stock_id).test(final.message))).map(({ product }) => product.stock_id)];
     const truthful = withoutAllFoundClaims(final.message, unconfirmed);
     const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(truthful, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
