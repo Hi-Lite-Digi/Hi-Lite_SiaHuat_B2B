@@ -50,7 +50,7 @@ export const catalogueRanges: ReadonlyArray<readonly [range: string, sections: R
   ]],
   ["Electricals & Food Prep Machines", [
     ["Bar machines",["Bar blenders and Drink mixers","Coffee machines and grinders","Ice crushers and shavers","Juice extractors and Citrus juicers"]],
-    ["Cooking equipment",["Air Fryer","Bakery ovens","Combination food processors","Convection & multi-function ovens","Conveyor toasters","Deep fryers","Dehydrators","Egg cookers","Electric kettles","Griddles","Grillers","Ice cream and gelato machines","Immersion circulators and sous vide baths","Induction stoves and cooking stations","Kebab machines","Microwave ovens","Non-induction stoves and ranges","Panini grills","Pizza ovens","Pop-up toasters","Rice cookers","Salamanders","Sausage and hot dog machines","Specialty cooking machines","Specialty ovens","Waffle and crepe machines","Water boilers and dispensers"]],
+    ["Cooking equipment",["Air Fryer","Bakery ovens","Combination food processors","Convection & multi-function ovens","Conveyor toasters","Deep fryers","Dehydrators","Egg cookers","Electric kettles","Griddles","Grillers","Ice cream and gelato machines","Immersion circulators and sous vide baths","Induction stoves and cooking stations","Kebab machines","Microwave ovens","Non-induction stoves and ranges","Panini grills","Pizza ovens","Pop-up toasters","Rice cookers","Salamanders","Sausage and hot dog machines","Specialty cooking machines","Specialty ovens","Steamers","Waffle and crepe machines","Water boilers and dispensers"]],
     ["Food display and merchandising",["Cotton candy machine","Electrical drink and soft serve machines","Heated displays","Popcorn machine","Refrigerated displays"]],
     ["Food Holding Equipment and Food Warming",["Bain maries and sauce warmers","Pizza and food delivery systems","Rice warmers","Towel steamer/fridge","Warming plates"]],
     ["Food preparation machines",["Bread slicers","Combination food processors","Electric can openers and crushers","Food cutting and slicing machines","Grinders and graters","Immersion blenders, whisks and emulsifiers","Immersion circulators and sous vide baths","Induction stoves and cooking stations","Juice extractors and Citrus juicers","Kitchen blenders/mixers/cutters","Mandolines","Meat mincers and tenderizers","Meat slicers and bone saws","Pasta and dough machines","Planetary and spiral mixers","Salad spinners","Sausage fillers and hamburger presses","Seaweed dryers","Specialty cooking machines","Vacuum sealing machines","Vegetable and fruit peeling machines","Vegetable preparation machines"]],
@@ -120,7 +120,7 @@ export const catalogueRanges: ReadonlyArray<readonly [range: string, sections: R
     ["Room Amenities",["Clothes iron and steamers","Electric kettles"]],
     ["Shelf liners and floor mats",["Floor mats and boot brushes","Scourers, scrubbers and cleaning sponges","Shelf liners"]],
     ["Tableware caddies and racks",["Storage and warewashing racks and dollies"]],
-    ["Washing and drying machines",["Electricals for washing and drying equipment"]],
+    ["Washing and drying machines",["Electricals for washing and drying equipment","Insect killers"]],
   ]],
   ["Storage, Organization & Shelving", [
     ["Counter-management equipment",["Concession food holding supplies","Cup, napkin and straw dispensers","Flatware organizers and holders","Sauce and condiment dispensers","Stackable containers"]],
