@@ -1361,3 +1361,49 @@ test("a list's search with a category runs one query plus the category", async (
   assert.deepEqual(deps.calls.filter((call) => /^(?:search|category):/.test(call)), ["search:frying pan", "category:frying pans"]);
   assert.deepEqual(ctx.searches.map((search) => [search.queries, search.category]), [[["frying pan"], "frying pans"]]);
 });
+
+// Batch 1 review: in a list round all 5 reads of "grey cut resistant glove" went to removed listings, and Claude was told there were
+// no matches while live ones ranked 6th and below.
+const goneTorches = (...codes: string[]) => Object.fromEntries(codes.map((code) => [code, "gone" as const]));
+type GoneSearchBody = SearchBody & { note?: string };
+
+test("a search's removed listings give their places to the next rows, read once, and are kept as gone", async () => {
+  const deps = fakeDeps(torches(12), goneTorches("T1", "T2", "T3", "T4", "T5"));
+  const reads: string[] = [];
+  const fetchLive = deps.fetchLive;
+  deps.fetchLive = (url, ms) => {
+    reads.push(url);
+    return fetchLive(url, ms);
+  };
+  const ctx = context(deps, { roundSearches: 6 });
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as GoneSearchBody;
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["T6", "T7", "T8", "T9", "T10"]);
+  assert.deepEqual([body.more_available, body.note], [true, undefined]);
+  assert.deepEqual([...ctx.gone], ["T1", "T2", "T3", "T4", "T5"]);
+  assert.equal(reads.length, 10);
+  // A later search this turn spends no read on them again.
+  const again = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as GoneSearchBody;
+  assert.deepEqual(again.products.map((item) => item.stock_id), ["T6", "T7", "T8", "T9", "T10"]);
+  assert.equal(reads.length, 15);
+});
+
+test("a search whose matches were all removed says so, not that nothing matches", async () => {
+  // Only the 6th match is live.
+  const sixth = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches(6), goneTorches("T1", "T2", "T3", "T4", "T5")), { roundSearches: 6 }))).content) as GoneSearchBody;
+  assert.deepEqual([sixth.products.map((item) => item.stock_id), sixth.note], [["T6"], undefined]);
+  // Every match removed: nothing more to read.
+  const allGone = context(fakeDeps(torches(3), goneTorches("T1", "T2", "T3")));
+  const none = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, allGone)).content) as GoneSearchBody;
+  assert.deepEqual([none.products, none.more_available, [...allGone.gone]], [[], false, ["T1", "T2", "T3"]]);
+  assert.match(none.note ?? "", /removed/);
+  assert.doesNotMatch(none.note ?? "", /No catalogue matches/);
+  // The rows read in their place were removed too, with more below: more_available stays true.
+  const deeper = context(fakeDeps(torches(12), goneTorches(...torches(10).map((item) => item.stock_id))), { roundSearches: 6 });
+  const later = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, deeper)).content) as GoneSearchBody;
+  assert.deepEqual([later.products, later.more_available, deeper.gone.size], [[], true, 10]);
+  assert.match(later.note ?? "", /removed/);
+  // Searched again with the same words: the removed rows are skipped, and the note still says why nothing is shown.
+  const repeat = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches(3), goneTorches("T1", "T2", "T3")), { gone: new Set(["T1", "T2", "T3"]) }))).content) as GoneSearchBody;
+  assert.deepEqual(repeat.products, []);
+  assert.match(repeat.note ?? "", /removed/);
+});

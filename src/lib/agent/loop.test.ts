@@ -1235,6 +1235,33 @@ test("a cards-only answer whose only card is a removed listing gets the next ste
   assert.equal(reply.showContact, true);
 });
 
+test("words pointing at a removed listing's card go with it: a reply with nothing left gets the next step and the contact (r8 R01)", async () => {
+  const nothingLeft = "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).";
+  const outcome = (reply: Awaited<ReturnType<typeof runAgentTurn>>, bodies: unknown[]) => [reply.provider, reply.message, reply.cards, reply.showContact, bodies.length];
+  // Found gone by get_product in the tool round.
+  const looked = fakeClient([lookUpChiller(), answer({ message: "Here it is, the card below has the details.", card_ids: ["04-00820"] })]);
+  const tool = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client: looked.client, model: "claude-sonnet-5" });
+  assert.deepEqual(outcome(tool, looked.bodies), ["anthropic", nothingLeft, [], true, 2]);
+  // An earlier card, found gone only when the answer re-attaches it: cards only, and "Here it is again."
+  for (const message of ["", "Here it is again."]) {
+    const shown = fakeClient([answer({ message, card_ids: ["970S"] })]);
+    const reply = await runAgentTurn({ request: askedAgain("show me the torch again"), deps: fakeDeps([blowtorch, safico], { "970S": "gone" }), client: shown.client, model: "claude-sonnet-5" });
+    assert.deepEqual(outcome(reply, shown.bodies), ["anthropic", nothingLeft, [], true, 1], message);
+  }
+  // This turn's search result whose read ran late, found gone by the read before the reply.
+  const lookups = fakeDeps([blowtorch, safico]);
+  let attempts = 0;
+  const fetchLive = lookups.fetchLive;
+  lookups.fetchLive = (url, ms) => {
+    if (url !== blowtorch.source_url) return fetchLive(url, ms);
+    attempts += 1;
+    return Promise.reject(attempts === 1 ? new DOMException("The operation was aborted due to timeout", "TimeoutError") : new Error(`PAGE_GONE: ${url}`));
+  };
+  const late = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), answer({ message: "", card_ids: ["970S"] })]);
+  const reread = await runAgentTurn({ request: request({}), deps: lookups, client: late.client, model: "claude-sonnet-5" });
+  assert.deepEqual([...outcome(reread, late.bodies), attempts], ["anthropic", nothingLeft, [], true, 2, 2]);
+});
+
 test("an earlier card whose listing is now gone is dropped, read once in the turn, with no repair (r8 R01)", async () => {
   const counted = () => {
     const lookups = fakeDeps([blowtorch, safico], { "970S": "gone" });

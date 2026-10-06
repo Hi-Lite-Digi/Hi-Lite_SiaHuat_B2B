@@ -1779,6 +1779,8 @@ test("a price called unconfirmed is an issue only when every product the clause 
   const priced = new Map<string, CheckedProduct>([
     ["J2603", { product: product({ stock_id: "J2603", list_price: 8.17 }), verified: true }],
     ["MC11", { product: product({ stock_id: "MC11", list_price: 84.31 }), verified: true }],
+    ["13122-0104", { product: product({ stock_id: "13122-0104", list_price: 33.49 }), verified: true }],
+    ["EZ03", { product: product({ stock_id: "EZ03", list_price: 61.68 }), verified: true }],
     ["04-00820", { product: product({ stock_id: "04-00820", list_price: 0 }), verified: false }],
   ]);
   const issues = (message: string) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, priced, allowedCents(priced, [], 0)).style
@@ -1790,6 +1792,7 @@ test("a price called unconfirmed is an issue only when every product the clause 
     "J2603 - Hi Ball Tumbler - price/stock not confirmed.",
     "J2603's stock still needs checking.",
     "I couldn't confirm the price of J2603 just now.",
+    "Hi Ball Tumbler J2603 (stock not yet verified live).",
   ]) {
     const found = issues(message);
     assert.equal(found.length, 1, message);
@@ -1804,5 +1807,10 @@ test("a price called unconfirmed is an issue only when every product the clause 
     "J2603: Price: $8.17 / PC.",
     "The bulk price for 50 of J2603 is to be confirmed by Sia Huat sales.",
     "The price of J2603 is not too high.",
+    // "in stock" or "out of stock" beside a true caveat about something else (past replies, runs-new4 and runs-new5).
+    "The closest is the S/S Chinese Strainer 10.5″ (13122-0104), in stock, fit not confirmed.",
+    "2) Chinese Strainer 10.5″ – 13122-0104, stainless steel, in stock (fit with the 12L pot isn't confirmed, so Sia Huat can check).",
+    "Or the EZ03 aluminium 3-step ladder (in stock, 1 unit) — capacity also not confirmed.",
+    "13122-0104 is out of stock, and the restock date isn't confirmed.",
   ]) assert.deepEqual(issues(message), [], message);
 });

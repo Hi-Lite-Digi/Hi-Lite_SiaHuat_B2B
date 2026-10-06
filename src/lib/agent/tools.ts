@@ -169,6 +169,10 @@ const BUDGET_NOTE = "Nothing within max_price among the top matches for these wo
 // (r6, real model), each after 2-3 search retries (about 10 s). An earlier wording of this note gave "Sorry, I couldn't check that
 // just now...", about 5 s; this wording (no sizes, brands or products of its own) is not yet measured.
 const SEARCH_UNAVAILABLE_NOTE = "The catalogue didn't answer this time, so nothing was found or ruled out. Don't say you're having trouble, that anything is down or broken, or that we don't have it. In a few words say you couldn't check that just now and ask them to send it again, and if it helps, what it's for or the size, without suggesting sizes, brands or products yourself; set show_contact true so Sia Huat sales can help meanwhile.";
+const NO_MATCH_NOTE = "No catalogue matches for these words. Try other words the customer might mean, or ask one question.";
+// Removed listings ranked first filled a search's reads (a list round's 5 for "grey cut resistant glove", r8 Batch 1 review): never
+// "no matches", which reads as "we don't carry it".
+const REMOVED_MATCHES_NOTE = "The top catalogue matches for these words are store listings that have been removed, so none can be shown. Don't say we don't carry it: search again with other or shorter words the customer might mean, or ask one question.";
 // 15 of the 131 removed pages have their code live on a new page: "couldn't confirm", never "not sold".
 const LISTING_GONE_NOTE = "This item code's store listing has been removed, so it can't be confirmed here right now. Don't name or describe a product for it, show its card or give its link. Say plainly you couldn't confirm that code on the store just now and set show_contact true so Sia Huat sales can check it; if the customer said what it is, offer to search for it.";
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
@@ -288,7 +292,8 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   const excludedBrands = new Set((input.exclude_brands ?? []).map((brand) => brand.toLowerCase()));
   const merged: Product[] = [];
   const ids = new Set<string>();
-  const ruledOutItem = (item: Product) => excluded.has(item.stock_id.toLowerCase()) || excludedBrands.has((item.brand ?? "").toLowerCase());
+  // A listing found removed this turn is no match either: its read isn't spent again (the turn's memo keeps no failed read).
+  const ruledOutItem = (item: Product) => excluded.has(item.stock_id.toLowerCase()) || excludedBrands.has((item.brand ?? "").toLowerCase()) || ctx.gone.has(item.stock_id);
   const add = (item: Product) => {
     if (ids.has(item.stock_id) || ruledOutItem(item)) return;
     if (input.max_price && item.list_price > input.max_price) return;
@@ -340,12 +345,10 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   // Only a category read in full, with every product in it listed (or rejected), backs "that's all". A brand the customer ruled
   // out still exists, so exclude_brands doesn't count as covered: "that's all" would be false.
   const complete = scope.exists && scope.total <= CATEGORY_ROWS
-    && scope.products.every((item) => excluded.has(item.stock_id.toLowerCase()) || topIds.has(item.stock_id));
+    && scope.products.every((item) => excluded.has(item.stock_id.toLowerCase()) || ctx.gone.has(item.stock_id) || topIds.has(item.stock_id));
   // The ruled-out brand's rows aren't matches, so more_available doesn't count them.
   const ruledOut = scope.products.filter((item) => excludedBrands.has((item.brand ?? "").toLowerCase())).length;
   const totalFound = scope.exists ? scope.total - ruledOut + merged.filter((item) => !inScope(item)).length : merged.length;
-  // A search that returned its full row limit may have more matches than it could return.
-  const moreAvailable = !complete && (totalFound > top.length || queryLists.some((list) => list.length >= QUERY_ROWS));
   // Hits that only max_price removed are still matches, above the budget: "No catalogue matches" read as nothing cheaper (exam 4,
   // c06-stress idx 2-3), so the note says so and categories come from them. Ruled-out hits are no matches at any price.
   const overBudget = merged.length || !input.max_price ? [] : queryLists.flat().filter((item) => !ruledOutItem(item) && item.list_price > (input.max_price ?? Infinity));
@@ -356,10 +359,23 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     : categoryOutcome?.status === "rejected" ? "Category search failed."
     : !scope.exists ? `No catalogue category matches '${category}'.${categories.length ? ` Categories among these results: ${categories.join(", ")}.` : ""}`
     : null;
-  const [checked, details] = await Promise.all([
-    Promise.all(top.map((item) => liveCheck(item, ctx.deps))),
-    lookupDetails(ctx, top.map((item) => item.stock_id)),
+  const read = (items: Product[]) => Promise.all([
+    Promise.all(items.map((item) => liveCheck(item, ctx.deps))),
+    lookupDetails(ctx, items.map((item) => item.stock_id)),
   ]);
+  const [first, firstDetails] = await read(top);
+  // A removed listing doesn't keep its place: the next rows are read once in place of the removed ones (r8 Batch 1 review: 3 of 5
+  // reads of "grey cut resistant glove" were removed listings, and live gloves ranked below them were never shown).
+  const removedCount = first.filter((item) => item.gone).length;
+  const next = removedCount ? varied(merged.filter((item) => !topIds.has(item.stock_id)), removedCount, input.queries, phrases) : [];
+  const [more, moreDetails] = await read(next);
+  const checked = [...first, ...more];
+  const details = new Map([...firstDetails, ...moreDetails]);
+  for (const item of checked) if (item.gone) ctx.gone.add(item.product.stock_id);
+  // A search that returned its full row limit may have more matches than it could return.
+  const moreAvailable = !complete && (totalFound > checked.length || queryLists.some((list) => list.length >= QUERY_ROWS));
+  // Matches left out as removed listings, found by this search or earlier this turn.
+  const removed = [...queryLists.flat(), ...scope.products].some((item) => ctx.gone.has(item.stock_id));
   // Recorded once its results are ready, not before its live checks (the slow part): a search the deadline cut while they ran backed
   // "that's all" and "we don't carry" in an answer that was told it didn't finish (r6 review).
   ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
@@ -367,15 +383,15 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
     total_found: totalFound,
-    // With no products returned it would contradict the note.
-    more_available: moreAvailable && affordable.length > 0,
+    // With no products returned it would contradict the no-match note.
+    more_available: moreAvailable && (affordable.length > 0 || removed),
     complete,
     // exam 3, c01-A T9-T11: from a top 10 of two brands Claude said all our chef knives were those two.
     ...(scope.exists ? { brands: brandNames(merged) } : {}),
     ...(category ? { category_found: scope.exists } : {}),
     categories,
     ...(categoryNote ? { category_note: categoryNote } : {}),
-    ...(affordable.length ? {} : { note: overBudget.length ? BUDGET_NOTE : "No catalogue matches for these words. Try other words the customer might mean, or ask one question." }),
+    ...(affordable.length ? {} : { note: overBudget.length ? BUDGET_NOTE : removed ? REMOVED_MATCHES_NOTE : NO_MATCH_NOTE }),
   });
 }
 

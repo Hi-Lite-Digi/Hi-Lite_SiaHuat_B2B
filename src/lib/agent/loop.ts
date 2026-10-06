@@ -227,7 +227,7 @@ async function attachEarlierCards(
     keepBest(ctx, withDetails(await withTimeout(liveCheck(found, ctx.deps, ms), ms, unconfirmed), await details));
   }));
   const spelled = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
-  return { ...final, card_ids: final.card_ids.map((id) => spelled.get(id.toLowerCase()) ?? id).filter((id) => !ctx.gone.has(id)) };
+  return { ...final, card_ids: final.card_ids.map((id) => spelled.get(id.toLowerCase()) ?? id) };
 }
 
 /** Rejects when the signal fires, so a stuck step cannot hold the turn past its deadline (the step itself keeps running). */
@@ -561,19 +561,26 @@ export async function runAgentTurn(input: {
     // says doesn't open (exam 4, c08), a changed item's card they've seen (exam 3, c02-A T18) and a set shown twice (exam 4). A
     // cards-only answer keeps its other cards: they are all it says.
     const brokenCodes = brokenLinkCodes(earlier.currentText, picks.replies);
-    // A code whose store listing came back gone this turn is never a card: dropped before the review, so no UNKNOWN_CARD repair (or
-    // backup reply) is spent on it (r8 R01). Before trimCards, so a cards-only answer left with none gets NOTHING_LEFT_MESSAGE.
-    const withoutGone = (answer: FinalAnswer): FinalAnswer => ({ ...answer, card_ids: answer.card_ids.filter((id) => !ctx.gone.has(id)) });
+    const broken = (id: string) => brokenCodes.some((code) => same(code, id));
     const trimCards = (answer: FinalAnswer): FinalAnswer => {
-      const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
+      // A code whose store listing came back gone this turn is never a card either, so no UNKNOWN_CARD repair (or backup reply) is
+      // spent on it (r8 R01).
+      const kept = answer.card_ids.filter((id) => !ctx.gone.has(id) && !broken(id));
       // With every card dropped, the words pointing at them go too (r3 c08-stress idx 5: "the card below carries the same details").
       const message = answer.card_ids.length && !kept.length ? withoutCardPointers(answer.message) : answer.message;
-      // The link line only when a card was really dropped for its link: a cards-only line with no cards is not a link complaint (D8 review).
-      const nothingLeft = answer.card_ids.length ? BROKEN_LINK_MESSAGE : NOTHING_LEFT_MESSAGE;
+      // The link line only when a card was really dropped for its link: a cards-only line with no cards, or with only removed listings,
+      // is not a link complaint (D8 review).
+      const nothingLeft = answer.card_ids.some(broken) ? BROKEN_LINK_MESSAGE : NOTHING_LEFT_MESSAGE;
       if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: nothingLeft, show_contact: true };
       return withoutRangeCards(withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused), earlier.currentText);
     };
-    let final = result.final && await withEarlierCards(trimCards(withoutGone(result.final)));
+    // The lookup reads an earlier card for the first time and can find its listing gone: trimmed again then, so its words go with it
+    // and a reply left with nothing gets the next step and the contact (r8 review).
+    const trimAndAttach = async (answer: FinalAnswer) => {
+      const attached = await withEarlierCards(trimCards(answer));
+      return attached.card_ids.some((id) => ctx.gone.has(id)) ? trimCards(attached) : attached;
+    };
+    let final = result.final && await trimAndAttach(result.final);
     let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
@@ -626,7 +633,7 @@ export async function runAgentTurn(input: {
           repairFailed = failureCode(error, deadline);
           return tidiedFirst;
         });
-      final = await withEarlierCards(trimCards(withoutGone(final)));
+      final = await trimAndAttach(final);
       allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       if (tidiedFirst && unfixable(review.safety, fixers).length) {

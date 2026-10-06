@@ -759,8 +759,9 @@ const STOCK = new RegExp(String.raw`\b(?:out\s+of\s+stock|sold\s+out|${NOT}\s+in
 const IN_STOCK = new RegExp(String.raw`(?<!\b${NOT}\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b`, "i");
 const HEDGE = /\b(?:may|might|could)\s+be\b|\bnot\s+(?:yet\s+)?confirmed\b|\bunconfirmed\b|\bneeds?\s+checking\b/i;
 // A price or stock called unconfirmed: "price not yet confirmed live", "price not live-verified", "price needs a live check",
-// "price/stock not confirmed", "its stock still needs checking", "couldn't confirm the price" (r8 R02, R03, R09).
-const PRICE_HEDGE = /\b(?:prices?|stock)\b(?:\/(?:stock|price))?[^.!?\n]{0,30}?\b(?:not\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|live|verified|checked)|(?:isn|wasn|hasn)['’]?t\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|checked|verified)|(?:still\s+)?needs?\s+(?:a\s+)?(?:live\s+)?check(?:ing)?|to\s+be\s+confirmed|unconfirmed)|\b(?:couldn['’]?t|can['’]?t|unable\s+to)\s+(?:yet\s+)?(?:confirm|check|verify)\s+(?:the\s+|its\s+)?(?:prices?|stock)\b/i;
+// "price/stock not confirmed", "its stock still needs checking", "couldn't confirm the price" (r8 R02, R03, R09). Not the "stock" of
+// "in stock" or "out of stock": "in stock, fit not confirmed" is a true caveat about something else (past replies, runs-new5 s01).
+const PRICE_HEDGE = /\b(?:prices?|(?<!\b(?:in|of)\s+)stock)\b(?:\/(?:stock|price))?[^.!?\n]{0,30}?\b(?:not\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|live|verified|checked)|(?:isn|wasn|hasn)['’]?t\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|checked|verified)|(?:still\s+)?needs?\s+(?:a\s+)?(?:live\s+)?check(?:ing)?|to\s+be\s+confirmed|unconfirmed)|\b(?:couldn['’]?t|can['’]?t|unable\s+to)\s+(?:yet\s+)?(?:confirm|check|verify)\s+(?:the\s+|its\s+)?(?:prices?|stock)\b/i;
 // A bulk or quoted price is Sia Huat sales' to confirm, whatever the live check says.
 const QUOTE_WORDS = /\b(?:bulk|quote|discount|sales|special|volume)\b/i;
 export const PRICE_HEDGE_PREFIX = "This calls a live-checked price unconfirmed";
