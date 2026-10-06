@@ -1509,6 +1509,13 @@ test("range wordings the round-4 guard missed need a backing search (exam 4)", (
   assert.deepEqual(rangeIssues("We don't have anything else in 28cm."), ["style ABSENCE"]);
 });
 
+test("'of the six' ranks the cards shown, as 'of the five' does, now that a reply may show six (review of C2b)", () => {
+  for (const message of ["Of the five, the Zyliss is the cheapest.", "Of the six, the Zyliss is the cheapest.", "Of the six items, the Zyliss is the cheapest."]) {
+    assert.deepEqual(rangeIssues(message, [search()]), [], message);
+  }
+  assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search()]), ["style CLAIM"]);
+});
+
 test("'between these' excuses a ranking of the cards shown, not a claim about the whole range", () => {
   assert.deepEqual(rangeIssues("Between these, that's our full range of tongs."), ["safety CLAIM"]);
   assert.deepEqual(rangeIssues("Among these, the Zyliss is the cheapest."), []);

@@ -590,7 +590,7 @@ const ENQUIRY_TALK = /\b(?:enquiry|added|removed|updated|your\s+(?:list|order|ca
 // The list rule's pointer to sales ("send the whole list to Sia Huat sales for a formal quote", exam 3, s01-A/B T0) is about the
 // customer's list, not the range.
 const LIST_TO_SALES = /\b(?:send|forward|email|share)\b[^.!?]{0,30}\blist\b|\bquot(?:e|ation)\b[^.!?]{0,30}\blist\b|\blist\b[^.!?]{0,30}\b(?:to\s+(?:sia\s+huat\s+)?sales|quot(?:e|ation))\b/i;
-const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
+const RELATIVE = /\b(?:of\s+(?:these|those|the\s+(?:two|three|four|five|six|ones?\s+(?:shown|above)))|shown\s+above)\b/i;
 // "Between these two, the Zyliss is the cheapest" ranks the cards shown; "Between these, that's our full range" still claims the range.
 const AMONG_SHOWN = /\b(?:between|among|of)\s+(?:these|those|the\s+(?:two|three|cards?|ones?\s+(?:above|shown)))\b/i;
 // "Nothing else to add?", "No other questions", "Everything else looks fine" and "The only option now is to ask sales" aren't about the range,

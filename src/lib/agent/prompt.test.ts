@@ -242,6 +242,8 @@ test("Claire looks up to six list items up in one response and points a long lis
   assert.ok(line.includes("handle up to six this turn: look them all up in your first response (one search_catalogue call each)"));
   assert.ok(line.includes("with no second round of searches"));
   assert.ok(line.includes("A list of item codes (up to 12): one get_product call each, all in your first response"));
+  // The long-list exemption counts numbered lines, not plain ones: a plain 627-character code list cost a repair (review of C1).
+  assert.ok(line.includes("give each code's short name and price on its own numbered line (1. CODE - name - $price)"));
   // The owner's round-4 default: the sales pointer stays at more than three.
   assert.ok(line.includes("In your first reply to a list of more than three items, also say once that they can send the list straight to Sia Huat sales for a formal quote (show_contact true)."));
   assert.ok(line.includes("In later turns, answer the customer's new message first"));
