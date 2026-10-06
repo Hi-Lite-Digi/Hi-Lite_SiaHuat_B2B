@@ -86,6 +86,16 @@ test("a page is retired only when both reads showed it gone; a slow or failed re
   assert.deepEqual(codes(once.unresolved), ["A1", "A2", "A3"]);
 });
 
+test("a retired row whose page is alive again is listed for review, on or off the sitemap, never as kept Active", () => {
+  const back = classify(["500"], [row("X1", "500", "Discontinued"), row("X2", "501", "Discontinued"), row("X3", "502", "Discontinued")], new Map([
+    ["500", live(product("X1", "500", 12))], ["501", live(product("X2", "501", 12))], ["502", goneTwice],
+  ]));
+  assert.deepEqual(back.keepAlive, []);
+  assert.deepEqual(back.deactivate, []);
+  assert.deepEqual(back.unresolved.map((item) => [item.stock_id, item.page, item.why]),
+    [["X1", "500", "Discontinued, but its page is alive again"], ["X2", "501", "Discontinued, but its page is alive again"]]);
+});
+
 test("a new code on two new pages, or one held by a live page, is never inserted", () => {
   const twice = classify(["7", "8"], [], new Map([["7", live(product("1520", "7", 3))], ["8", live(product("1520", "8", 4))]]));
   assert.deepEqual(twice.insert, []);
@@ -131,6 +141,17 @@ test("the dry run only reads: no database connection, GET requests only, and the
   assert.deepEqual([...new Set(requests)].sort(), ["GET catalogue.example", "GET store.siahuat.com"]);
   assert.deepEqual(first.counts, { insert: 2, updateMovedFromDead: 1, deactivate: 1, skipDuplicateCode: 0, skipZeroPrice: 1, keepAlive: 2, unresolved: 0 });
   assert.equal(first.updateMovedFromDead[0].product.price_ex_gst, 440.37);
+});
+
+test("the dry run reads the page of a retired row that is back on the sitemap", async (t) => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL) => {
+    const url = new URL(input.toString());
+    if (url.pathname === "/sitemap.xml") return new Response("<loc>https://store.siahuat.com/product/500</loc>");
+    if (url.pathname === "/rest/v1/products") return Response.json([row("X1", "500", "Discontinued")]);
+    return new Response(url.pathname.endsWith("/500") ? productPage("X1", 12) : gonePage);
+  });
+  const back = await dryRun({ supabaseUrl: "https://catalogue.example", publishableKey: "publishable", pauseMs: 0, log: () => {} });
+  assert.deepEqual(back.unresolved, [{ stock_id: "X1", page: "500", why: "Discontinued, but its page is alive again" }]);
 });
 
 // A stand-in for pg's client: it records each statement and answers with the row counts given.

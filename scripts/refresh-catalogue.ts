@@ -35,7 +35,8 @@ export type RefreshPlan = {
   skipZeroPrice: Array<Skipped & { available_quantity: number | null }>;
   /** Alive but off the sitemap: left Active (OD-5). */
   keepAlive: Array<{ stock_id: string; page: string; stock_status: string }>;
-  /** Couldn't tell (a read failed, gone on one read only, or the page shows another code): left as it is. */
+  /** Couldn't tell (a read failed, gone on one read only, or the page shows another code), or a Discontinued row whose page
+   *  is alive again (nothing records who retired it, so it isn't set back to Active): left as it is. */
   unresolved: Array<{ stock_id: string | null; page: string; why: string }>;
 };
 
@@ -94,12 +95,15 @@ export function classify(sitemapPages: string[], rows: CatalogueRow[], reads: Ma
 
   for (const row of rows) {
     const page = row.source_product_id;
-    if (!page || onSitemap.has(page) || movedFrom.has(page)) continue;
+    const retired = row.status === "Discontinued";
+    // A retired row is checked on the sitemap too: the refresh repeats weekly, and a retired page can come back.
+    if (!page || (onSitemap.has(page) && !retired) || movedFrom.has(page)) continue;
     const state = pageState(page);
-    if (state.product?.stock_id === row.stock_id) plan.keepAlive.push({ stock_id: row.stock_id, page, stock_status: state.product.stock_status });
+    if (state.product?.stock_id === row.stock_id && retired) plan.unresolved.push({ stock_id: row.stock_id, page, why: "Discontinued, but its page is alive again" });
+    else if (state.product?.stock_id === row.stock_id) plan.keepAlive.push({ stock_id: row.stock_id, page, stock_status: state.product.stock_status });
     else if (state.product) plan.unresolved.push({ stock_id: row.stock_id, page, why: `page now shows code ${state.product.stock_id}` });
     else if (!state.gone) plan.unresolved.push({ stock_id: row.stock_id, page, why: state.why! });
-    else if (row.status === "Discontinued") continue;
+    else if (retired) continue;
     else if (newPages.has(row.stock_id)) plan.unresolved.push({ stock_id: row.stock_id, page, why: "gone, but its code is on a new page that can't take it" });
     else plan.deactivate.push({ stock_id: row.stock_id, page });
   }
@@ -153,10 +157,11 @@ export async function dryRun({ supabaseUrl, publishableKey, pauseMs = 5 * 60_000
   const catalogued = new Set(rows.flatMap((row) => (row.source_product_id ? [row.source_product_id] : [])));
   const missing = sitemapPages.filter((page) => !catalogued.has(page));
   const offSitemap = [...catalogued].filter((page) => !onSitemap.has(page));
-  log(`Sitemap pages: ${sitemapPages.length}; catalogue rows: ${rows.length}; new pages: ${missing.length}; catalogue pages off the sitemap: ${offSitemap.length}.`);
+  const retiredOnSitemap = [...new Set(rows.flatMap((row) => (row.status === "Discontinued" && row.source_product_id && onSitemap.has(row.source_product_id) ? [row.source_product_id] : [])))];
+  log(`Sitemap pages: ${sitemapPages.length}; catalogue rows: ${rows.length}; new pages: ${missing.length}; catalogue pages off the sitemap: ${offSitemap.length}; retired pages on the sitemap: ${retiredOnSitemap.length}.`);
 
   const reads = new Map<string, PageRead[]>();
-  await readPages([...missing, ...offSitemap], reads);
+  await readPages([...missing, ...offSitemap, ...retiredOnSitemap], reads);
   // Every page that didn't show a product is read again later: gone needs both reads, and a failure may pass.
   const again = [...reads].filter(([, [first]]) => !("product" in first)).map(([page]) => page);
   if (again.length) {
