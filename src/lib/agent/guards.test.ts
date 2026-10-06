@@ -6,7 +6,7 @@ import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
   withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
@@ -1773,4 +1773,36 @@ test("a kept line's product features and a denial that it was removed are not lo
   for (const message of ["SB3027 is still missing from your enquiry.", "SB3027 isn't on your enquiry anymore.", "SB3027 isn’t in the enquiry now."]) {
     assert.deepEqual(claims(message), [message], message);
   }
+});
+
+test("a price called unconfirmed is an issue only when every product the clause names was checked live (r8 R02, R03, R09)", () => {
+  const priced = new Map<string, CheckedProduct>([
+    ["J2603", { product: product({ stock_id: "J2603", list_price: 8.17 }), verified: true }],
+    ["MC11", { product: product({ stock_id: "MC11", list_price: 84.31 }), verified: true }],
+    ["04-00820", { product: product({ stock_id: "04-00820", list_price: 0 }), verified: false }],
+  ]);
+  const issues = (message: string) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, priced, allowedCents(priced, [], 0)).style
+    .filter((issue) => issue.startsWith(PRICE_HEDGE_PREFIX));
+  // The tester's R09, R02 and R03 wordings, and the prompt's own.
+  for (const message of [
+    "2. Highball glass - Arcoroc Granity Tempered Hi Ball Tumbler, 420ml-14oz, J2603: price not live-verified, will need to confirm.",
+    "4. Grey cut-resistant glove, large: Safico Pro Cut Resistant Glove Large, J2603 - price not yet confirmed live, I'd need to check again.",
+    "J2603 - Hi Ball Tumbler - price/stock not confirmed.",
+    "J2603's stock still needs checking.",
+    "I couldn't confirm the price of J2603 just now.",
+  ]) {
+    const found = issues(message);
+    assert.equal(found.length, 1, message);
+    assert.match(found[0], /J2603 \$8\.17 \/ PC, in stock/);
+    assert.equal(issueCode(found[0]), "PRICE_HEDGE");
+  }
+  for (const message of [
+    "04-00820 - Display Chiller - price/stock not confirmed.", // still unchecked: the hedge is true
+    "J2603 is $8.17 and 04-00820's price isn't confirmed yet.", // names an unchecked product too
+    "MC11 is $84.31; the casserole's price isn't confirmed yet.", // the hedge's clause names no checked product
+    "Prices are before GST.",
+    "J2603: Price: $8.17 / PC.",
+    "The bulk price for 50 of J2603 is to be confirmed by Sia Huat sales.",
+    "The price of J2603 is not too high.",
+  ]) assert.deepEqual(issues(message), [], message);
 });

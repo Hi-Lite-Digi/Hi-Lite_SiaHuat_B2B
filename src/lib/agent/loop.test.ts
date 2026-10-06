@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { cardsNote, type AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
 import { searchSlots } from "./facts";
-import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX } from "./guards";
+import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX, PRICE_HEDGE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, fakePickCheck, product } from "./testing";
 import { PICK_CHECK_PROMPT, type PickCheck } from "./verify";
@@ -2231,4 +2231,20 @@ test("an add refused as STOCK_UNVERIFIED is never said to be added, though its c
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 1]]);
   assert.doesNotMatch(reply.message, /\badded\b/i);
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["BTS-8026D", "in_stock"]]);
+});
+
+test("a reply that calls a price unconfirmed after the card re-check priced it is repaired with the live price (r8 R02, R09)", async () => {
+  const lookups = fakeDeps([blowtorch, safico], { "970S": "timeout-once" });
+  const { client, bodies } = fakeClient([
+    torchSearch,
+    answer({ message: "Kitchen torch 970S: price not yet confirmed live.", card_ids: ["970S"] }),
+    answer({ message: "Kitchen torch 970S: $31.31 ex GST.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 3);
+  const repairAsk = JSON.stringify(bodies[2].messages.at(-1));
+  assert.ok(repairAsk.includes(PRICE_HEDGE_PREFIX));
+  assert.match(repairAsk, /970S \$31\.31 \/ PC, in stock/);
+  assert.equal(reply.message, "Kitchen torch 970S: $31.31 ex GST.");
+  assert.deepEqual(reply.cards.map((card) => card.stock_status), ["in_stock"]);
 });

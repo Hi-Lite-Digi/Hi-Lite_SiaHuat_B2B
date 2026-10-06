@@ -758,6 +758,12 @@ const NOT = String.raw`(?:not|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?
 const STOCK = new RegExp(String.raw`\b(?:out\s+of\s+stock|sold\s+out|${NOT}\s+in\s+stock)\b|\bno\s+stock\b(?!\s+(?:figure|info|information|count|data|details?|level))`, "i");
 const IN_STOCK = new RegExp(String.raw`(?<!\b${NOT}\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b`, "i");
 const HEDGE = /\b(?:may|might|could)\s+be\b|\bnot\s+(?:yet\s+)?confirmed\b|\bunconfirmed\b|\bneeds?\s+checking\b/i;
+// A price or stock called unconfirmed: "price not yet confirmed live", "price not live-verified", "price needs a live check",
+// "price/stock not confirmed", "its stock still needs checking", "couldn't confirm the price" (r8 R02, R03, R09).
+const PRICE_HEDGE = /\b(?:prices?|stock)\b(?:\/(?:stock|price))?[^.!?\n]{0,30}?\b(?:not\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|live|verified|checked)|(?:isn|wasn|hasn)['’]?t\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|checked|verified)|(?:still\s+)?needs?\s+(?:a\s+)?(?:live\s+)?check(?:ing)?|to\s+be\s+confirmed|unconfirmed)|\b(?:couldn['’]?t|can['’]?t|unable\s+to)\s+(?:yet\s+)?(?:confirm|check|verify)\s+(?:the\s+|its\s+)?(?:prices?|stock)\b/i;
+// A bulk or quoted price is Sia Huat sales' to confirm, whatever the live check says.
+const QUOTE_WORDS = /\b(?:bulk|quote|discount|sales|special|volume)\b/i;
+export const PRICE_HEDGE_PREFIX = "This calls a live-checked price unconfirmed";
 // A plural subject: "both", "all", "they", or a plural verb ("X, Y and Z are out of stock").
 const PLURAL = /\b(?:both|all|these|those|they|them|are|were)\b/i;
 const CLAIM_FIXES = {
@@ -1127,6 +1133,14 @@ export function reviewAnswer(
     else safety.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES[kind]}`);
   }
   style.push(...stockIssues(answer.message, cards));
+  // Every product a clause names was checked live by the time the answer went out (the card re-check read it after the answer was
+  // written, r8 R02, R09): the repair gives the price. Split at ';' and 'but', so a priced product beside an unchecked one isn't taken for it.
+  for (const clause of said.flatMap((sentence) => sentence.split(/;|\s+but\s+/i)).filter((part) => PRICE_HEDGE.test(part) && !QUOTE_WORDS.test(part))) {
+    const named = [...seen.values()].filter(({ product }) => codePattern(product.stock_id).test(clause));
+    if (!named.length || !named.every((item) => item.verified)) continue;
+    const live = named.map(({ product }) => `${product.stock_id} $${product.list_price.toFixed(2)} / ${product.uom_id.trim()}${product.stock_status === "in_stock" ? ", in stock" : product.stock_status === "out_of_stock" ? ", out of stock" : ""}`).join("; ");
+    style.push(`${PRICE_HEDGE_PREFIX}: "${clause.trim()}". It was checked live: ${live}. Give that price; don't say it isn't confirmed or needs checking.`);
+  }
   const wrongCounts = wrongStockCounts(answer.message, cards, seen);
   if (wrongCounts.length) style.push(stockNumberIssue(wrongCounts));
   if (!cards.length) {
@@ -1187,6 +1201,7 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [REPEATED_MESSAGE_ISSUE, "REPEAT"],
   [PHOTO_AGAIN_ISSUE, "REPEAT"],
   [OFFER_ISSUE_PREFIX, "OFFER"],
+  [PRICE_HEDGE_PREFIX, "PRICE_HEDGE"],
 ];
 
 /** A review issue as a log code: the issue text can quote the reply, so only the code is logged. */
