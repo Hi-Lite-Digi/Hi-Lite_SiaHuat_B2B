@@ -64,6 +64,8 @@ export type TurnContext = {
    * nothing when they land (r6 review: an add whose pick verdict came after the cut still went onto the enquiry).
    */
   closed?: boolean;
+  /** Item codes (exact) whose store listing came back gone this turn: never a card, link or fact (r8 R01). */
+  gone: Set<string>;
 };
 
 export const agentTools: Anthropic.Tool[] = [
@@ -158,6 +160,8 @@ const BUDGET_NOTE = "Nothing within max_price among the top matches for these wo
 // (r6, real model), each after 2-3 search retries (about 10 s). An earlier wording of this note gave "Sorry, I couldn't check that
 // just now...", about 5 s; this wording (no sizes, brands or products of its own) is not yet measured.
 const SEARCH_UNAVAILABLE_NOTE = "The catalogue didn't answer this time, so nothing was found or ruled out. Don't say you're having trouble, that anything is down or broken, or that we don't have it. In a few words say you couldn't check that just now and ask them to send it again, and if it helps, what it's for or the size, without suggesting sizes, brands or products yourself; set show_contact true so Sia Huat sales can help meanwhile.";
+// 15 of the 131 removed pages have their code live on a new page: "couldn't confirm", never "not sold".
+const LISTING_GONE_NOTE = "This item code's store listing has been removed, so it can't be confirmed here right now. Don't name or describe a product for it, show its card or give its link. Say plainly you couldn't confirm that code on the store just now and set show_contact true so Sia Huat sales can check it; if the customer said what it is, offer to search for it.";
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
@@ -222,6 +226,11 @@ export const errorCode = (error: unknown) => (error instanceof Error ? (/^[A-Z0-
  * Details are catalogue data, not price or stock, so whichever copy has them keeps them.
  */
 export function keepBest(ctx: TurnContext, checked: CheckedProduct) {
+  // A listing the store removed is never kept: no card, link or price can come from it (r8 R01: 04-00820's dead chiller page).
+  if (checked.gone) {
+    ctx.gone.add(checked.product.stock_id);
+    return checked;
+  }
   const known = ctx.seen.get(checked.product.stock_id);
   const best = known?.verified && !checked.verified ? known : checked;
   const other = best === checked ? known : checked;
@@ -342,7 +351,7 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
   // Recorded once its results are ready, not before its live checks (the slow part): a search the deadline cut while they ran backed
   // "that's all" and "we don't carry" in an answer that was told it didn't finish (r6 review).
   ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
-  const affordable = checked.filter((item) => !input.max_price || item.product.list_price <= input.max_price);
+  const affordable = checked.filter((item) => !item.gone && (!input.max_price || item.product.list_price <= input.max_price));
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
     total_found: totalFound,
@@ -364,6 +373,10 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
   const found = await retryOnce(() => (url ? ctx.deps.findBySourceUrl(url) : ctx.deps.findByCode(input.stock_id!)));
   if (!found) return fail("NOT_FOUND");
   const [checked, details] = await Promise.all([liveCheck(found, ctx.deps), lookupDetails(ctx, [found.stock_id])]);
+  if (checked.gone) {
+    ctx.gone.add(found.stock_id);
+    return fail("LISTING_GONE", { stock_id: found.stock_id, note: LISTING_GONE_NOTE });
+  }
   return ok({ product: remember(ctx, withDetails(checked, details)) });
 }
 
@@ -439,7 +452,9 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
     Promise.all(checking.map((item) => liveCheck(item, ctx.deps))),
     lookupDetails(ctx, [...(source ? [source] : []), ...checking].map((item) => item.stock_id)),
   ]);
-  const sourceFact = checkedSource ? { source: remember(ctx, withDetails(checkedSource, details)) } : {};
+  // A removed source is recorded like get_product's, so a card Claude gives it is dropped in code, not repaired (r8 R01).
+  if (checkedSource?.gone) ctx.gone.add(checkedSource.product.stock_id);
+  const sourceFact = checkedSource && !checkedSource.gone ? { source: remember(ctx, withDetails(checkedSource, details)) } : {};
   const available = checked
     .filter((item) => item.verified && item.product.stock_status === "in_stock" && (item.product.available_quantity ?? 0) >= minQty)
     .slice(0, 3);
@@ -452,10 +467,12 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
   return ok({ ...sourceFact, products: available.map((item) => remember(ctx, withDetails(item, details))) });
 }
 
+const NO_PHOTO_MATCH = { kind: "none", products: [], note: "No catalogue photo match. Describe what you see and search by product type." };
+
 async function matchPhotoTool(ctx: TurnContext) {
   if (!ctx.image) return fail("NO_PHOTO");
   const result = await ctx.deps.lookupImage(ctx.image);
-  if (!result) return ok({ kind: "none", products: [], note: "No catalogue photo match. Describe what you see and search by product type." });
+  if (!result) return ok(NO_PHOTO_MATCH);
   const matches = result.products.slice(0, 5);
   // The pick check reads "2 of this" against the photo's matches (the eval's chat view showed the photo too).
   for (const item of matches) ctx.photoMatches.set(item.stock_id, result.kind === "direct" ? "direct" : "look-alike");
@@ -463,7 +480,9 @@ async function matchPhotoTool(ctx: TurnContext) {
     Promise.all(matches.map((item) => liveCheck(item, ctx.deps))),
     lookupDetails(ctx, matches.map((item) => item.stock_id)),
   ]);
-  return ok({ kind: result.kind, exact_product: result.kind === "direct", products: checked.map((item) => remember(ctx, withDetails(item, details))) });
+  const live = checked.filter((item) => !item.gone);
+  if (!live.length) return ok(NO_PHOTO_MATCH);
+  return ok({ kind: result.kind, exact_product: result.kind === "direct", products: live.map((item) => remember(ctx, withDetails(item, details))) });
 }
 
 /**
@@ -500,6 +519,10 @@ function refusedProduct(code: string, ctx: TurnContext) {
     // Only the time left in the cap, so the live check doesn't run on after the tool has answered.
     const left = until - performance.now();
     const [checked, details] = await Promise.all([liveCheck(found, ctx.deps, left), lookupDetails(ctx, [found.stock_id], left)]);
+    if (checked.gone) {
+      ctx.gone.add(checked.product.stock_id);
+      return null;
+    }
     return remember(ctx, withDetails(checked, details));
   })(), REFUSED_LOOKUP_MS, null);
 }

@@ -142,7 +142,7 @@ export async function buildFallbackReply(input: {
       found = [...found, ...(hits ?? [])];
       const left = Math.floor(timeoutMs - (performance.now() - started));
       // If the search used up the time, skip the live checks and show no cards.
-      if (hits && left > 0) cards = (await Promise.all(hits.filter(relevant).slice(0, CARDS).map((item) => liveCheck(item, input.deps, left)))).map((item) => item.product);
+      if (hits && left > 0) cards = (await Promise.all(hits.filter(relevant).slice(0, CARDS).map((item) => liveCheck(item, input.deps, left)))).filter((item) => !item.gone).map((item) => item.product);
     } catch {
       cards = [];
     }

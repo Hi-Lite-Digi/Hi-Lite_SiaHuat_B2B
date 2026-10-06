@@ -34,6 +34,11 @@ test("the backup reply still shows matching live-checked products, with the sale
   assert.equal(reply.message, "Here's what I found for 'blow torch'. Want one of these, or something more specific?");
 });
 
+test("the backup reply never shows a product whose store listing was removed (r8 R01)", async () => {
+  const reply = await buildFallbackReply({ searchText: "blow torch", lines: [], deps: fakeDeps([torch], { "970S": "gone" }) });
+  assert.deepEqual(reply.cards, []);
+});
+
 test("the backup reply retries a failed search once", async () => {
   const deps = fakeDeps([torch]);
   const search = deps.searchDirect;

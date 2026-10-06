@@ -97,6 +97,13 @@ test("out-of-stock and unverified items are refused", async () => {
   assert.equal(unverified.ok ? null : unverified.error, "STOCK_UNVERIFIED");
 });
 
+test("a removed store listing is never added: LISTING_GONE with its notice and the product (r8 R01)", async () => {
+  const gone = await applyEnquiryAction([], { action: "add", stock_id: "BTS-8026D", quantity: 1 }, ["1"], fakeDeps([torch], { "BTS-8026D": "gone" }));
+  assert.equal(gone.ok ? null : gone.error, "LISTING_GONE");
+  assert.match(gone.ok ? "" : gone.notice ?? "", /listing has been removed/);
+  assert.deepEqual([gone.product?.product.stock_id, gone.product?.gone], ["BTS-8026D", true]);
+});
+
 test("cartons convert only with the product's own pack size", async () => {
   const cartons = await applyEnquiryAction([], { action: "add", stock_id: "GAS", quantity: 2, unit: "carton" }, ["2 ctn"], fakeDeps([gas]));
   assert.equal(cartons.ok && cartons.lines[0].quantity, 96);
@@ -191,6 +198,14 @@ test("a line whose live re-check fails stays with the browser and its catalogue 
   const allowed = allowedCents(result.products, result.lines, enquiryTotals(result.lines).grandTotal);
   assert.equal(allowed.has(2336), false);
   assert.equal(allowed.has(4672), false);
+});
+
+test("a line whose store listing was removed stays with the browser as unchecked, is named gone and is never a product (r8 R01)", async () => {
+  const result = await verifyEnquiry([{ stockId: "BTS-8026D", quantity: 2 }, { stockId: "GAS", quantity: 48 }], fakeDeps([torch, gas], { "BTS-8026D": "gone" }));
+  assert.deepEqual(result.lines.map((line) => line.code), ["GAS"]);
+  assert.deepEqual([result.unchecked, result.gone], [["BTS-8026D"], ["BTS-8026D"]]);
+  assert.deepEqual([...result.products.keys()], ["GAS"]);
+  assert.deepEqual(result.notes, []);
 });
 
 test("totals are rounded to cents", () => {

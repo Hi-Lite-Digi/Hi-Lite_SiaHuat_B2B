@@ -132,7 +132,8 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
       ctx.deps.findByCode(event.stockId).then((found) => found && liveCheck(found, ctx.deps)).catch(() => null),
       lookupDetails(ctx, [event.stockId]),
     ]);
-    if (tapped) {
+    if (tapped?.gone) ctx.gone.add(tapped.product.stock_id); // a removed listing's card is never shown again (r8)
+    if (tapped && !tapped.gone) {
       const checked = keepBest(ctx, withDetails(tapped, details));
       blocks.push({ type: "text", text: `Customer tapped this product card to choose it: ${JSON.stringify(productFact(checked, true))}` });
     } else {
@@ -200,7 +201,7 @@ async function attachEarlierCards(
   const named = amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : [];
   // A code tried earlier this turn isn't looked up again after the repair: a stalled check would stall again.
   const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
-    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified).slice(0, 5);
+    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, 5);
   for (const id of wanted) tried.add(id);
   // One time limit covers each card's code lookup and live check together.
   const end = performance.now() + Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
@@ -215,7 +216,7 @@ async function attachEarlierCards(
     keepBest(ctx, withDetails(await withTimeout(liveCheck(found, ctx.deps, ms), ms, unconfirmed), await details));
   }));
   const spelled = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
-  return { ...final, card_ids: final.card_ids.map((id) => spelled.get(id.toLowerCase()) ?? id) };
+  return { ...final, card_ids: final.card_ids.map((id) => spelled.get(id.toLowerCase()) ?? id).filter((id) => !ctx.gone.has(id)) };
 }
 
 /** Rejects when the signal fires, so a stuck step cannot hold the turn past its deadline (the step itself keeps running). */
@@ -396,6 +397,7 @@ export async function runAgentTurn(input: {
     pickFast: 0,
     // This text or the one before it: a follow-up ("ard 37 like that correct anot") comes right after the GST ask.
     gstAsked: recent.some((text) => gstWords.test(text)),
+    gone: new Set(verified.gone),
   };
   // It must leave the last Claude call its time: with less than a second to spare it makes no call and update_enquiry asks.
   const check = input.pickCheck?.(ctx) ?? modelPickCheck({
@@ -546,6 +548,9 @@ export async function runAgentTurn(input: {
     // says doesn't open (exam 4, c08), a changed item's card they've seen (exam 3, c02-A T18) and a set shown twice (exam 4). A
     // cards-only answer keeps its other cards: they are all it says.
     const brokenCodes = brokenLinkCodes(earlier.currentText, picks.replies);
+    // A code whose store listing came back gone this turn is never a card: dropped before the review, so no UNKNOWN_CARD repair (or
+    // backup reply) is spent on it (r8 R01). Before trimCards, so a cards-only answer left with none gets NOTHING_LEFT_MESSAGE.
+    const withoutGone = (answer: FinalAnswer): FinalAnswer => ({ ...answer, card_ids: answer.card_ids.filter((id) => !ctx.gone.has(id)) });
     const trimCards = (answer: FinalAnswer): FinalAnswer => {
       const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
       // With every card dropped, the words pointing at them go too (r3 c08-stress idx 5: "the card below carries the same details").
@@ -555,7 +560,7 @@ export async function runAgentTurn(input: {
       if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: nothingLeft, show_contact: true };
       return withoutRangeCards(withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused), earlier.currentText);
     };
-    let final = result.final && await withEarlierCards(trimCards(result.final));
+    let final = result.final && await withEarlierCards(trimCards(withoutGone(result.final)));
     let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
@@ -608,7 +613,7 @@ export async function runAgentTurn(input: {
           repairFailed = failureCode(error, deadline);
           return tidiedFirst;
         });
-      final = await withEarlierCards(trimCards(final));
+      final = await withEarlierCards(trimCards(withoutGone(final)));
       allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       if (tidiedFirst && unfixable(review.safety, fixers).length) {
@@ -624,7 +629,7 @@ export async function runAgentTurn(input: {
     // customer's enquiry codes too, as a line that couldn't be looked up this turn is named nowhere else.
     const chatCodes = [
       ...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...request.enquiry.map((line) => line.stockId), ...ctx.shownIds,
-      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)),
+      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)), ...ctx.gone,
     ];
     const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(final.message, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,

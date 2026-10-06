@@ -16,7 +16,7 @@ function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Parti
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], changes: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
     searches: [], refused: [], tapped: null, checkPick: pickCheckCache(fakePickCheck()), photoMatches: new Map(), kept: [], failedAdds: [], finalRefusal: false, refusedKeys: new Set(), pickFast: 0,
-    ...overrides,
+    gone: new Set(), ...overrides,
   };
 }
 
@@ -818,6 +818,61 @@ test("match_photo needs a photo in this turn", async () => {
   const outcome = await runTool("match_photo", {}, context());
   assert.equal(outcome.isError, true);
   assert.match(outcome.content, /NO_PHOTO/);
+});
+
+// r8 R01: 04-00820's old Nernst chiller page answers 200 with Next's not-found page, so its listing is gone.
+const chiller = product({ stock_id: "04-00820", name: "Nernst 3 Layer Glass Display Chiller", source_url: "https://store.siahuat.com/product/14355600983" });
+
+test("get_product of a removed listing gives LISTING_GONE with no name or link, and the code is kept as gone (r8 R01)", async () => {
+  for (const input of [{ stock_id: "04-00820" }, { url: "https://store.siahuat.com/product/14355600983" }]) {
+    const ctx = context(fakeDeps([chiller], { "04-00820": "gone" }));
+    const outcome = await runTool("get_product", input, ctx);
+    assert.deepEqual([outcome.isError, outcome.error], [true, "LISTING_GONE"]);
+    assert.doesNotMatch(outcome.content, /Nernst|Chiller|14355600983/);
+    assert.deepEqual([...ctx.gone], ["04-00820"]);
+    assert.equal(ctx.seen.has("04-00820"), false);
+  }
+});
+
+test("search_catalogue and match_photo leave a removed listing out (r8 R01)", async () => {
+  const searched = context(fakeDeps([blowtorch, mastrad, safico], { "970S": "gone" }));
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, searched)).content) as { products: FactBody[] };
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["F46700", "BTS-8026D"]);
+  assert.equal(searched.seen.has("970S"), false);
+  const image = { dataUrl: "data:image/jpeg;base64,AAAA", mimeType: "image/jpeg" } as TurnContext["image"];
+  const lookup = { kind: "direct" as const, matches: [], products: [blowtorch, safico], totalProducts: 2 };
+  const photo = context(fakeDeps([blowtorch, safico], { "970S": "gone" }, lookup), { image });
+  const matched = JSON.parse((await runTool("match_photo", {}, photo)).content) as { kind: string; products: FactBody[] };
+  assert.deepEqual([matched.kind, matched.products.map((item) => item.stock_id)], ["direct", ["BTS-8026D"]]);
+  const allGone = context(fakeDeps([blowtorch, safico], { "970S": "gone", "BTS-8026D": "gone" }, lookup), { image });
+  const none = JSON.parse((await runTool("match_photo", {}, allGone)).content) as { kind: string; products: FactBody[] };
+  assert.deepEqual([none.kind, none.products, allGone.seen.size], ["none", [], 0]);
+});
+
+test("a removed listing is kept by its exact code: 1550a gone leaves 1550A live (r8 R01)", async () => {
+  // The catalogue holds both: 1550a's page is dead, 1550A's is live.
+  const dead = product({ stock_id: "1550a", name: "CHAFING DISH 1550a" });
+  const live = product({ stock_id: "1550A", name: "CHAFING DISH 1550A" });
+  const ctx = context(fakeDeps([dead, live], { "1550a": "gone" }));
+  assert.equal((await runTool("get_product", { stock_id: "1550a" }, ctx)).error, "LISTING_GONE");
+  await runTool("search_catalogue", { queries: ["chafing dish"] }, ctx);
+  assert.deepEqual([...ctx.gone], ["1550a"]);
+  assert.deepEqual([...ctx.seen.keys()], ["1550A"]);
+  assert.equal(ctx.seen.get("1550A")?.verified, true);
+});
+
+test("find_alternatives gives no source facts for a removed listing and records its code as gone (r8 R01)", async () => {
+  const ctx = context(fakeDeps([blowtorch, mastrad, safico], { "970S": "gone" }));
+  const body = JSON.parse((await runTool("find_alternatives", { stock_id: "970S" }, ctx)).content) as AlternativesBody & { source?: unknown };
+  assert.equal(body.source, undefined);
+  assert.deepEqual([[...ctx.gone], ctx.seen.has("970S")], [["970S"], false]);
+});
+
+test("an add of a removed listing is refused and the turn records the code as gone (r8 R01)", async () => {
+  const ctx = context(fakeDeps([chiller], { "04-00820": "gone" }), { customerTexts: ["2 of 04-00820"] });
+  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "04-00820", quantity: 2 }, ctx);
+  assert.deepEqual([outcome.isError, outcome.error], [true, "LISTING_GONE"]);
+  assert.deepEqual([[...ctx.gone], ctx.seen.has("04-00820"), ctx.lines], [["04-00820"], false, []]);
 });
 
 /** A context whose pick check answers with `answer`; check.calls lists the proposals it was asked about. */

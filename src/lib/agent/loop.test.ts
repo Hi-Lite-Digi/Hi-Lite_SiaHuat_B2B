@@ -1193,6 +1193,100 @@ test("an earlier card already tried this turn is not looked up again after the r
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
 });
 
+// r8 R01: 04-00820's old Nernst chiller page answers 200 with Next's not-found page, so its listing is gone. The real-Claude
+// replay sent "Item 04-00820 is the Nernst 3-Layer Glass Display Chiller" with the dead page's card.
+const chiller = product({ stock_id: "04-00820", name: "Nernst 3 Layer Glass Display Chiller", source_url: "https://store.siahuat.com/product/14355600983" });
+const chillerGone = () => fakeDeps([blowtorch, safico, chiller], { "04-00820": "gone" });
+const chillerAsked = request({ event: { type: "text", text: "what is item 04-00820?" } });
+const lookUpChiller = () => toolCall("t1", "get_product", { stock_id: "04-00820" });
+
+test("a removed listing's card is dropped before the review, so no repair is spent on it (r8 R01)", async () => {
+  const { client, bodies } = fakeClient([
+    lookUpChiller(),
+    answer({ message: "I couldn't confirm item 04-00820 on the store just now.", card_ids: ["04-00820"], show_contact: true }),
+  ]);
+  const reply = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards, []);
+  assert.equal(bodies.length, 2);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /LISTING_GONE/);
+  assert.doesNotMatch(JSON.stringify(bodies[1].messages.at(-1)), /Nernst|14355600983/);
+});
+
+test("a removed listing drops only its own exact code: 1550a's dead page leaves the 1550A card (r8 R01)", async () => {
+  const dead = product({ stock_id: "1550a", name: "CHAFING DISH 1550a" });
+  const live = product({ stock_id: "1550A", name: "CHAFING DISH 1550A" });
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "get_product", { stock_id: "1550a" }),
+    toolCall("t2", "search_catalogue", { queries: ["chafing dish"] }),
+    answer({ message: "This chafing dish is the one on the store now.", card_ids: ["1550A"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "1550a chafing dish" } }), deps: fakeDeps([dead, live], { "1550a": "gone" }), client, model: "claude-sonnet-5" });
+  assert.deepEqual([reply.cards.map((card) => card.stock_id), bodies.length], [["1550A"], 3]);
+});
+
+test("a cards-only answer whose only card is a removed listing gets the next step and the contact (r8 R01)", async () => {
+  const { client, bodies } = fakeClient([lookUpChiller(), answer({ message: "", card_ids: ["04-00820"] })]);
+  const reply = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).");
+  assert.equal(reply.showContact, true);
+});
+
+test("an earlier card whose listing is now gone is dropped, read once in the turn, with no repair (r8 R01)", async () => {
+  const counted = () => {
+    const lookups = fakeDeps([blowtorch, safico], { "970S": "gone" });
+    const fetchLive = lookups.fetchLive;
+    const reads = { count: 0 };
+    lookups.fetchLive = (url, ms) => {
+      if (url === blowtorch.source_url) reads.count += 1;
+      return fetchLive(url, ms);
+    };
+    return { lookups, reads };
+  };
+  // Looked up for the first time when the answer re-attaches it.
+  const again = counted();
+  const shown = fakeClient([answer({ message: "That torch can't be confirmed on the store just now.", card_ids: ["970S"], show_contact: true })]);
+  const reattached = await runAgentTurn({ request: askedAgain("show me the torch again"), deps: again.lookups, client: shown.client, model: "claude-sonnet-5" });
+  assert.deepEqual([reattached.cards, again.reads.count, shown.bodies.length], [[], 1, 1]);
+  // On the enquiry, so the re-check finds it gone first: a quoted price makes the answer look up Claire's previous cards, and the
+  // gone one isn't read again (failures leave the turn's memo).
+  const onEnquiry = counted();
+  const priced = fakeClient([answer({ message: "I couldn't confirm the 970S on the store just now. The BTS-8026D is $23.36.", card_ids: ["970S", "BTS-8026D"], show_contact: true })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "how much now" }, history: [{ role: "user", content: "torch" }, twoCardsShown], shownProductIds: ["970S", "BTS-8026D"], enquiry: [{ stockId: "970S", quantity: 2 }] }),
+    deps: onEnquiry.lookups, client: priced.client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual([reply.cards.map((card) => card.stock_id), onEnquiry.reads.count, priced.bodies.length], [["BTS-8026D"], 1, 1]);
+  assert.deepEqual(reply.enquiry.unchecked, ["970S"]);
+});
+
+test("a tapped card whose listing is gone gives Claude no product facts for it, and its card stays off (r8 R01)", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "I couldn't open item 04-00820 on the store just now.", card_ids: ["04-00820"], show_contact: true })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "select_product", stockId: "04-00820" } }), deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.doesNotMatch(JSON.stringify(bodies[0].messages), /Nernst|14355600983/);
+  assert.deepEqual([reply.cards, bodies.length], [[], 1]);
+});
+
+test("a phone-shaped item code whose listing is gone is named back unchanged, not taken for a phone number (r8 R01)", async () => {
+  const old = product({ stock_id: "62231732", name: "OLD ITEM" });
+  const message = "I couldn't confirm item 62231732 on the store just now.";
+  const { client } = fakeClient([toolCall("t1", "get_product", { stock_id: "62231732" }), answer({ message, show_contact: true })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "item 62231732 got?" } }), deps: fakeDeps([old], { "62231732": "gone" }), client, model: "claude-sonnet-5" });
+  assert.equal(reply.message, message);
+});
+
+test("a removed listing's link typed in the reply is cut, and its card stays off (r8 R01)", async () => {
+  const withLink = answer({ message: "I couldn't confirm 04-00820 just now: https://store.siahuat.com/product/14355600983", card_ids: ["04-00820"], show_contact: true });
+  const { client } = fakeClient([lookUpChiller(), withLink, withLink]);
+  const reply = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards, []);
+  assert.doesNotMatch(reply.message, /14355600983/);
+});
+
 test("the memo does not outlive the turn", async () => {
   const shared = deps();
   for (let turn = 0; turn < 2; turn += 1) {
