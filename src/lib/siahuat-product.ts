@@ -29,8 +29,8 @@ function clean(value: string | null | undefined) {
   return normalized && normalized !== "-" ? normalized : null;
 }
 
-function decodeFlightData(html: string) {
-  const $ = cheerio.load(html);
+// The page loaded once: a second load cost 26-104 ms of event loop per page while the round's other reads waited (r8).
+function decodeFlightData($: cheerio.CheerioAPI) {
   return $("script")
     .map((_index, element) => {
       const script = $(element).html() ?? "";
@@ -79,7 +79,7 @@ function originalImageUrl(src: string | undefined, productUrl: string) {
 
 export function parseSiaHuatProductPage(html: string, productUrl: string): ScrapedSiaHuatProduct {
   const $ = cheerio.load(html);
-  const flightData = decodeFlightData(html);
+  const flightData = decodeFlightData($);
   const sourceProductId = new URL(productUrl).pathname.split("/").filter(Boolean).at(-1) ?? "";
   const title = $("h5").filter((_index, element) => $(element).closest("div").text().includes("code:")).first();
   const name = clean(title.text()) ?? clean($("title").text().replace(/\s*\|\s*Sia Huat E-store\s*$/i, ""));
@@ -92,7 +92,9 @@ export function parseSiaHuatProductPage(html: string, productUrl: string): Scrap
       .text()
       .replace(/^code\s*:\s*/i, ""),
   );
-  if (!itemCode) throw new Error(`ITEM_CODE_NOT_FOUND: ${productUrl}`);
+  // A removed product still answers 200 with Next's not-found page, titled "Product - <id>" (04-00820's old page, r8): only its
+  // digest says the listing is gone. A page with no code and no digest may be a layout change, so it stays a plain failure.
+  if (!itemCode) throw new Error(`${html.includes("NEXT_HTTP_ERROR_FALLBACK;404") ? "PAGE_GONE" : "ITEM_CODE_NOT_FOUND"}: ${productUrl}`);
 
   const attributes: Record<string, string> = {};
   title.closest(".MuiGrid-container").find("h6").each((_index, heading) => {

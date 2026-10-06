@@ -6,9 +6,9 @@ import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
-  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
+  withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -650,11 +650,37 @@ test("honest or conditional wording is not a claim", () => {
     "Got it, 4 pax. A 12L pot would suit.",
     "Got it, 16in is the longer one.",
     "OK, 2 options fit your budget.",
+    // r8 R02: "do not add them yet" was answered so, and the fixed line replaced it.
+    "None added yet.",
+    "None of these are on your enquiry yet.",
+    "Kept all six separate, none added.",
+    "Held off adding them, as you asked.",
+    "No items added yet.",
+    "No items were added, as requested.",
+    "No items have been added to your enquiry.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
     assert.equal(withoutEnquiryClaims(message, { lines: [], changes: [], seen: shop }), message);
   }
   assert.deepEqual(claimIssues("Your updated total is $46.72.", { lines: [line("BTS-8026D", 2)] }), []);
+});
+
+test("a false add beside 'none' is still a claim", () => {
+  assert.equal(claimIssues("Added 2 Safico torches, none of the plates.").length, 1);
+  assert.equal(claimIssues("None of the plates fit, so I added 2 Safico torches.").length, 1);
+  // The denial words excuse only a clause that denies an add, never a promise or an add beside them (r8 review).
+  for (const message of [
+    "Added the 2 Safico torches and held off on the plates, as you asked.",
+    "I've added 2 Safico torches and made no changes to the plates.",
+    "Added 2 Safico torches with no changes to your other lines.",
+    "I'll add the 2 Safico torches now, none of the plates.",
+    "I'll add the 2 Safico torches now; no changes to the plates.",
+    "Holding off on the plates; I'll add the 2 Safico torches now.",
+    "Let me add the 2 Safico torches now and none of the plates.",
+    "None of the plates fit, so I'll add 2 Safico torches.",
+    "I'll add 2 Safico torches now; none of the plates fit.",
+    "Let me add 2 Safico torches, no changes to the plates.",
+  ]) assert.equal(claimIssues(message).length, 1, message);
 });
 
 test("a false claim is replaced by one plain line where the first one was", () => {
@@ -1661,6 +1687,165 @@ test("a wrong count left after the repair is dropped from its bracket, else said
   assert.equal(withoutWrongStockCounts("16in Iron Wok: 35 available.", [soldOut.get("13103-1601")!.product], soldOut), "16in Iron Wok: out of stock.");
 });
 
+// r8 F6: the 6 Oct reproduction's results for "24cm plate" (max $20), live-checked. N2906 and N0536 are sister plates.
+const plateSeen = new Map<string, CheckedProduct>(([
+  ["Q1930", "Luminarc Everyday Opal Glass Dinner Plate Ø24cm", 5.41, 121],
+  ["3500-0224", "Patra Soup Plate 24cm, Porcelain White", 14.22, 33],
+  ["N2906", "Royal Bone China Verona Deep Plate 24cm", 14.21, 1],
+  ["N0536", "Royal Bone China Chinese Round Coupe Plate 24cm", 14.77, 74],
+  ["10293", "Evelin Round Plate Ø23.5cm", 18.26, 37],
+  ["55-12123", "Taihei Soup Plate 23cm", 9.08, 240],
+  ["F3-CRR-01008-20", "Cerabon Petye Carrara Porcelain Round Dinner Plate Ø20cm", 14.59, 0],
+  ["RS-J1006-6", "Rooster Series Round Plate 6″", 2.8, 691],
+  ["55-12126", "Taihei Soup Plate 26cm", 16.42, 130],
+  ["RS-J1009-7", "Rooster Series Round Plate 7″", 3.46, 394],
+] as Array<[string, string, number, number]>).map(([stock_id, name, list_price, available_quantity]) => [stock_id, {
+  product: product({ stock_id, name, list_price, available_quantity, stock_status: available_quantity ? "in_stock" : "out_of_stock", in_stock: available_quantity > 0 }), verified: true,
+}]));
+const plateCards = (ids: string[]) => ids.map((id) => plateSeen.get(id)!.product);
+const plateCounts = (message: string, ids: string[]) => wrongStockCounts(message, plateCards(ids), plateSeen).map(({ said, code }) => `${said}->${code}`);
+const COUPE_CARDS = ["Q1930", "3500-0224", "N0536"];
+// 4 Oct run 6, word for word: the 1 left is N2906's, the card is N0536 (74 in stock).
+const RUN6 = "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，不够12个）。您比较倾向玻璃还是瓷器材质？";
+
+test("a Chinese stock count is checked against the card its words stand for (r8 F6 run 6)", () => {
+  assert.deepEqual(wrongStockCounts(RUN6, plateCards(COUPE_CARDS), plateSeen).map(({ said, code, live, alsoMatches }) => [said, code, live, alsoMatches.map((item) => item.stock_id)]),
+    [["只剩1个", "N0536", 74, ["N2906"]]]);
+  assert.ok(reviewAnswer({ message: RUN6, card_ids: COUPE_CARDS, chips: [], show_contact: false }, plateSeen, allowedCents(plateSeen, [], 0)).style.map(issueCode).includes("STOCK_NUMBER"));
+  // Said as 有现货, with the 不够12个 made from it.
+  assert.equal(withoutWrongStockCounts(RUN6, plateCards(COUPE_CARDS), plateSeen),
+    "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款有现货）。您比较倾向玻璃还是瓷器材质？");
+  // With the N2906 card it is right.
+  assert.deepEqual(wrongStockCounts(RUN6, plateCards(["Q1930", "3500-0224", "N2906"]), plateSeen), []);
+});
+
+test("a count in a Chinese clause after the product's name is that product's (r8 F6 reruns: r1, p1 and r3 layouts)", () => {
+  assert.deepEqual(plateCounts("- Royal Bone China 骨瓷圆盘 24cm,每个约$14.77,但库存只剩1个,不够12个", COUPE_CARDS), ["库存只剩1个->N0536"]);
+  assert.deepEqual(plateCounts("- Royal Bone China 圆形骨瓷盘 24cm，不过库存只剩1个，不够12个", COUPE_CARDS), ["库存只剩1个->N0536"]);
+  assert.deepEqual(plateCounts("- Royal Bone China 骨瓷盘 24cm，$14.77/个（库存仅剩1个，可能不够12个）", COUPE_CARDS), ["库存仅剩1个->N0536"]);
+  assert.deepEqual(plateCounts("- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,库存120个", COUPE_CARDS), ["库存120个->Q1930"]);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存121个，Patra瓷汤盘库存30个。", COUPE_CARDS), ["库存30个->3500-0224"]);
+  // Right counts in the same layouts pass.
+  assert.deepEqual(plateCounts("- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,目前库存121个\n- Royal Bone China 骨瓷盘 24cm，$14.77/个（库存74个）", COUPE_CARDS), []);
+  assert.equal(withoutWrongStockCounts("Royal Bone China骨瓷圆盘，库存只剩1个，不够12个。", plateCards(COUPE_CARDS), plateSeen), "Royal Bone China骨瓷圆盘，有现货。");
+});
+
+test("a Chinese clause with its own subject or after another count is not read as the clause before it, and 。！？ end a part", () => {
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘很耐用，骨瓷盘只剩1个。", ["Q1930", "N2906"]), []);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存121个，另外骨瓷盘只剩1个。", ["Q1930", "N2906"]), []);
+  // Its own Latin words still decide: the N2906 card has 1, the N0536 card doesn't.
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘很耐用，Royal Bone China骨瓷盘只剩1个。", ["Q1930", "N2906"]), []);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘很耐用，Royal Bone China骨瓷盘只剩1个。", ["Q1930", "N0536"]), ["只剩1个->N0536"]);
+  assert.deepEqual(plateCounts("Royal Bone China Verona Deep Plate只剩1个。Royal Bone China Coupe Plate库存74个。", ["Q1930", "N2906", "N0536"]), []);
+});
+
+test("approximate Chinese counts, kinds and 'the other two' are no counts; a Chinese count is read whole", () => {
+  for (const message of [
+    "Luminarc玻璃餐盘库存有100多个。", "Luminarc玻璃餐盘库存120个左右。", "Luminarc玻璃餐盘库存12个以上，够您用。", "Luminarc是玻璃的，剩下2个Royal Bone China都是骨瓷。",
+    "Luminarc玻璃餐盘只有1个尺寸。", "Luminarc玻璃餐盘剩下2款。", "Luminarc玻璃餐盘现货有3个颜色。", "Luminarc玻璃餐盘库存约120个。", "Luminarc玻璃餐盘（库存：121）",
+  ]) {
+    assert.deepEqual(plateCounts(message, COUPE_CARDS), [], message);
+  }
+  // A count before an ASCII comma, and one with a thousands comma, are read whole; a price is no count.
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存12, $5.41/个", ["Q1930"]), ["库存12->Q1930"]);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存1,210个", ["Q1930"]), ["库存1,210个->Q1930"]);
+  // The 够 or 不够 claim made from a wrong count goes with it.
+  assert.equal(withoutWrongStockCounts("Luminarc玻璃餐盘库存仅剩5个，可能不够12个。", plateCards(["Q1930"]), plateSeen), "Luminarc玻璃餐盘有现货。");
+  assert.equal(withoutWrongStockCounts("Luminarc玻璃餐盘：库存只有5个，够12个吗？", plateCards(["Q1930"]), plateSeen), "Luminarc玻璃餐盘：有现货吗？");
+});
+
+test("the whole 够 or 不够 clause made from a wrong Chinese count goes with it, however it is worded (r8 review, OD-8)", () => {
+  const fix = (message: string, ids: string[]) => withoutWrongStockCounts(message, plateCards(ids), plateSeen);
+  for (const [message, ids, fixed] of [
+    ["Luminarc玻璃餐盘库存12个，够您用。", ["Q1930"], "Luminarc玻璃餐盘有现货。"],
+    ["Luminarc玻璃餐盘库存50个，够用了。", ["Q1930"], "Luminarc玻璃餐盘有现货。"],
+    ["Patra瓷汤盘库存50个，完全够12个。", ["3500-0224"], "Patra瓷汤盘有现货。"],
+    ["Royal Bone China骨瓷圆盘（只剩1个，不够您要的12个）。", COUPE_CARDS, "Royal Bone China骨瓷圆盘（有现货）。"],
+    ["Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，12个不够）。", COUPE_CARDS, "Royal Bone China骨瓷圆盘（骨瓷这款有现货）。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，数量不够。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，恐怕不够12个。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，可能不太够。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘只剩1个，满足不了12个的需求。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    ["Royal Bone China骨瓷圆盘库存只剩1个了，不够12个。", COUPE_CARDS, "Royal Bone China骨瓷圆盘有现货。"],
+    // A clause that makes no claim from the count stays: 能够 is "can".
+    ["Luminarc玻璃餐盘库存50个，能够当天送达。", ["Q1930"], "Luminarc玻璃餐盘有现货，能够当天送达。"],
+  ] as Array<[string, string[], string]>) assert.equal(fix(message, ids), fixed, message);
+});
+
+test("English words that fit a card and an uncarded sister alike are read as the card (r8 F6)", () => {
+  assert.deepEqual(plateCounts("The Royal Bone China plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), ["only 1 left->N0536"]);
+  // The "not enough" made from the wrong count goes with it.
+  assert.equal(withoutWrongStockCounts("The Royal Bone China plate (only 1 left, not enough for 12) is premium.", plateCards(["Q1930", "N0536"]), plateSeen), "The Royal Bone China plate is premium.");
+  assert.equal(withoutWrongStockCounts("The Royal Bone China plate has only 1 left, not enough for 12.", plateCards(["Q1930", "N0536"]), plateSeen), "The Royal Bone China plate is in stock.");
+  // One shared word is not enough ("plate"), nor a size the card lacks.
+  assert.deepEqual(plateCounts("The plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), []);
+  assert.deepEqual(plateCounts("The Royal Bone China 27cm plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), []);
+});
+
+// The F6 reproduction's real replies (runs r1-r4, then p1 and p2) with their real cards.
+const PLATE_REPLIES = [
+  ["找到几款直径24cm左右、预算20新元内且有库存的餐盘:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,库存121个\n- Patra 瓷汤盘 24cm,每个约$14.22,库存33个\n- Royal Bone China Verona 深盘 24cm,每个约$14.21,但库存只剩1个,不够12个\n\n您要哪一款？或者告诉我是西式还是中式餐盘风格,我再帮您挑。", ["Q1930", "3500-0224", "N2906"]],
+  ["这几款直径24cm左右、均在预算内且有库存超过12个的餐盘可以参考:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,$5.41/个\n- Patra 瓷汤盘 24cm,$14.22/个\n- Royal Bone China 圆形骨瓷盘 24cm,$14.77/个\n您比较倾向哪一款？", COUPE_CARDS],
+  ["找到几款24cm餐盘，库存充足且在您预算内：\n- Luminarc Everyday Opal Glass 餐盘 Ø24cm，$5.41/个，玻璃材质\n- Patra 汤盘 24cm，$14.22/个，瓷质\n- Royal Bone China Verona 深盘 24cm，$14.21/个（库存仅剩1个，可能不够12个）\n- Royal Bone China 中式圆形Coupe盘 24cm，$14.77/个，瓷质\n\n您比较倾向哪一款材质或风格？", COUPE_CARDS],
+  ["找到几款Ø24cm的餐盘，价格都在您的预算内：Luminarc玻璃款($5.41/个，库存121)、Patra瓷汤盘款($14.22/个，库存33)。另外Royal Bone China 24cm深盘($14.21)目前只剩1个，不够12个。您想要哪一款？", ["Q1930", "3500-0224", "N2906"]],
+  ["找到几款直径24cm、预算内的餐盘，库存都充足（12个没问题）：\n- Luminarc Everyday Opal Glass Dinner Plate Ø24cm，$5.41/个\n- Patra Soup Plate 24cm 瓷白，$14.22/个\n- Royal Bone China Verona Deep Plate 24cm，不过库存只剩1个，不够12个\n\n推荐前两款，哪款比较合适？", ["Q1930", "3500-0224"]],
+  ["符合24cm左右、每个不超过20新元的几款餐盘：Luminarc Everyday玻璃盘 Ø24cm库存121件；Patra陶瓷汤盘24cm库存33件；Royal Bone China Verona深盘24cm但现货只剩1件，不够12个。您想要哪一款？数量12个的话请确认选哪款。", ["Q1930", "3500-0224", "N2906"]],
+] as Array<[string, string[]]>;
+
+test("the F6 reproduction's real replies with their real cards give no wrong count (r8 F6)", () => {
+  for (const [message, ids] of PLATE_REPLIES) {
+    assert.deepEqual(plateCounts(message, ids), [], message);
+  }
+});
+
+const namedCards = (message: string, ids: string[], from = plateSeen, enquiry: typeof lines = [], changes: EnquiryChange[] = []) =>
+  withNamedCards({ message, card_ids: ids, chips: [], show_contact: false }, from, enquiry, changes).card_ids;
+// 3 Oct (report page 7), in Chinese and in English: the third option is the Verona Deep Plate with 1 left, under the N0536 card.
+const OCT3 = "几款24cm餐盘供您参考：Luminarc Everyday玻璃餐盘、Patra瓷汤盘、Royal Bone China Verona深盘（只剩1个，不够12个）。";
+const OCT3_EN = "Here are some 24cm plates: the Luminarc Everyday Opal Glass Dinner Plate, the Patra Soup Plate, and the Royal Bone China Verona Deep Plate (only 1 left, not enough for 12).";
+
+test("a product the words name gets its card before the card they would otherwise stand for (r8 F6, 3 Oct)", () => {
+  for (const message of [OCT3, OCT3_EN]) {
+    const ids = namedCards(message, COUPE_CARDS);
+    assert.deepEqual(ids, ["Q1930", "3500-0224", "N2906", "N0536"], message);
+    assert.deepEqual(wrongStockCounts(message, plateCards(ids), plateSeen), [], message);
+  }
+  // With no stock or price, the whole name still names it; part of it does not.
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style for curries.", ["N0536"]), ["N2906", "N0536"]);
+  assert.deepEqual(namedCards("The Royal Bone China deep plate suits curries.", ["N0536"]), ["N0536"]);
+  // "This one" said with the named product's own stock, or a tap, points at no other card (r8 review).
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style; this one has only 1 left.", ["N0536"]), ["N2906", "N0536"]);
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style. Tap the card below to confirm and I'll add it.", ["N0536"]), ["N2906", "N0536"]);
+  assert.deepEqual(namedCards("Royal Bone China Verona Deep Plate很适合汤菜，推荐这款。", ["N0536"]), ["N2906", "N0536"]);
+});
+
+test("no card is added for an enquiry line, a product changed this turn, an unchecked or sold-out one, or one another part offers a card for (r8 F6)", () => {
+  const line = { item: "Royal Bone China Verona Deep Plate 24cm", code: "N2906", pricePerItem: 14.21, quantity: 1, total: 14.21, uom: "PC" };
+  assert.deepEqual(namedCards(OCT3_EN, COUPE_CARDS, plateSeen, [line]), COUPE_CARDS);
+  // "Removed the Verona and added 12 of this one" would otherwise put the removed Verona back.
+  assert.deepEqual(namedCards("Swapped: removed the Royal Bone China Verona Deep Plate and added 12 of this bone china plate.", ["N0536"], plateSeen, [], [{ action: "remove", code: "N2906" }]), ["N0536"]);
+  const verona = plateSeen.get("N2906")!;
+  const unchecked = new Map([...plateSeen, ["N2906", { ...verona, verified: false }]]);
+  for (const message of [OCT3, OCT3_EN]) assert.deepEqual(namedCards(message, COUPE_CARDS, unchecked), COUPE_CARDS, message);
+  const soldOut = new Map([...plateSeen, ["N2906", { product: { ...verona.product, available_quantity: 0, stock_status: "out_of_stock" as const, in_stock: false }, verified: true }]]);
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is sold out.", ["N0536"], soldOut), ["N0536"]);
+  // Another part about the card keeps it the product the words offer.
+  assert.deepEqual(namedCards("Instead of the Royal Bone China Verona Deep Plate (only 1 left), I'd go with this bone china plate.", ["N0536"]), ["N0536"]);
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate has only 1 left, so I've shown the Royal Bone China Coupe Plate instead.", ["N0536"]), ["N0536"]);
+  assert.deepEqual(namedCards("Unlike the Evelin round plate, this one is porcelain white.", ["3500-0224"]), ["3500-0224"]);
+  // Or points at the card: its own stock or price, or "this one instead" (r8 review: the Verona went in front of "推荐这款").
+  for (const [message, ids] of [
+    ["Royal Bone China Verona深盘只剩1个，不够12个，推荐这款（库存74个）。", ["N0536"]],
+    ["The Royal Bone China Verona Deep Plate has only 1 left, so I'd go with this one instead (74 in stock).", ["N0536"]],
+    ["The Royal Bone China Verona Deep Plate has only 1 left, not enough for 12. The card below has plenty, at $14.77 each.", ["N0536"]],
+    ["The Royal Bone China Verona Deep Plate has only 1 left, so it can't cover 12. I'd suggest this one instead.", ["Q1930", "N0536"]],
+    ["Royal Bone China Verona深盘只剩1个，不够12个，建议换这款。", ["N0536"]],
+    ["Instead of the Royal Bone China Verona Deep Plate you said you don't want, here's this one (74 in stock).", ["N0536"]],
+  ] as Array<[string, string[]]>) assert.deepEqual(namedCards(message, ids), ids, message);
+  // The reproduction's consistent replies (r1-r4) keep their cards.
+  for (const [message, ids] of PLATE_REPLIES.slice(0, 4)) assert.deepEqual(namedCards(message, ids), ids, message);
+});
+
 test("saying all the cards are in stock when one isn't is a style issue", () => {
   const card = (stock_id: string, stock_status: "in_stock" | "out_of_stock" | "unknown") => product({
     stock_id, stock_status, in_stock: stock_status === "in_stock", available_quantity: stock_status === "in_stock" ? 5 : null,
@@ -1773,4 +1958,120 @@ test("a kept line's product features and a denial that it was removed are not lo
   for (const message of ["SB3027 is still missing from your enquiry.", "SB3027 isn't on your enquiry anymore.", "SB3027 isn’t in the enquiry now."]) {
     assert.deepEqual(claims(message), [message], message);
   }
+});
+
+test("a price called unconfirmed is an issue only when every product the clause names was checked live (r8 R02, R03, R09)", () => {
+  const priced = new Map<string, CheckedProduct>([
+    ["J2603", { product: product({ stock_id: "J2603", list_price: 8.17 }), verified: true }],
+    ["MC11", { product: product({ stock_id: "MC11", list_price: 84.31 }), verified: true }],
+    ["13122-0104", { product: product({ stock_id: "13122-0104", list_price: 33.49 }), verified: true }],
+    ["EZ03", { product: product({ stock_id: "EZ03", list_price: 61.68 }), verified: true }],
+    ["04-00820", { product: product({ stock_id: "04-00820", list_price: 0 }), verified: false }],
+  ]);
+  const issues = (message: string) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, priced, allowedCents(priced, [], 0)).style
+    .filter((issue) => issue.startsWith(PRICE_HEDGE_PREFIX));
+  // The tester's R09, R02 and R03 wordings, and the prompt's own.
+  for (const message of [
+    "2. Highball glass - Arcoroc Granity Tempered Hi Ball Tumbler, 420ml-14oz, J2603: price not live-verified, will need to confirm.",
+    "4. Grey cut-resistant glove, large: Safico Pro Cut Resistant Glove Large, J2603 - price not yet confirmed live, I'd need to check again.",
+    "J2603 - Hi Ball Tumbler - price/stock not confirmed.",
+    "J2603's stock still needs checking.",
+    "I couldn't confirm the price of J2603 just now.",
+    "Hi Ball Tumbler J2603 (stock not yet verified live).",
+  ]) {
+    const found = issues(message);
+    assert.equal(found.length, 1, message);
+    assert.match(found[0], /J2603 \$8\.17 \/ PC, in stock/);
+    assert.equal(issueCode(found[0]), "PRICE_HEDGE");
+  }
+  for (const message of [
+    "04-00820 - Display Chiller - price/stock not confirmed.", // still unchecked: the hedge is true
+    "J2603 is $8.17 and 04-00820's price isn't confirmed yet.", // names an unchecked product too
+    "MC11 is $84.31; the casserole's price isn't confirmed yet.", // the hedge's clause names no checked product
+    "Prices are before GST.",
+    "J2603: Price: $8.17 / PC.",
+    "The bulk price for 50 of J2603 is to be confirmed by Sia Huat sales.",
+    "The price of J2603 is not too high.",
+    // "in stock" or "out of stock" beside a true caveat about something else (past replies, runs-new4 and runs-new5).
+    "The closest is the S/S Chinese Strainer 10.5″ (13122-0104), in stock, fit not confirmed.",
+    "2) Chinese Strainer 10.5″ – 13122-0104, stainless steel, in stock (fit with the 12L pot isn't confirmed, so Sia Huat can check).",
+    "Or the EZ03 aluminium 3-step ladder (in stock, 1 unit) — capacity also not confirmed.",
+    "13122-0104 is out of stock, and the restock date isn't confirmed.",
+  ]) assert.deepEqual(issues(message), [], message);
+});
+
+test("an 'all found' claim is said truthfully when a code the reply names or shows wasn't confirmed (r8 R03, M04)", () => {
+  const said = "I couldn't confirm 04-00820 on the store just now.";
+  const list = "1. 04-00820 Display Chiller: price not checked\n2. 07-00019 Shelf Liner: $37.52";
+  assert.equal(withoutAllFoundClaims(`${list}\nAll 12 lookups succeeded.`, ["04-00820"]), `${list}\n${said}`);
+  assert.equal(withoutAllFoundClaims(`All 12 found, none failed:\n${list}\nNothing added.`, ["04-00820"]), `${said}\n${list}\nNothing added.`);
+  assert.equal(withoutAllFoundClaims("All 12 codes came back.", ["04-00820"]), said);
+  // One sentence says it: a second claim goes.
+  assert.equal(withoutAllFoundClaims(`Here are all 12.\n${list}\nAll codes were found. No lookup failed.`, ["04-00820", "ZZ-1"]), `Here are all 12.\n${list}\nI couldn't confirm 04-00820, ZZ-1 on the store just now.`);
+  // The tester's replies, with the list run inline: the claim is judged on its own item, so every item stays, R03's item 12 too.
+  const m04 = "1. 04-00820 Nernst Display Chiller - price needs live check 2. 07-00019 Shelf Liner - $37.52 3. 08-00811 Nitrile Glove M Blue - $9.36 Nothing added.";
+  assert.equal(withoutAllFoundClaims(`All 12 found, none failed: ${m04}`, ["04-00820"]), `${said} ${m04}`);
+  const bracketed = "1) 04-00820 Nernst Display Chiller - price needs live check 2) 07-00019 Shelf Liner - $37.52 Nothing added.";
+  assert.equal(withoutAllFoundClaims(`All 12 found, none failed: ${bracketed}`, ["04-00820"]), `${said} ${bracketed}`);
+  const r03 = "Here are all 12 codes: 1. 04-00820 - Display Chiller - price/stock not confirmed 2. 07-00019 - Shelf Liner - $37.52/roll 12. 21405 - Robot Coupe Blixer 10E VV - $11,460.00/pc";
+  assert.equal(withoutAllFoundClaims(`${r03} All 12 lookups succeeded.`, ["04-00820"]), `${r03} ${said}`);
+  // A claim naming every code it couldn't confirm already says so, and with every code confirmed there is nothing to fix.
+  const named = `${list}\nAll 12 codes resolved; only 04-00820's price is not yet checked live.`;
+  assert.equal(withoutAllFoundClaims(named, ["04-00820"]), named);
+  assert.equal(withoutAllFoundClaims(`${list}\nAll 12 lookups succeeded.`, []), `${list}\nAll 12 lookups succeeded.`);
+  // Not a lookup claim.
+  for (const message of ["All three are in stock.", "Here are all six.", "I checked all 12 codes.", "The chef knives are out of stock in every size I checked."]) {
+    assert.equal(withoutAllFoundClaims(message, ["04-00820"]), message);
+  }
+});
+
+test("an 'all found' claim is said in a whole sentence: its subject goes, a closing number and a bracket stay readable (r8 review)", () => {
+  const said = "I couldn't confirm MC11 on the store just now.";
+  const list = "1. MC11 Coffee Grinder: price not checked\n2. 07-00019 Shelf Liner: $37.52";
+  for (const [tail, fixed] of [
+    ["They all came back fine.", said],
+    ["Your 12 codes were all found.", said],
+    ["I looked up all 12 and they were all found.", said],
+    ["All lookups succeeded, 2 of 2.", said],
+    ["All 2 lookups worked, 2 of 2. Nothing added.", `${said} Nothing added.`],
+  ]) assert.equal(withoutAllFoundClaims(`${list}\n${tail}`, ["MC11"]), `${list}\n${fixed}`, tail);
+  const inline = "1) MC11 Coffee Grinder, price not checked 2) 07-00019 Shelf Liner $37.52";
+  assert.equal(withoutAllFoundClaims(`The codes all matched: ${inline}`, ["MC11"]), `${said} ${inline}`);
+  // A number ending a sentence labels no list item; a claim in a bracket is replaced up to its ")".
+  assert.equal(withoutAllFoundClaims("All 3 codes checked, but the HET-4 has only 2 left, so I couldn't add 3.", ["ZZ-404"]), "I couldn't confirm ZZ-404 on the store just now.");
+  assert.equal(withoutAllFoundClaims("Here are the three (all 3 found), with live prices below.", ["ZZ-404"]), "Here are the three (I couldn't confirm ZZ-404 on the store just now), with live prices below.");
+  // A clause before the claim stays, and so does an item a run-on claim shares its line with.
+  assert.equal(withoutAllFoundClaims("The HET-4 is $120.00 and in stock, and all 3 codes were found.", ["ZZ-404"]), "The HET-4 is $120.00 and in stock, and I couldn't confirm ZZ-404 on the store just now.");
+  const runOn = "12. 21405 - Robot Coupe Blixer 10E VV - price not confirmed";
+  assert.equal(withoutAllFoundClaims(`${list}\n${runOn} All 12 lookups succeeded.`, ["MC11"]), `${list}\n${runOn} ${said}`);
+});
+
+test("'the others were all found' beside the failed code's own words is true and stays (r8 review)", () => {
+  for (const message of [
+    "04-00820's store page didn't load just now, so I can't confirm its price. The other 11 were all found.",
+    "I couldn't open 04-00820's listing. The rest all came back fine:\n1. 07-00019 Shelf Liner: $37.52",
+    "04-00820 failed its live check; the other 11 were all confirmed.",
+  ]) assert.equal(withoutAllFoundClaims(message, ["04-00820"]), message);
+  // A code the reply never names makes "the others" untrue.
+  assert.equal(withoutAllFoundClaims("04-00820's store page didn't load. The other 11 were all found.", ["04-00820", "ZZ-1"]),
+    "04-00820's store page didn't load. I couldn't confirm 04-00820, ZZ-1 on the store just now.");
+});
+
+test("a list answer of 4 or more items isn't sent back for its length or its cards (r8 R03: 837 characters and 12 card_ids)", () => {
+  const codes = Array.from({ length: 12 }, (_, i) => `CODE-${i + 1}`);
+  const listed = new Map<string, CheckedProduct>(codes.map((code) => [code, { product: product({ stock_id: code }), verified: true }]));
+  const review = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, listed, allowed);
+  const tooLong = (message: string) => review(message).style.some((issue) => issue.startsWith("Keep the reply within 600 characters"));
+  // The list run inline, as in 5 of the 10 numbered-list replies in past runs.
+  const inline = `Here are the four: ${[1, 2, 3, 4].map((n) => `${n}) CODE-${n} - Stainless steel gastronorm pan with lid, 1/1 size, 150mm deep, heavy gauge, dishwasher safe, stackable for hot or cold holding on a buffet line or in a bain-marie`).join(" ")} None added yet.`;
+  assert.ok(inline.length > 600 && inline.length <= 1_000, String(inline.length));
+  assert.equal(tooLong(inline), false);
+  // 12 card_ids under a 12-line list: no repair, and the first 5 are shown.
+  const twelve = review(`Here are all 12:\n${codes.map((code, i) => `${i + 1}. ${code} - Product ${i + 1}`).join("\n")}\nNone added yet.`, codes);
+  assert.ok(!twelve.style.includes("Show at most 5 cards."));
+  assert.equal(twelve.cards.length, 5);
+  // Not a list answer: 7 cards under a plain reply, a plain 700-character reply, and a list past 1,000 characters.
+  assert.ok(review("Here are the closest matches I found.", codes.slice(0, 7)).style.includes("Show at most 5 cards."));
+  assert.ok(tooLong("A long reply about the steamers. ".repeat(22)));
+  assert.ok(tooLong(`${inline}\n${"More words here. ".repeat(30)}`));
 });

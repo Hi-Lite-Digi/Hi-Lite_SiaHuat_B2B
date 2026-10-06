@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -39,6 +39,7 @@ const VERIFY_FLOOR_MS = 1_000;
 const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long; with less left, the tidied answer is sent
 const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
 const EARLIER_CARD_CHECK_MS = 2_000;
+const CARD_RECHECK_MS = 4_000; // a lone store read from the function took 0.9-3.6 s (r8)
 const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
 // A pasted list longer than this gets one round of lookups (exam 3, s01-B T0: 8 items ran 2-3 tool rounds and got a stand-in).
 const LIST_ITEMS_PER_TURN = 3;
@@ -132,7 +133,8 @@ async function eventContent(request: AgentRequest, ctx: TurnContext, notes: stri
       ctx.deps.findByCode(event.stockId).then((found) => found && liveCheck(found, ctx.deps)).catch(() => null),
       lookupDetails(ctx, [event.stockId]),
     ]);
-    if (tapped) {
+    if (tapped?.gone) ctx.gone.add(tapped.product.stock_id); // a removed listing's card is never shown again (r8)
+    if (tapped && !tapped.gone) {
       const checked = keepBest(ctx, withDetails(tapped, details));
       blocks.push({ type: "text", text: `Customer tapped this product card to choose it: ${JSON.stringify(productFact(checked, true))}` });
     } else {
@@ -190,24 +192,34 @@ function readFinal(response: Anthropic.Message): FinalAnswer | null {
 /**
  * Cards Claude chose that this turn hasn't looked up but the customer has already seen or has on the enquiry, plus (when the
  * message quotes an amount code can't back yet) the cards of Claire's previous reply and earlier-shown codes named in the message:
- * looked up and live-checked by code now, so every card and price still comes from this turn's facts.
+ * looked up and live-checked by code now, so every card and price still comes from this turn's facts. This turn's own products whose
+ * read ran late are read again the same way when the answer shows them or names their code.
  */
 async function attachEarlierCards(
   final: FinalAnswer, ctx: TurnContext, previousCodes: string[], amountsUnbacked: boolean, timeLeft: () => number, tried: Set<string>,
 ): Promise<FinalAnswer> {
-  const known = new Map([...ctx.shownIds, ...ctx.lines.map((line) => line.code), ...previousCodes].map((id) => [id.toLowerCase(), id]));
+  // This turn's products whose live check ran past its limit in the tool round: read again when the answer shows or names them, so a
+  // price the store gives isn't sent as "to be confirmed" (r8 R02, R09). Only while the store answered another read this turn: in an
+  // outage a second read would only add its wait.
+  const storeUp = [...ctx.seen.values()].some((item) => item.verified);
+  const again = storeUp ? [...ctx.seen.values()].filter((item) => item.late).map((item) => item.product.stock_id) : [];
+  const known = new Map([...ctx.shownIds, ...ctx.lines.map((line) => line.code), ...previousCodes, ...again].map((id) => [id.toLowerCase(), id]));
   const seen = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
-  const named = amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : [];
+  const named = [
+    ...(amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : []),
+    ...again.filter((id) => codePattern(id).test(final.message)),
+  ];
   // A code tried earlier this turn isn't looked up again after the repair: a stalled check would stall again.
   const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
-    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified).slice(0, 5);
+    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, 5);
   for (const id of wanted) tried.add(id);
-  // One time limit covers each card's code lookup and live check together.
-  const end = performance.now() + Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
+  // One time limit covers each card's code lookup and live check together; a read of this turn's own product gets longer.
+  const limit = wanted.some((id) => again.some((code) => same(code, id))) ? CARD_RECHECK_MS : EARLIER_CARD_CHECK_MS;
+  const end = performance.now() + Math.max(1, Math.min(limit, timeLeft() - 1_000));
   const left = () => Math.max(1, end - performance.now());
   const details = lookupDetails(ctx, wanted.map((id) => known.get(id)!), left());
   await Promise.all(wanted.map(async (id) => {
-    const found = await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), left(), null);
+    const found = ctx.seen.get(seen.get(id) ?? "")?.product ?? await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), left(), null);
     if (!found) return;
     // A live check that stalls sends the card unconfirmed, like a search result that wasn't checked.
     const unconfirmed: CheckedProduct = { product: { ...found, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
@@ -270,6 +282,8 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   names.push(...calls.map((call) => call.name));
   const updates = calls.filter((item) => item.name === "update_enquiry");
+  // The round's searches share its live reads, and more than three at once are a list's (searchCatalogueTool, r8 R02, R09, M03).
+  ctx.roundSearches = calls.filter((call) => call.name === "search_catalogue").length;
   const action = (call: Anthropic.ToolUseBlock) => updateFields(call.input).action;
   // Every update's pick check starts now, side by side ("these 2. 6 each" costs one check round, not two), and the adds' lookups
   // run together and fill the turn's memo, so the updates don't wait in turn.
@@ -396,6 +410,7 @@ export async function runAgentTurn(input: {
     pickFast: 0,
     // This text or the one before it: a follow-up ("ard 37 like that correct anot") comes right after the GST ask.
     gstAsked: recent.some((text) => gstWords.test(text)),
+    gone: new Set(verified.gone),
   };
   // It must leave the last Claude call its time: with less than a second to spare it makes no call and update_enquiry asks.
   const check = input.pickCheck?.(ctx) ?? modelPickCheck({
@@ -423,6 +438,8 @@ export async function runAgentTurn(input: {
     const toolNames: string[] = [];
     // Each update_enquiry call as action:error, for the turn log: the real mix of proposals (round 4's log couldn't show it).
     const updateResults: string[] = [];
+    // Item codes whose get_product failed this turn (not found, gone, or cut by the deadline): the answer can't say every lookup worked.
+    const missingCodes: string[] = [];
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
@@ -502,6 +519,7 @@ export async function runAgentTurn(input: {
         finishedTools += outcomes.size;
         slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
+        missingCodes.push(...done.flatMap((call) => (call.name === "get_product" && call.error ? [String((call.input as { stock_id?: unknown }).stock_id ?? "")].filter(Boolean) : [])));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
         stopped = stopped ?? stopNote(done, ctx, before, picked);
         continue;
@@ -546,16 +564,31 @@ export async function runAgentTurn(input: {
     // says doesn't open (exam 4, c08), a changed item's card they've seen (exam 3, c02-A T18) and a set shown twice (exam 4). A
     // cards-only answer keeps its other cards: they are all it says.
     const brokenCodes = brokenLinkCodes(earlier.currentText, picks.replies);
+    const broken = (id: string) => brokenCodes.some((code) => same(code, id));
     const trimCards = (answer: FinalAnswer): FinalAnswer => {
-      const kept = answer.card_ids.filter((id) => !brokenCodes.some((code) => same(code, id)));
+      // A code whose store listing came back gone this turn is never a card either, so no UNKNOWN_CARD repair (or backup reply) is
+      // spent on it (r8 R01).
+      const kept = answer.card_ids.filter((id) => !ctx.gone.has(id) && !broken(id));
       // With every card dropped, the words pointing at them go too (r3 c08-stress idx 5: "the card below carries the same details").
       const message = answer.card_ids.length && !kept.length ? withoutCardPointers(answer.message) : answer.message;
-      // The link line only when a card was really dropped for its link: a cards-only line with no cards is not a link complaint (D8 review).
-      const nothingLeft = answer.card_ids.length ? BROKEN_LINK_MESSAGE : NOTHING_LEFT_MESSAGE;
+      // The link line only when a card was really dropped for its link: a cards-only line with no cards, or with only removed listings,
+      // is not a link complaint (D8 review).
+      const nothingLeft = answer.card_ids.some(broken) ? BROKEN_LINK_MESSAGE : NOTHING_LEFT_MESSAGE;
       if (answer.message === CARDS_ONLY_MESSAGE || !message) return kept.length ? { ...answer, card_ids: kept } : { ...answer, card_ids: [], message: nothingLeft, show_contact: true };
-      return withoutRangeCards(withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused), earlier.currentText);
+      const trimmed = withoutRangeCards(withoutRepeatedSet(withoutChangedCards({ ...answer, message, card_ids: kept }, ctx.changes, ctx.shownIds, earlier.currentText), earlier, ctx.refused), earlier.currentText);
+      // A product the words name gets its card before the card they would otherwise stand for, once the cards kept are settled (r8 F6).
+      const named = withNamedCards(trimmed, ctx.seen, ctx.lines, ctx.changes);
+      if (named === trimmed) return trimmed;
+      // Judged again as sent: the earlier replies' cards hold the card added, so that set shown twice goes too (r8 review).
+      return withoutRepeatedSet({ ...named, card_ids: named.card_ids.filter((id) => !broken(id)) }, earlier, ctx.refused);
     };
-    let final = result.final && await withEarlierCards(trimCards(result.final));
+    // The lookup reads an earlier card for the first time and can find its listing gone: trimmed again then, so its words go with it
+    // and a reply left with nothing gets the next step and the contact (r8 review).
+    const trimAndAttach = async (answer: FinalAnswer) => {
+      const attached = await withEarlierCards(trimCards(answer));
+      return attached.card_ids.some((id) => ctx.gone.has(id)) ? trimCards(attached) : attached;
+    };
+    let final = result.final && await trimAndAttach(result.final);
     let allowed = currentAllowed();
     let review = final && reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
     // Safety issues that code fixes after the repair. `allowed` is read when a fix runs: the repair recomputes it.
@@ -608,7 +641,7 @@ export async function runAgentTurn(input: {
           repairFailed = failureCode(error, deadline);
           return tidiedFirst;
         });
-      final = await withEarlierCards(trimCards(final));
+      final = await trimAndAttach(final);
       allowed = currentAllowed();
       review = reviewAnswer(final, ctx.seen, allowed, earlier, turnFacts());
       if (tidiedFirst && unfixable(review.safety, fixers).length) {
@@ -621,12 +654,19 @@ export async function runAgentTurn(input: {
     }
 
     // The chat's item codes, so a code that fits the phone pattern isn't taken for a phone number (exam 3, c05-persona T10); the
-    // customer's enquiry codes too, as a line that couldn't be looked up this turn is named nowhere else.
+    // customer's enquiry codes too, as a line that couldn't be looked up this turn is named nowhere else, and the codes no lookup
+    // confirmed, which the reply may now name (r8 R03).
     const chatCodes = [
       ...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...request.enquiry.map((line) => line.stockId), ...ctx.shownIds,
-      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)),
+      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)), ...ctx.gone, ...missingCodes,
     ];
-    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(final.message, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    // The products the reply names or shows whose live check failed, and the codes found nothing for (r8 R03), unless a later lookup
+    // checked one live (r8 review: Claude's retry of a TOOL_FAILED code worked).
+    const checkedLater = (code: string) => [...ctx.seen.values()].some(({ product, verified }) => verified && same(product.stock_id, code));
+    const unconfirmed = [...missingCodes.filter((code) => !checkedLater(code)), ...[...ctx.seen.values()].filter(({ product, verified }) => !verified
+      && (review.cards.some((card) => same(card.stock_id, product.stock_id)) || codePattern(product.stock_id).test(final.message))).map(({ product }) => product.stock_id)];
+    const truthful = withoutAllFoundClaims(final.message, unconfirmed);
+    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(truthful, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
     // an escaped space decoded after the trim) gets past every check above (r7).
     const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);

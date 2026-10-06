@@ -6,9 +6,9 @@ import { honestManualHandoff } from "@/lib/honest-handoff";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
-import { withGstCents } from "./enquiry";
+import { listItemCount, withGstCents } from "./enquiry";
 import type { CheckedProduct } from "./facts";
-import { codePattern, hits, pointedCards, same } from "./picks";
+import { codePattern, hits, measures, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
@@ -388,6 +388,10 @@ const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|up
 // it ends at the promise's own "added": "I'll get 2 added - I've added the torch" still reports one.
 const futureChange = /\b(?:I'?ll|I will|let me|going to|can)\s+(?:get|have)\s+(?:[\w'’″-]+\s+){0,4}?(?:added|removed|updated)\b/i;
 const honestWording = /\b(?:not|never|nothing|no longer|yet to|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
+// "None added yet", "No items added" and "held off adding them" deny a change (r8 R02: "do not add them yet" got the fixed line). Only
+// the denial itself, never a promise or an add beside it: "I'll add 2 torches now, none of the plates", "Added 2 torches and held off
+// on the plates" (r8 review).
+const deniedChange = /\b(?:none|no\s+(?:items?|products?|lines?|changes?))\b(?:\s+(?:of\s+)?[\w'’]+){0,4}?\s+(?:(?:were|was|have\s+been|has\s+been|are|is)\s+)?(?:added|on\s+(?:your|the)\s+enquiry)\b|\b(?:held|holding)\s+off(?:\s+on)?\s+adding\b/i;
 // A question about what the customer wants: "is it the HET-4 you want added, qty 1?" (exam 3, c11-stress T9 replayed: split from its
 // "?" by the comma). Only a clause that opens as a question in a sentence that ends as one counts, so "The torch you want added is on
 // your enquiry now" and "Can confirm the 2 you need added" are claims.
@@ -399,6 +403,7 @@ const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updat
 // Neither phrase excuses a claim made beside it in the same clause: "Sorted the hiccup adding these and added 2 torches".
 const notAClaim = (clause: string, question: boolean) => honestWording.test(clause)
   || (failedWording.test(clause) && !changeClaim.test(clause.replace(failedWording, " ")))
+  || (deniedChange.test(clause) && !changeClaim.test(clause.replace(deniedChange, " ")))
   || (question && questionOpen.test(clause) && wantsChange.test(clause) && !changeClaim.test(clause.replace(wantsChange, " ")));
 // GST sums are not enquiry changes: "Adding 9% to $119.09 gets you the GST-inclusive total" (exam 3, c12-persona T11). Stripped like
 // featureWording, so "Added 2 torches - adding 9% GST, about $153.72" is still judged on its add; "I'll add GST and 2 torches now"
@@ -758,6 +763,13 @@ const NOT = String.raw`(?:not|isn['’]?t|aren['’]?t|wasn['’]?t|weren['’]?
 const STOCK = new RegExp(String.raw`\b(?:out\s+of\s+stock|sold\s+out|${NOT}\s+in\s+stock)\b|\bno\s+stock\b(?!\s+(?:figure|info|information|count|data|details?|level))`, "i");
 const IN_STOCK = new RegExp(String.raw`(?<!\b${NOT}\s)\bin\s+stock\b|\b\d+\s*(?:left|available|units?|pcs?|pkts?)\b|\bonly\s+has\b`, "i");
 const HEDGE = /\b(?:may|might|could)\s+be\b|\bnot\s+(?:yet\s+)?confirmed\b|\bunconfirmed\b|\bneeds?\s+checking\b/i;
+// A price or stock called unconfirmed: "price not yet confirmed live", "price not live-verified", "price needs a live check",
+// "price/stock not confirmed", "its stock still needs checking", "couldn't confirm the price" (r8 R02, R03, R09). Not the "stock" of
+// "in stock" or "out of stock": "in stock, fit not confirmed" is a true caveat about something else (past replies, runs-new5 s01).
+const PRICE_HEDGE = /\b(?:prices?|(?<!\b(?:in|of)\s+)stock)\b(?:\/(?:stock|price))?[^.!?\n]{0,30}?\b(?:not\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|live|verified|checked)|(?:isn|wasn|hasn)['’]?t\s+(?:yet\s+)?(?:been\s+)?(?:confirmed|checked|verified)|(?:still\s+)?needs?\s+(?:a\s+)?(?:live\s+)?check(?:ing)?|to\s+be\s+confirmed|unconfirmed)|\b(?:couldn['’]?t|can['’]?t|unable\s+to)\s+(?:yet\s+)?(?:confirm|check|verify)\s+(?:the\s+|its\s+)?(?:prices?|stock)\b/i;
+// A bulk or quoted price is Sia Huat sales' to confirm, whatever the live check says.
+const QUOTE_WORDS = /\b(?:bulk|quote|discount|sales|special|volume)\b/i;
+export const PRICE_HEDGE_PREFIX = "This calls a live-checked price unconfirmed";
 // A plural subject: "both", "all", "they", or a plural verb ("X, Y and Z are out of stock").
 const PLURAL = /\b(?:both|all|these|those|they|them|are|were)\b/i;
 const CLAIM_FIXES = {
@@ -908,21 +920,121 @@ export const STOCK_NUMBER_PREFIX = "These stock numbers";
 // "35 available", "only 2 left", "(12 in stock)", "131 units in stock", "(2,702 in stock)" read whole; never a code's digits ("HET-6
 // units in stock"), a price or "2 left-handed".
 const STOCK_COUNT = /(?:\b(?:only|just)\s+)?(?<![\p{L}\p{N}.,$-])(\d{1,3}(?:,\d{3})+|\d{1,5})\s*(?:(pcs?|pieces?|units?|sets?|pkts?|packets?)\s+)?(?:available|left|in\s+stock)(?:\s+in\s+stock)?(?![\w-])/giu;
+// The same in Chinese: "只剩1个", "仅剩1件", "库存121个", "库存仅剩1个", "库存只有1个", "现货33件" (r8 F6: "骨瓷这款只剩1个，不够12个" under a card
+// with 74). "只有1个" alone is often a count of kinds ("只有1个尺寸"), and "剩下2个" is "the other two", so only after 库存 or 现货;
+// "库存约120个", "库存超过12个", "库存有100多个", "库存120个左右", "剩下2款" and "现货有3个颜色" are no count to check.
+const STOCK_COUNT_ZH = /(?:(?:库存|现货|存货)[:：]?\s*(?:只有|仅有|只剩下?|仅剩|还有|还剩|剩下|剩|有|共)?|只剩下?|仅剩|还剩)\s*(\d{1,3}(?:,\d{3})+|\d{1,5})(?!\d|[.,]\d)(?![多余来几+]|\s*[个件只张把支条台套包盒]?\s*(?:以上|左右|上下|出头))\s*(?!款|种|类|个?(?:颜色|尺寸|型号|规格|选项|系列))(?:(套|包|盒)|[个件只张把支条台])?/gu;
+/** The message's stock counts in either language, in order: the count in group 1, its unit (if any) in group 2. */
+const stockCounts = (message: string) => [...message.matchAll(STOCK_COUNT), ...message.matchAll(STOCK_COUNT_ZH)].sort((a, b) => a.index - b.index);
 // "over 30 available" is no count to check.
 const APPROX_BEFORE = /\b(?:over|more\s+than|at\s+least|about|around|up\s+to|under|nearly|almost)\b[^.!?\n]{0,15}$/i;
-// A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item.
-const UNIT_UOMS: Array<[RegExp, string[]]> = [[/^(?:pcs?|pieces?|units?)$/i, ["PC", "UNIT"]], [/^sets?$/i, ["SET"]], [/^(?:pkts?|packets?)$/i, ["PKT"]]];
+// A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item. 个 counts any unit, so it is no unit.
+const UNIT_UOMS: Array<[RegExp, string[]]> = [[/^(?:pcs?|pieces?|units?)$/i, ["PC", "UNIT"]], [/^(?:sets?|套)$/i, ["SET"]], [/^(?:pkts?|packets?)$/i, ["PKT"]], [/^(?:包|盒)$/, ["PKT", "PACK", "BOX"]]];
 const unitFits = (unit: string, uom: string) => UNIT_UOMS.some(([words, uoms]) => words.test(unit) && uoms.includes(uom.trim().toUpperCase()));
-// A message's parts: sentence ends, line breaks, and commas, semicolons, dashes, "and" and "or" outside brackets, so "16in Iron Wok
-// (35 available)" keeps its bracket with its product. A comma between digits (2,702) is no break.
-const PART_BREAK = /[.!?](?=\s)|\n|(?:;|(?<!\d),|,(?!\d))(?![^()]*\))|\s[-–—]\s|\b(?:or|and)\b(?![^()]*\))/gi;
-function partAt(message: string, index: number) {
+// Chinese marks read as their ASCII twins, one character each so indexes hold: "Royal Bone China骨瓷圆盘（只剩1个，不够12个）" keeps its bracket.
+const CJK_MARKS: Record<string, string> = { "，": ",", "、": ",", "；": ";", "：": ":", "（": "(", "）": ")" };
+const asciiMarks = (text: string) => text.replace(/[，、；：（）]/g, (mark) => CJK_MARKS[mark]);
+// A message's parts: sentence ends (。！？ before anything: "只剩1个。Royal Bone China Coupe…"), line breaks, and commas, semicolons,
+// dashes, "and" and "or" (和, 或) outside brackets, so "16in Iron Wok (35 available)" keeps its bracket with its product. A comma
+// between digits (2,702) is no break; Chinese marks count (asciiMarks).
+const PART_BREAK = /[.!?](?=\s|\p{Script=Han})|[。！？]|\n|(?:;|(?<!\d),|,(?!\d))(?![^()]*\))|\s[-–—]\s|(?:\b(?:or|and)\b|[和或])(?![^()]*\))/giu;
+/** The message's parts and where each starts, in the message with its Chinese marks read as ASCII. */
+function partsOf(message: string) {
+  const text = asciiMarks(message);
+  const parts: Array<{ part: string; start: number }> = [];
   let start = 0;
-  for (const found of message.matchAll(PART_BREAK)) {
-    if (found.index >= index) return message.slice(start, found.index);
+  for (const found of text.matchAll(PART_BREAK)) {
+    parts.push({ part: text.slice(start, found.index), start });
     start = found.index + found[0].length;
   }
-  return message.slice(start);
+  return { text, parts: [...parts, { part: text.slice(start), start }] };
+}
+// A Chinese clause: after "，" or a comma before a Chinese character ("Ø24cm,每个约$5.41,库存121个").
+const CLAUSE_START = /^(?:，|,(?=\p{Script=Han}))/u;
+/**
+ * The part a count is about: its own, or when its Chinese clause opens the count with at most a connective ("但", "不过", "目前",
+ * "这款") and has no product's words, from the nearest clause before it that has some, past no other count ("Royal Bone China骨瓷圆盘
+ * 24cm,每个约$14.77,但库存只剩1个": r8 F6 reruns, 3 of 8 layouts). "另外骨瓷盘只剩1个" has its own subject.
+ */
+function countPart(message: string, index: number, all: ShownCard[]) {
+  const { text, parts } = partsOf(message);
+  const own = parts.findLastIndex(({ start }) => start <= index);
+  let at = own;
+  const named = (k: number) => all.some((card) => hits(card, nameText(parts[k].part)).size > 0);
+  const lead = text.slice(parts[own].start, index).replace(moneyPattern, "").match(/\p{Script=Han}/gu) ?? [];
+  while (lead.length <= 2 && at > 0 && !named(at) && CLAUSE_START.test(message.slice(parts[at].start - 1)) && !stockCounts(parts[at - 1].part).length) at -= 1;
+  return text.slice(parts[at].start, parts[own].start + parts[own].part.length);
+}
+// Amounts and stock counts are no sizes: "only 1 left" would read as a size of 1.
+const nameText = (text: string) => text.replace(moneyPattern, "").replace(STOCK_COUNT, "").replace(STOCK_COUNT_ZH, "");
+/**
+ * The card words stand for when they fit it and a product with no card alike, which only the card shows the customer: two or more
+ * of its name words, and every size they give is its own ("20in Iron Wok" is no 16in card's). r8 F6: "Royal Bone China骨瓷圆盘" fits
+ * the N0536 card and N2906 alike.
+ */
+function standIn(text: string, cards: ShownCard[]) {
+  const words = nameText(text);
+  const pointed = pointedBy(words, cards);
+  if (pointed.length !== 1) return [];
+  const found = hits(pointed[0], words);
+  const sizes = measures(words);
+  return [...found].filter((hit) => !sizes.has(hit)).length >= 2 && [...sizes].every((size) => found.has(size)) ? pointed : [];
+}
+/**
+ * Whether the text types every name word of the card and no size it lacks: "Royal Bone China Verona Deep Plate" is all of N2906's,
+ * "the 4-slot stainless steel toaster" is not HET-6's (Stainless Steel 6-Slots Toaster).
+ */
+const wholeName = (card: ShownCard, text: string) => {
+  const words = nameText(text);
+  const said = hits(card, words);
+  const sizes = measures(card.name);
+  return [...hits(card, card.name)].every((hit) => sizes.has(hit) || said.has(hit)) && [...measures(words)].every((size) => said.has(size));
+};
+/** Whether the text gives this product's live stock count or checked price, which none of the cards has. */
+function givesFacts(text: string, checked: CheckedProduct | undefined, cards: readonly CheckedProduct[]) {
+  if (!checked?.verified) return false;
+  const qty = ({ product }: CheckedProduct) => product.available_quantity;
+  const cents = ({ product }: CheckedProduct) => Math.round(product.list_price * 100);
+  return stockCounts(text).some((match) => Number(match[1].replace(/,/g, "")) === qty(checked) && !cards.some((card) => qty(card) === qty(checked)))
+    || [...text.matchAll(moneyPattern)].some((match) => toCents(match) === cents(checked) && !cards.some((card) => cents(card) === cents(checked)));
+}
+/**
+ * The answer with the card of each product its words name but don't attach, put before the card the customer would take for it: a
+ * part (partsOf's breaks) points at that product among all looked up this turn, by its whole name or with its stock or price in the
+ * rest of the sentence, and stands for one card that no other part names and the message doesn't type. r8 F6, 3 Oct: "Royal Bone
+ * China Verona Deep Plate ... only 1 left" over the N0536 Coupe Plate card, and the tap added 12 N0536. Never an enquiry line, nor a
+ * sixth card.
+ */
+export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, lines: readonly EnquiryReceiptLine[], changes: readonly EnquiryChange[]): FinalAnswer {
+  const all = seenCards(seen);
+  const { text, parts } = partsOf(answer.message);
+  const named = parts.map(({ part }) => pointedBy(part, all));
+  const ids = [...answer.card_ids];
+  for (const [at, { part, start }] of parts.entries()) {
+    const product = named[at].length === 1 ? named[at][0] : null;
+    const checked = product && seen.get(product.code);
+    // Never an unchecked or sold-out product, an enquiry line, or one changed this turn ("removed the Verona and added 12 of this one").
+    if (!product || !checked?.verified || soldOutProduct(checked) || ids.length >= 5 || ids.some((id) => same(id, product.code))
+      || lines.some((line) => same(line.code, product.code)) || changes.some((change) => change.code && same(change.code, product.code))) continue;
+    const shown = ids.flatMap((id) => (seen.has(id) ? [seen.get(id)!] : []));
+    const cards = shown.map((item) => asCard(item.product));
+    const [card] = standIn(part, cards);
+    if (!card || codePattern(card.code).test(answer.message)) continue;
+    // Another part about the card keeps it the product the words offer: "Instead of the Verona (only 1 left), I'd go with this bone china plate".
+    // So does one that points at it, by its own stock or price or "this one instead" ("换这款"), as "…只剩1个，不够12个，推荐这款（库存74个）"
+    // does (r8 review). A bare "this one" or "推荐这款" may be the named product itself, as may "tap the card".
+    const about = (k: number) => (named[k].length ? named[k] : standIn(parts[k].part, cards));
+    const others = shown.filter((item) => !same(item.product.stock_id, card.code));
+    const pointsAt = (k: number) => givesFacts(parts[k].part, seen.get(card.code), others)
+      || (/\b(?:this|that) one\b|这款/i.test(parts[k].part) && /\binstead\b|[换改]/i.test(parts[k].part));
+    if (parts.some((_, k) => k !== at && ((about(k).length === 1 && same(about(k)[0].code, card.code)) || pointsAt(k)))) continue;
+    // Feature words fit a card's short name too ("stainless" for "S/S UTILITY TONG 12″", "keypad"): only the product's whole name, or
+    // its own stock or price in the rest of the sentence, names it (43 of 3,676 past replies with cards would gain one without this).
+    const sentence = text.slice(start).split(/[.!?](?=\s|\p{Script=Han}|$)|[。！？]|\n/u)[0];
+    if (!(wholeName(product, part) && !wholeName(card, part)) && !givesFacts(sentence, seen.get(product.code), shown)) continue;
+    ids.splice(ids.findIndex((id) => same(id, card.code)), 0, product.code);
+  }
+  return ids.length === answer.card_ids.length ? answer : { ...answer, card_ids: ids };
 }
 
 /**
@@ -932,9 +1044,12 @@ function partAt(message: string, index: number) {
  */
 export function wrongStockCounts(message: string, cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>) {
   const all = seenCards(seen);
-  return [...message.matchAll(STOCK_COUNT)].flatMap((match) => {
+  return stockCounts(message).flatMap((match) => {
     if (APPROX_BEFORE.test(message.slice(Math.max(0, match.index - 40), match.index))) return [];
-    const pointed = pointedBy(partAt(message, match.index), all);
+    const part = countPart(message, match.index, all);
+    // Words that fit no one product are read as the card they stand for (r8 F6: N2906's "只剩1个" said of the N0536 card).
+    const named = pointedBy(part, all);
+    const pointed = named.length ? named : standIn(part, cards.map(asCard));
     const item = pointed.length === 1 ? seen.get(pointed[0].code) : undefined;
     const count = Number(match[1].replace(/,/g, ""));
     const live = item?.product.available_quantity;
@@ -945,8 +1060,9 @@ export function wrongStockCounts(message: string, cards: readonly Product[], see
   });
 }
 
-// A claim that the count covers the order goes with a wrong count: "plenty for 4", "so tight for 4pcs", "matches your qty".
-const COVERAGE = String.raw`(?:(?:so\s+|which\s+is\s+|that['’]?s\s+)?(?:(?:more\s+than\s+)?enough|plenty|tight|short)\s+for|(?:which\s+|that\s+)?(?:matches|covers?)\s+your|covered)\b`;
+// A claim that the count covers the order goes with a wrong count: "plenty for 4", "so tight for 4pcs", "matches your qty", "not
+// enough for 12" (r8 F6).
+const COVERAGE = String.raw`(?:(?:not\s+|so\s+|which\s+is\s+|that['’]?s\s+)?(?:(?:more\s+than\s+)?enough|plenty|tight|short)\s+for|(?:which\s+|that\s+)?(?:matches|covers?)\s+your|covered)\b`;
 const COVERAGE_PIECE = new RegExp(`^${COVERAGE}`, "i");
 const COVERAGE_AFTER = new RegExp(String.raw`^(?:\s*[,;]|\s+[-–—])?\s*${COVERAGE}[^,;.!?()\n]*`, "i");
 // A bracket's pieces and the separators between them (a comma between digits is none); pieces kept are joined by the last mark.
@@ -979,10 +1095,15 @@ export function withoutWrongStockCounts(message: string, cards: readonly Product
   return text;
 }
 
+// A Chinese count is said as 有现货 or 缺货, with the whole 够 or 不够 clause made from it (OD-8): "（骨瓷这款只剩1个，不够12个）" →
+// "（骨瓷这款有现货）", and "，恐怕不够12个", "，12个不够", "，够您用", "，满足不了12个的需求" (r8 review). A closing 吗 or 呢 stays; 能够 is "can".
+const COVERAGE_ZH = /^了?\s*[，,、；;]?[^，,、；;。！？!?（）()\n]{0,4}?(?:不够|不足|足够|(?<!能)够|满足)[^吗呢，,、；;。！？!?（）()\n]*/u;
+
 /** The message with this one wrong count dropped from its bracket, or said as "in stock" or "out of stock". */
 function withoutStockCount(text: string, { said, index, code }: ReturnType<typeof wrongStockCounts>[number], seen: ReadonlyMap<string, CheckedProduct>) {
   const before = text.slice(0, index);
   const after = text.slice(index + said.length);
+  if (/\p{Script=Han}/u.test(said)) return `${before}${soldOutProduct(seen.get(code)!) ? "缺货" : "有现货"}${after.slice(COVERAGE_ZH.exec(after)?.[0].length ?? 0)}`;
   if (/\([^()]*$/.test(before) && /^[^()]*\)/.test(after)) {
     const open = before.lastIndexOf("(");
     const close = index + said.length + after.indexOf(")");
@@ -1017,6 +1138,53 @@ export function stockIssues(message: string, cards: Product[]) {
   if (!notIn.length || !everyCardInStock.test(message) || /\b(?:out\s+of\s+stock|sold\s+out)\b/i.test(message)) return [];
   const which = notIn.map((card) => `${card.stock_id} (${card.stock_status === "out_of_stock" ? "out of stock" : "stock not checked"})`).join(", ");
   return [`${ALL_IN_STOCK_ISSUE_PREFIX}, but ${which} ${notIn.length > 1 ? "aren't" : "isn't"}. Describe each product's stock as its tool result says.`];
+}
+
+// "All 12 lookups succeeded", "All 12 found, none failed" (r8 R03, M04): 04-00820's store page had failed its live check.
+const allFound = /\b(?:all|every|each)\b(?:\s+[\w-]+){0,3}?\s+(?:(?:were|are|was|have been)\s+)?(?<!\bI\s)(?:found|succeeded|resolved|worked|matched|checked|confirmed|verified|came back|went through)\b|\b(?:none|no\s+(?:lookups?|codes?|items?))\s+(?:of\s+them\s+)?failed\b|\bnothing\s+failed\b/i;
+/**
+ * The message cut before each list label, so a claim is judged on its own item: "All 12 found, none failed: 1) 04-00820 ..." is one
+ * sentence when the list runs inline. Labels count up from 1, so a number ending a sentence ("so I couldn't add 3.", "2 of 2. Nothing
+ * added.") labels nothing (r8 review).
+ */
+function listParts(message: string) {
+  const parts: string[] = [];
+  let last = 0;
+  for (const piece of message.split(/(?<=\s)(?=\d{1,2}[.)]\s)/)) {
+    const label = Number(/^(\d{1,2})[.)]\s/.exec(piece)?.[1] ?? 0);
+    const labels = label > last && (last > 0 || label === 1);
+    if (labels) last = label;
+    if (labels || !parts.length) parts.push(piece);
+    else parts[parts.length - 1] += piece;
+  }
+  return parts;
+}
+/**
+ * The message with its first "all found" claim said truthfully, and any other dropped, when a code the reply names or shows wasn't
+ * found or failed its live check. A claim that names every such code ("only 04-00820 is unchecked") is left as it is.
+ */
+export function withoutAllFoundClaims(message: string, unconfirmed: readonly string[]) {
+  const codes = [...new Map(unconfirmed.map((code) => [code.toLowerCase(), code])).values()];
+  const namesEach = (text: string) => codes.every((code) => codePattern(code).test(text));
+  // "The other 11 were all found" is true beside the failed code's own words (r8 review): left when the reply names each code.
+  const aboutOthers = (claim: string) => {
+    const found = allFound.exec(claim)!;
+    return /\b(?:others?|rest|remaining)\b/i.test(claim.slice(0, found.index + found[0].length)) && namesEach(message);
+  };
+  const claims = listParts(message).flatMap(sentences).filter((part) => allFound.test(part)).filter((claim) => !namesEach(claim) && !aboutOthers(claim));
+  if (!codes.length || !claims.length) return message;
+  const [first, ...rest] = claims;
+  const at = first.search(allFound);
+  const before = first.slice(0, at);
+  // From the claim's own clause on, so its subject goes with it ("They all came back fine": r8 review). A claim run on after an item
+  // with no stop ("12. 21405 ... $11,460.00/pc All 12 lookups succeeded.") starts a sentence of its own: the item stays.
+  const ends = [...before.matchAll(/[,:;(–—]\s*(?:(?:and|but|so)\s+)?|\s-\s/g)].map((end) => end.index + end[0].length);
+  const kept = /^[A-Z]/.test(first.slice(at)) ? before : before.slice(0, Math.max(0, ...ends));
+  // In a bracket, only up to its ")": "Here are the three (all 3 found), with live prices below."
+  const close = /\([^()]*$/.test(before) ? first.indexOf(")", at) : -1;
+  const said = `I couldn't confirm ${codes.join(", ")} on the store just now`;
+  const fixed = message.replace(first, close >= 0 ? `${kept}${said}${first.slice(close)}` : `${kept}${said}.`);
+  return rest.reduce((out, claim) => out.replace(claim, ""), fixed).replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").trim();
 }
 
 // Old Claire's reply-style text for a permission question. The new Claire gets NO_SHOW_PERMISSION_ISSUE when a question asks to
@@ -1084,6 +1252,9 @@ export function permissionCodes(answer: FinalAnswer, seen: ReadonlyMap<string, C
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";
 const UNKNOWN_CARD_ISSUE_PREFIX = "card_ids must come from a tool result";
+// A list answer gives each item its own line: 12 codes ran 837 characters, and the repair still left 690 (r8 R03).
+const LONG_REPLY = "Keep the reply within 600 characters";
+const longListAnswer = (message: string) => listItemCount(message) >= 4 && message.length <= 1_000;
 
 export function reviewAnswer(
   answer: FinalAnswer,
@@ -1098,7 +1269,8 @@ export function reviewAnswer(
   const ids = [...new Set(answer.card_ids)];
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn or shown earlier in this chat; not found: ${unknown.join(", ")}.`);
-  if (ids.length > 5) style.push("Show at most 5 cards.");
+  // A list answer's cards are its first items; the message names the rest (r8 R03: 12 card_ids cost a repair).
+  if (ids.length > 5 && !longListAnswer(answer.message)) style.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A long chip or a 'Yes, add it' chip (the confirm step the owner
   // ruled out; 'Add more items' is not) is dropped alone, and a fourth chip moves up. A chip with a number or amount among the
@@ -1127,6 +1299,14 @@ export function reviewAnswer(
     else safety.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES[kind]}`);
   }
   style.push(...stockIssues(answer.message, cards));
+  // Every product a clause names was checked live by the time the answer went out (the card re-check read it after the answer was
+  // written, r8 R02, R09): the repair gives the price. Split at ';' and 'but', so a priced product beside an unchecked one isn't taken for it.
+  for (const clause of said.flatMap((sentence) => sentence.split(/;|\s+but\s+/i)).filter((part) => PRICE_HEDGE.test(part) && !QUOTE_WORDS.test(part))) {
+    const named = [...seen.values()].filter(({ product }) => codePattern(product.stock_id).test(clause));
+    if (!named.length || !named.every((item) => item.verified)) continue;
+    const live = named.map(({ product }) => `${product.stock_id} $${product.list_price.toFixed(2)} / ${product.uom_id.trim()}${product.stock_status === "in_stock" ? ", in stock" : product.stock_status === "out_of_stock" ? ", out of stock" : ""}`).join("; ");
+    style.push(`${PRICE_HEDGE_PREFIX}: "${clause.trim()}". It was checked live: ${live}. Give that price; don't say it isn't confirmed or needs checking.`);
+  }
   const wrongCounts = wrongStockCounts(answer.message, cards, seen);
   if (wrongCounts.length) style.push(stockNumberIssue(wrongCounts));
   if (!cards.length) {
@@ -1137,8 +1317,8 @@ export function reviewAnswer(
   // with the earlier cards, as the loop's nudge is: a recommendation naming an earlier card it doesn't attach names a product
   // (exam 3, c09-stress T1).
   const confirmStep = asksConfirmStep(answer, seen, turn.picked, turn.earlierCards);
-  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }).flatMap((issue) => (!issue.startsWith(CHOOSE_FIRST) ? [issue]
-    : !/\badd\b/i.test(answer.message) || said.some((s) => asksToShow.test(s)) ? [NO_SHOW_PERMISSION_ISSUE] : [])));
+  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }).flatMap((issue) => (issue.startsWith(LONG_REPLY) && longListAnswer(answer.message) ? []
+    : !issue.startsWith(CHOOSE_FIRST) ? [issue] : !/\badd\b/i.test(answer.message) || said.some((s) => asksToShow.test(s)) ? [NO_SHOW_PERMISSION_ISSUE] : [])));
   if (confirmStep) style.push(NO_PERMISSION_ISSUE);
   if (promiseLater.test(answer.message)) style.push(PROMISE_LATER_ISSUE);
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);
@@ -1187,6 +1367,7 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [REPEATED_MESSAGE_ISSUE, "REPEAT"],
   [PHOTO_AGAIN_ISSUE, "REPEAT"],
   [OFFER_ISSUE_PREFIX, "OFFER"],
+  [PRICE_HEDGE_PREFIX, "PRICE_HEDGE"],
 ];
 
 /** A review issue as a log code: the issue text can quote the reply, so only the code is logged. */

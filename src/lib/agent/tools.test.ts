@@ -16,7 +16,7 @@ function context(deps = fakeDeps([blowtorch, mastrad, safico]), overrides: Parti
   return {
     deps, seen: new Map<string, CheckedProduct>(), lines: [], changes: [], uncheckedCodes: [], customerTexts: [], clearTexts: [], image: null, shownIds: new Set(),
     searches: [], refused: [], tapped: null, checkPick: pickCheckCache(fakePickCheck()), photoMatches: new Map(), kept: [], failedAdds: [], finalRefusal: false, refusedKeys: new Set(), pickFast: 0,
-    ...overrides,
+    gone: new Set(), ...overrides,
   };
 }
 
@@ -820,6 +820,61 @@ test("match_photo needs a photo in this turn", async () => {
   assert.match(outcome.content, /NO_PHOTO/);
 });
 
+// r8 R01: 04-00820's old Nernst chiller page answers 200 with Next's not-found page, so its listing is gone.
+const chiller = product({ stock_id: "04-00820", name: "Nernst 3 Layer Glass Display Chiller", source_url: "https://store.siahuat.com/product/14355600983" });
+
+test("get_product of a removed listing gives LISTING_GONE with no name or link, and the code is kept as gone (r8 R01)", async () => {
+  for (const input of [{ stock_id: "04-00820" }, { url: "https://store.siahuat.com/product/14355600983" }]) {
+    const ctx = context(fakeDeps([chiller], { "04-00820": "gone" }));
+    const outcome = await runTool("get_product", input, ctx);
+    assert.deepEqual([outcome.isError, outcome.error], [true, "LISTING_GONE"]);
+    assert.doesNotMatch(outcome.content, /Nernst|Chiller|14355600983/);
+    assert.deepEqual([...ctx.gone], ["04-00820"]);
+    assert.equal(ctx.seen.has("04-00820"), false);
+  }
+});
+
+test("search_catalogue and match_photo leave a removed listing out (r8 R01)", async () => {
+  const searched = context(fakeDeps([blowtorch, mastrad, safico], { "970S": "gone" }));
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, searched)).content) as { products: FactBody[] };
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["F46700", "BTS-8026D"]);
+  assert.equal(searched.seen.has("970S"), false);
+  const image = { dataUrl: "data:image/jpeg;base64,AAAA", mimeType: "image/jpeg" } as TurnContext["image"];
+  const lookup = { kind: "direct" as const, matches: [], products: [blowtorch, safico], totalProducts: 2 };
+  const photo = context(fakeDeps([blowtorch, safico], { "970S": "gone" }, lookup), { image });
+  const matched = JSON.parse((await runTool("match_photo", {}, photo)).content) as { kind: string; products: FactBody[] };
+  assert.deepEqual([matched.kind, matched.products.map((item) => item.stock_id)], ["direct", ["BTS-8026D"]]);
+  const allGone = context(fakeDeps([blowtorch, safico], { "970S": "gone", "BTS-8026D": "gone" }, lookup), { image });
+  const none = JSON.parse((await runTool("match_photo", {}, allGone)).content) as { kind: string; products: FactBody[] };
+  assert.deepEqual([none.kind, none.products, allGone.seen.size], ["none", [], 0]);
+});
+
+test("a removed listing is kept by its exact code: 1550a gone leaves 1550A live (r8 R01)", async () => {
+  // The catalogue holds both: 1550a's page is dead, 1550A's is live.
+  const dead = product({ stock_id: "1550a", name: "CHAFING DISH 1550a" });
+  const live = product({ stock_id: "1550A", name: "CHAFING DISH 1550A" });
+  const ctx = context(fakeDeps([dead, live], { "1550a": "gone" }));
+  assert.equal((await runTool("get_product", { stock_id: "1550a" }, ctx)).error, "LISTING_GONE");
+  await runTool("search_catalogue", { queries: ["chafing dish"] }, ctx);
+  assert.deepEqual([...ctx.gone], ["1550a"]);
+  assert.deepEqual([...ctx.seen.keys()], ["1550A"]);
+  assert.equal(ctx.seen.get("1550A")?.verified, true);
+});
+
+test("find_alternatives gives no source facts for a removed listing and records its code as gone (r8 R01)", async () => {
+  const ctx = context(fakeDeps([blowtorch, mastrad, safico], { "970S": "gone" }));
+  const body = JSON.parse((await runTool("find_alternatives", { stock_id: "970S" }, ctx)).content) as AlternativesBody & { source?: unknown };
+  assert.equal(body.source, undefined);
+  assert.deepEqual([[...ctx.gone], ctx.seen.has("970S")], [["970S"], false]);
+});
+
+test("an add of a removed listing is refused and the turn records the code as gone (r8 R01)", async () => {
+  const ctx = context(fakeDeps([chiller], { "04-00820": "gone" }), { customerTexts: ["2 of 04-00820"] });
+  const outcome = await runTool("update_enquiry", { action: "add", stock_id: "04-00820", quantity: 2 }, ctx);
+  assert.deepEqual([outcome.isError, outcome.error], [true, "LISTING_GONE"]);
+  assert.deepEqual([[...ctx.gone], ctx.seen.has("04-00820"), ctx.lines], [["04-00820"], false, []]);
+});
+
 /** A context whose pick check answers with `answer`; check.calls lists the proposals it was asked about. */
 function checked(answer: Parameters<typeof fakePickCheck>[0] = {}, overrides: Partial<TurnContext> = {}, deps = fakeDeps([blowtorch, mastrad, safico])) {
   const check = fakePickCheck(answer);
@@ -1263,4 +1318,92 @@ test("invalid input is rejected without running the tool", async () => {
   const outcome = await runTool("search_catalogue", { queries: [] }, context());
   assert.equal(outcome.isError, true);
   assert.match(outcome.content, /INVALID_INPUT/);
+});
+
+test("a read that ran past its limit is marked late; a read that failed otherwise is not (r8 R02, R09)", async () => {
+  const ctx = context(fakeDeps(torches(3), { T1: "timeout", T2: "fail" }));
+  await runTool("search_catalogue", { queries: ["torch"] }, ctx);
+  assert.deepEqual([...ctx.seen.values()].map((item) => [item.product.stock_id, item.verified, item.late ?? false]), [["T1", false, true], ["T2", false, false], ["T3", true, false]]);
+});
+
+test("a round's searches share its live reads: 10 each for one or two, 6 for three, at least 5 (r8 R02, R09)", async () => {
+  for (const [roundSearches, shown] of [[undefined, 10], [2, 10], [3, 6], [4, 5], [6, 5]] as const) {
+    const deps = fakeDeps(torches(12));
+    const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(deps, { roundSearches }))).content) as { products: FactBody[]; more_available: boolean };
+    assert.equal(body.products.length, shown, String(roundSearches));
+    assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, shown, String(roundSearches));
+    assert.equal(body.more_available, true, String(roundSearches));
+  }
+});
+
+test("a category of 7 is listed whole only by a search that has the room: in a round of three it isn't 'that's all'", async () => {
+  const one = JSON.parse((await runTool("search_catalogue", { queries: ["utility tong"], category: "kitchen tongs" }, context(fakeDeps(tongs(7))))).content) as SearchBody;
+  const three = JSON.parse((await runTool("search_catalogue", { queries: ["utility tong"], category: "kitchen tongs" }, context(fakeDeps(tongs(7)), { roundSearches: 3 }))).content) as SearchBody;
+  assert.deepEqual([one.products.length, one.complete, three.products.length, three.complete, three.more_available], [7, true, 6, false, true]);
+});
+
+const pans = Array.from({ length: 8 }, (_, index) => product({ stock_id: `PAN-${index}`, name: `Frying Pan ${20 + index}cm`, list_price: 10 + index, third_category: "Frying pans" }));
+
+test("a list's search runs its first two queries and live-checks its top 5 (r8 M03 at six items a turn)", async () => {
+  const deps = fakeDeps(pans);
+  const ctx = context(deps, { roundSearches: 6 });
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["frying pan", "pan", "skillet"] }, ctx)).content) as SearchBody;
+  assert.deepEqual(deps.calls.filter((call) => call.startsWith("search:")), ["search:frying pan", "search:pan"]);
+  assert.equal(body.products.length, 5);
+  assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, 5);
+  assert.deepEqual(ctx.searches.map((search) => search.queries), [["frying pan", "pan"]]);
+});
+
+test("a list's search with a category runs one query plus the category", async () => {
+  const deps = fakeDeps(pans);
+  const ctx = context(deps, { roundSearches: 6 });
+  await runTool("search_catalogue", { queries: ["frying pan", "pan"], category: "frying pans" }, ctx);
+  assert.deepEqual(deps.calls.filter((call) => /^(?:search|category):/.test(call)), ["search:frying pan", "category:frying pans"]);
+  assert.deepEqual(ctx.searches.map((search) => [search.queries, search.category]), [[["frying pan"], "frying pans"]]);
+});
+
+// Batch 1 review: in a list round all 5 reads of "grey cut resistant glove" went to removed listings, and Claude was told there were
+// no matches while live ones ranked 6th and below.
+const goneTorches = (...codes: string[]) => Object.fromEntries(codes.map((code) => [code, "gone" as const]));
+type GoneSearchBody = SearchBody & { note?: string };
+
+test("a search's removed listings give their places to the next rows, read once, and are kept as gone", async () => {
+  const deps = fakeDeps(torches(12), goneTorches("T1", "T2", "T3", "T4", "T5"));
+  const reads: string[] = [];
+  const fetchLive = deps.fetchLive;
+  deps.fetchLive = (url, ms) => {
+    reads.push(url);
+    return fetchLive(url, ms);
+  };
+  const ctx = context(deps, { roundSearches: 6 });
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as GoneSearchBody;
+  assert.deepEqual(body.products.map((item) => item.stock_id), ["T6", "T7", "T8", "T9", "T10"]);
+  assert.deepEqual([body.more_available, body.note], [true, undefined]);
+  assert.deepEqual([...ctx.gone], ["T1", "T2", "T3", "T4", "T5"]);
+  assert.equal(reads.length, 10);
+  // A later search this turn spends no read on them again.
+  const again = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, ctx)).content) as GoneSearchBody;
+  assert.deepEqual(again.products.map((item) => item.stock_id), ["T6", "T7", "T8", "T9", "T10"]);
+  assert.equal(reads.length, 15);
+});
+
+test("a search whose matches were all removed says so, not that nothing matches", async () => {
+  // Only the 6th match is live.
+  const sixth = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches(6), goneTorches("T1", "T2", "T3", "T4", "T5")), { roundSearches: 6 }))).content) as GoneSearchBody;
+  assert.deepEqual([sixth.products.map((item) => item.stock_id), sixth.note], [["T6"], undefined]);
+  // Every match removed: nothing more to read.
+  const allGone = context(fakeDeps(torches(3), goneTorches("T1", "T2", "T3")));
+  const none = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, allGone)).content) as GoneSearchBody;
+  assert.deepEqual([none.products, none.more_available, [...allGone.gone]], [[], false, ["T1", "T2", "T3"]]);
+  assert.match(none.note ?? "", /removed/);
+  assert.doesNotMatch(none.note ?? "", /No catalogue matches/);
+  // The rows read in their place were removed too, with more below: more_available stays true.
+  const deeper = context(fakeDeps(torches(12), goneTorches(...torches(10).map((item) => item.stock_id))), { roundSearches: 6 });
+  const later = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, deeper)).content) as GoneSearchBody;
+  assert.deepEqual([later.products, later.more_available, deeper.gone.size], [[], true, 10]);
+  assert.match(later.note ?? "", /removed/);
+  // Searched again with the same words: the removed rows are skipped, and the note still says why nothing is shown.
+  const repeat = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches(3), goneTorches("T1", "T2", "T3")), { gone: new Set(["T1", "T2", "T3"]) }))).content) as GoneSearchBody;
+  assert.deepEqual(repeat.products, []);
+  assert.match(repeat.note ?? "", /removed/);
 });

@@ -30,8 +30,12 @@ export type FactDeps = {
   findDetails(codes: string[]): Promise<Map<string, Record<string, string>>>;
 };
 
-/** details: the catalogue's spec fields (storeDetails); undefined until looked up this turn, null when there are none. */
-export type CheckedProduct = { product: Product; verified: boolean; details?: Record<string, string> | null };
+/**
+ * details: the catalogue's spec fields (storeDetails); undefined until looked up this turn, null when there are none.
+ * gone: the store page no longer shows this item code (removed, or now another item): never a card, link or fact (r8 R01).
+ * late: the store page didn't answer in time (or the connection failed), so another read may still price it; a gone page is not late.
+ */
+export type CheckedProduct = { product: Product; verified: boolean; details?: Record<string, string> | null; gone?: boolean; late?: boolean };
 
 export const LIVE_CHECK_TIMEOUT_MS = 5_000;
 
@@ -132,14 +136,14 @@ export function turnDeps(deps: FactDeps): FactDeps {
   };
 }
 
-/** Overwrites price and stock from the live store page. Any failure leaves the product unverified. */
+/** Overwrites price and stock from the live store page. Any failure leaves the product unverified; a removed listing also marks it gone. */
 export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS): Promise<CheckedProduct> {
   const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
   if (!product.source_url) return unverified;
   try {
     // AbortSignal.timeout throws on a fraction of a millisecond, and a time left from performance.now() always has one.
     const live = await deps.fetchLive(product.source_url, Math.max(1, Math.floor(timeoutMs)));
-    if (live.stock_id.toLowerCase() !== product.stock_id.toLowerCase()) return unverified;
+    if (live.stock_id.toLowerCase() !== product.stock_id.toLowerCase()) return { ...unverified, gone: true };
     return {
       verified: true,
       product: {
@@ -152,8 +156,12 @@ export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LI
         last_scraped_at: live.last_scraped_at,
       },
     };
-  } catch {
-    return unverified;
+  } catch (error) {
+    // A removed listing answers 200 with Next's not-found page (siahuat-product.ts: PAGE_GONE). AbortSignal.timeout gives a
+    // TimeoutError, a dropped connection fetch's TypeError ("fetch failed"), a busy store a 5xx: another read may land (r8 R02, R09).
+    if (error instanceof Error && error.message.startsWith("PAGE_GONE")) return { ...unverified, gone: true };
+    const late = error instanceof Error && (error.name === "TimeoutError" || error instanceof TypeError || /^SIA_HUAT_HTTP_5/.test(error.message));
+    return late ? { ...unverified, late } : unverified;
   }
 }
 

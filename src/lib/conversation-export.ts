@@ -105,21 +105,38 @@ export function isConversationUiAction(value: string) {
   return actionLabels.has(normalizedActionLabel(value));
 }
 
+// What jsPDF's Helvetica can draw: WinAnsi, i.e. Latin-1 plus the cp1252 extras below. Any other character garbles the whole line.
+const notWinAnsi = /[^\n\x20-\x7E\xA0-\xFF\u20AC\u201A\u0192\u201E\u2026\u2020\u2021\u02C6\u2030\u0160\u2039\u0152\u017D\u2018\u2019\u201C\u201D\u2022\u2013\u2014\u02DC\u2122\u0161\u203A\u0153\u017E\u0178]/gu;
+const emoji = /(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F)(?:\p{Emoji_Modifier}|\uFE0F|\u200D\p{Extended_Pictographic}\uFE0F?)*/u.source;
+
 export function conversationPdfText(value: string) {
   return value
     .replace(/\*([^*\n]+)\*/g, "$1")
     .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
+    .replace(/[\u201C\u201D\u2033]/g, '"')
     .replace(/[–—]/g, "-")
-    .normalize("NFKC")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .replace(/[\u02DA\u030A]/g, "°")
+    // No PDF font has emoji (the greeting's 👋, a voice note's 🎤). Between two sentences one becomes a full stop.
+    .replace(new RegExp(`([\\p{L}\\p{N}]) ${emoji}(?= \\p{Lu})`, "gu"), "$1.")
+    .replace(new RegExp(` ?${emoji}`, "gu"), "")
+    // Per character, not NFKC on the whole text: that turned "45ml-1½oz" into "45ml-11⁄2oz" (r8 F4). Only a character
+    // Helvetica can't draw takes its NFKC form, and only when that one fits (℃ → °C, Ⅱ → II, "：" → ":").
+    .normalize("NFC")
+    .replace(notWinAnsi, (char) => (char.normalize("NFKC").match(notWinAnsi) ? char : char.normalize("NFKC")))
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\uFE0F]/g, "")
     .replace(/\t/g, "  ")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
 }
 
+/** True when Helvetica can't draw the text (Chinese, ≤): the PDF then draws that message as a picture. */
 export function needsUnicodePdfRendering(value: string) {
-  return /[^\x20-\x7E\n]/.test(value);
+  return value.match(notWinAnsi) !== null; // match, not test: the regex is /g
+}
+
+/** Receipt text, which has no picture fallback: a character Helvetica can't draw becomes "?" instead of garbling the line. */
+export function receiptPdfText(value: string) {
+  return conversationPdfText(value).replace(notWinAnsi, "?");
 }
 
 export function wrapMeasuredText(

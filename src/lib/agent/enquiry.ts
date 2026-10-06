@@ -14,7 +14,7 @@ export type EnquiryAction = {
 };
 export type EnquiryError =
   | "QTY_NOT_STATED" | "UNIT_MISMATCH" | "OUT_OF_STOCK" | "OVER_STOCK" | "STOCK_UNVERIFIED"
-  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS" | "CLEAR_NOT_REQUESTED" | "ALREADY_ON_ENQUIRY";
+  | "PACK_SIZE_UNKNOWN" | "INVALID_QTY" | "NOT_FOUND" | "MISSING_FIELDS" | "CLEAR_NOT_REQUESTED" | "ALREADY_ON_ENQUIRY" | "LISTING_GONE";
 export type EnquiryResult =
   | { ok: true; lines: EnquiryReceiptLine[]; notice: string; product?: CheckedProduct }
   | { ok: false; error: EnquiryError; available?: number | null; notice?: string; product?: CheckedProduct };
@@ -249,6 +249,8 @@ export async function applyEnquiryAction(
   const catalogueProduct = await deps.findByCode(code).catch(() => null);
   if (!catalogueProduct) return { ok: false, error: "NOT_FOUND" };
   const checked = await liveCheck(catalogueProduct, deps);
+  // A removed store listing can't be checked, so it is never added (r8 R01). The product goes back so the turn records it as gone.
+  if (checked.gone) return { ok: false, error: "LISTING_GONE", notice: "This item code's store listing has been removed, so it can't be added. Say so plainly and offer Sia Huat sales (show_contact true).", product: checked };
   if (!checked.verified) return { ok: false, error: "STOCK_UNVERIFIED", product: checked };
   const unit = action.unit === "carton" || action.unit === "packet" ? action.unit : null;
   const resolved = resolveProductQuantity(action.quantity, unit, checked.product);
@@ -305,10 +307,12 @@ function combinedEcho(echo: EnquiryEcho[]) {
  * Each line's catalogue lookup and live check are bounded by timeoutMs. A line whose
  * lookup or live check fails or times out, or whose live page shows no quantity, is never
  * removed: its code is returned in `unchecked` and the browser keeps its own copy of that line.
+ * gone: the lines whose listing was removed (also unchecked).
  */
 export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS) {
   const notes: string[] = [];
   const unchecked: string[] = [];
+  const gone: string[] = [];
   const products = new Map<string, CheckedProduct>();
   const checkedLines = await mapWithLimit(combinedEcho(echo), VERIFY_CONCURRENCY, async ({ stockId, quantity }) => {
     const catalogueProduct = await withTimeout(deps.findByCode(stockId).catch(() => "unchecked" as const), timeoutMs, "unchecked" as const);
@@ -323,7 +327,8 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
       return null;
     }
     const result = await liveCheck(catalogueProduct, deps, timeoutMs);
-    products.set(result.product.stock_id, result);
+    if (result.gone) gone.push(result.product.stock_id);
+    else products.set(result.product.stock_id, result);
     const label = `${result.product.name} (${result.product.stock_id})`;
     if (!result.verified) {
       unchecked.push(stockId);
@@ -345,5 +350,5 @@ export async function verifyEnquiry(echo: EnquiryEcho[], deps: FactDeps, timeout
     unchecked.push(stockId);
     return null;
   });
-  return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products, unchecked };
+  return { lines: checkedLines.filter((line): line is EnquiryReceiptLine => line !== null), notes, products, unchecked, gone };
 }

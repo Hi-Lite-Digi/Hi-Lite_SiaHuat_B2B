@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { cardsNote, type AgentRequest } from "./contract";
 import { verifyEnquiry } from "./enquiry";
 import { searchSlots } from "./facts";
-import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX } from "./guards";
+import { CLAIM_ISSUE_PREFIX, LINK_ISSUE_PREFIX, PRICE_HEDGE_PREFIX } from "./guards";
 import { MAX_TOOL_ROUNDS, recentCustomerTexts, runAgentTurn, type AgentClient } from "./loop";
 import { fakeDeps, fakePickCheck, product } from "./testing";
 import { PICK_CHECK_PROMPT, type PickCheck } from "./verify";
@@ -122,6 +122,104 @@ test("a wrong stock count left after the repair is dropped from its bracket, nev
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "got wok? need 4 for zichar" } }), deps: fakeDeps(woks), client, model: "claude-sonnet-5" });
   assert.match(String(bodies[2].messages.at(-1)!.content), /"35 available" for 13103-1601 \(live 2\); 35 matches P-16HD IRON WOK/);
   assert.equal(reply.message, "A few options in stock: 16in Iron Wok. Which size do you need?");
+});
+
+// Four of the 6 Oct "24cm plate" results: N2906 and N0536 are sister plates, and "Royal Bone China骨瓷圆盘" fits both.
+const plates = [
+  product({ stock_id: "Q1930", name: "Luminarc Everyday Opal Glass Dinner Plate Ø24cm", list_price: 5.41, available_quantity: 121 }),
+  product({ stock_id: "3500-0224", name: "Patra Soup Plate 24cm, Porcelain White", list_price: 14.22, available_quantity: 33 }),
+  product({ stock_id: "N2906", name: "Royal Bone China Verona Deep Plate 24cm", list_price: 14.21, available_quantity: 1 }),
+  product({ stock_id: "N0536", name: "Royal Bone China Chinese Round Coupe Plate 24cm", list_price: 14.77, available_quantity: 74 }),
+];
+const platesAsked = (overrides: Partial<AgentRequest> = {}) => request({ event: { type: "text", text: "我要12个直径约24厘米的餐盘，每个不超过20新元。" }, ...overrides });
+const plateSearch = () => toolCall("t1", "search_catalogue", { queries: ["plate"], max_price: 20 });
+
+test("a Chinese count said of the card its words stand for is repaired, and said as 有现货 if it stays (r8 F6 run 6)", async () => {
+  const run6 = () => answer({
+    message: "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，不够12个）。您比较倾向玻璃还是瓷器材质？",
+    card_ids: ["Q1930", "3500-0224", "N0536"],
+  });
+  const fixed = "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款有现货）。您比较倾向玻璃还是瓷器材质？";
+  const asked = platesAsked();
+  const { client, bodies } = fakeClient([plateSearch(), run6(), run6()]);
+  const reply = await runAgentTurn({ request: asked, deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+  assert.match(String(bodies[2].messages.at(-1)!.content), /只剩1个.*for N0536 \(live 74\); 1 matches N2906/);
+  assert.equal(reply.message, fixed);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["Q1930", "3500-0224", "N0536"]);
+  // With no time for a repair, code says it the same way.
+  const late = fakeClient([plateSearch(), run6()]);
+  const quick = await runAgentTurn({ request: asked, deps: fakeDeps(plates), client: late.client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  assert.equal(late.bodies.length, 2);
+  assert.equal(quick.message, fixed);
+});
+
+// 3 Oct (report page 7): the Verona Deep Plate with 1 left is named, and the only bone china card is N0536, the Coupe plate.
+const OCT3 = "几款24cm餐盘供您参考：Luminarc Everyday玻璃餐盘、Patra瓷汤盘、Royal Bone China Verona深盘（只剩1个，不够12个）。您比较倾向哪一款？";
+const COUPE_CARDS = ["Q1930", "3500-0224", "N0536"];
+
+test("the product the words name gets its card before the card they would otherwise stand for, with no repair (r8 F6, 3 Oct)", async () => {
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message: OCT3, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({ request: platesAsked(), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["Q1930", "3500-0224", "N2906", "N0536"]);
+  assert.equal(bodies.length, 2);
+});
+
+test("a set shown twice that names the Verona still loses its cards, and none is added (r8 F6)", async () => {
+  const shown = (message: string) => ({ role: "assistant" as const, content: `${message}${cardsNote(plates.filter((item) => COUPE_CARDS.includes(item.stock_id)))}` });
+  const { client } = fakeClient([plateSearch(), answer({ message: OCT3, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({
+    request: platesAsked({
+      event: { type: "text", text: "哪款适合汤菜？" },
+      history: [{ role: "user", content: "我要12个直径约24厘米的餐盘，每个不超过20新元。" }, shown("这几款可以参考。"), { role: "user", content: "还有别的吗？" }, shown("还是这几款最合适。")],
+      shownProductIds: COUPE_CARDS,
+    }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.cards, []);
+});
+
+test("a set shown twice with the card added for the words that name it loses its cards the third time, with no repair (r8 review)", async () => {
+  // What the earlier replies showed once this check runs: Claude's three cards and the Verona put in front of the Coupe.
+  const sent = ["Q1930", "3500-0224", "N2906", "N0536"];
+  const shown = (message: string) => ({ role: "assistant" as const, content: `${message}${cardsNote(sent.map((code) => plates.find((item) => item.stock_id === code)!))}` });
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message: OCT3, card_ids: COUPE_CARDS }), answer({ message: OCT3, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({
+    request: platesAsked({
+      event: { type: "text", text: "哪款适合汤菜？" },
+      history: [{ role: "user", content: "我要12个直径约24厘米的餐盘，每个不超过20新元。" }, shown("这几款可以参考。"), { role: "user", content: "还有别的吗？" }, shown("还是这几款最合适。")],
+      shownProductIds: sent,
+    }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.cards, []);
+  assert.equal(bodies.length, 2);
+});
+
+test("a reply that steers from the named product to the card it shows keeps its own cards (r8 review)", async () => {
+  for (const message of [
+    "Royal Bone China Verona深盘只剩1个，不够12个，推荐这款（库存74个）。",
+    "The Royal Bone China Verona Deep Plate has only 1 left, so I'd go with this one instead (74 in stock).",
+  ]) {
+    const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: ["N0536"] }), answer({ message, card_ids: ["N0536"] })]);
+    const reply = await runAgentTurn({ request: platesAsked({ event: { type: "text", text: "我要12个直径约24厘米的骨瓷盘" } }), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+    assert.deepEqual(reply.cards.map((card) => card.stock_id), ["N0536"], message);
+    assert.equal(bodies.length, 2, message);
+  }
+});
+
+test("a card whose link the customer says doesn't open is never added for the words that name it (r8 F6)", async () => {
+  const message = "Sorry that link isn't opening. Here are other 24cm plates: the Luminarc Everyday Opal Glass Dinner Plate, the Patra Soup Plate, and the Royal Bone China Verona Deep Plate (only 1 left, not enough for 12).";
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({
+    request: platesAsked({
+      event: { type: "text", text: "the Verona link not working" },
+      history: [{ role: "user", content: "24cm plates" }, { role: "assistant", content: `This one is a deeper bone china plate.${cardsNote([plates[2]])}` }],
+      shownProductIds: ["N2906"],
+    }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), COUPE_CARDS);
+  assert.equal(bodies.length, 2);
 });
 
 test("an unverified amount that survives the repair is removed", async () => {
@@ -321,6 +419,17 @@ test("a staff claim is removed and the reply shows the sales contact", async () 
   assert.doesNotMatch(reply.message, /notified/);
   assert.notEqual(reply.message.trim(), "");
   assert.equal(reply.showContact, true);
+});
+
+test("Claire quoting the sales contact reaches the customer unchanged; the store's other number is replaced (r8 F2)", async () => {
+  const asked = request({ event: { type: "text", text: "what's your phone number and email?" } });
+  const quoted = "You can reach Sia Huat sales at +65 6268 3922 or enquiry@siahuat.com.";
+  const { client } = fakeClient([answer({ message: quoted, show_contact: true })]);
+  const reply = await runAgentTurn({ request: asked, deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual([reply.message, reply.showContact], [quoted, true]);
+  const other = fakeClient([answer({ message: "Call the shop at 6223 1732.", show_contact: true })]);
+  const replaced = await runAgentTurn({ request: asked, deps: deps(), client: other.client, model: "claude-sonnet-5" });
+  assert.deepEqual([replaced.message, replaced.showContact], ["Call the shop at Sia Huat sales (details below).", true]);
 });
 
 test("an item code from the chat that looks like a phone number reaches the customer unchanged", async () => {
@@ -1193,6 +1302,127 @@ test("an earlier card already tried this turn is not looked up again after the r
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
 });
 
+// r8 R01: 04-00820's old Nernst chiller page answers 200 with Next's not-found page, so its listing is gone. The real-Claude
+// replay sent "Item 04-00820 is the Nernst 3-Layer Glass Display Chiller" with the dead page's card.
+const chiller = product({ stock_id: "04-00820", name: "Nernst 3 Layer Glass Display Chiller", source_url: "https://store.siahuat.com/product/14355600983" });
+const chillerGone = () => fakeDeps([blowtorch, safico, chiller], { "04-00820": "gone" });
+const chillerAsked = request({ event: { type: "text", text: "what is item 04-00820?" } });
+const lookUpChiller = () => toolCall("t1", "get_product", { stock_id: "04-00820" });
+
+test("a removed listing's card is dropped before the review, so no repair is spent on it (r8 R01)", async () => {
+  const { client, bodies } = fakeClient([
+    lookUpChiller(),
+    answer({ message: "I couldn't confirm item 04-00820 on the store just now.", card_ids: ["04-00820"], show_contact: true }),
+  ]);
+  const reply = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards, []);
+  assert.equal(bodies.length, 2);
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /LISTING_GONE/);
+  assert.doesNotMatch(JSON.stringify(bodies[1].messages.at(-1)), /Nernst|14355600983/);
+});
+
+test("a removed listing drops only its own exact code: 1550a's dead page leaves the 1550A card (r8 R01)", async () => {
+  const dead = product({ stock_id: "1550a", name: "CHAFING DISH 1550a" });
+  const live = product({ stock_id: "1550A", name: "CHAFING DISH 1550A" });
+  const { client, bodies } = fakeClient([
+    toolCall("t1", "get_product", { stock_id: "1550a" }),
+    toolCall("t2", "search_catalogue", { queries: ["chafing dish"] }),
+    answer({ message: "This chafing dish is the one on the store now.", card_ids: ["1550A"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "1550a chafing dish" } }), deps: fakeDeps([dead, live], { "1550a": "gone" }), client, model: "claude-sonnet-5" });
+  assert.deepEqual([reply.cards.map((card) => card.stock_id), bodies.length], [["1550A"], 3]);
+});
+
+test("a cards-only answer whose only card is a removed listing gets the next step and the contact (r8 R01)", async () => {
+  const { client, bodies } = fakeClient([lookUpChiller(), answer({ message: "", card_ids: ["04-00820"] })]);
+  const reply = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(reply.cards, []);
+  assert.equal(reply.message, "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).");
+  assert.equal(reply.showContact, true);
+});
+
+test("words pointing at a removed listing's card go with it: a reply with nothing left gets the next step and the contact (r8 R01)", async () => {
+  const nothingLeft = "Sorry, I can't confirm that from here. Could you ask it another way? Sia Huat sales can help too (details below).";
+  const outcome = (reply: Awaited<ReturnType<typeof runAgentTurn>>, bodies: unknown[]) => [reply.provider, reply.message, reply.cards, reply.showContact, bodies.length];
+  // Found gone by get_product in the tool round.
+  const looked = fakeClient([lookUpChiller(), answer({ message: "Here it is, the card below has the details.", card_ids: ["04-00820"] })]);
+  const tool = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client: looked.client, model: "claude-sonnet-5" });
+  assert.deepEqual(outcome(tool, looked.bodies), ["anthropic", nothingLeft, [], true, 2]);
+  // An earlier card, found gone only when the answer re-attaches it: cards only, and "Here it is again."
+  for (const message of ["", "Here it is again."]) {
+    const shown = fakeClient([answer({ message, card_ids: ["970S"] })]);
+    const reply = await runAgentTurn({ request: askedAgain("show me the torch again"), deps: fakeDeps([blowtorch, safico], { "970S": "gone" }), client: shown.client, model: "claude-sonnet-5" });
+    assert.deepEqual(outcome(reply, shown.bodies), ["anthropic", nothingLeft, [], true, 1], message);
+  }
+  // This turn's search result whose read ran late, found gone by the read before the reply.
+  const lookups = fakeDeps([blowtorch, safico]);
+  let attempts = 0;
+  const fetchLive = lookups.fetchLive;
+  lookups.fetchLive = (url, ms) => {
+    if (url !== blowtorch.source_url) return fetchLive(url, ms);
+    attempts += 1;
+    return Promise.reject(attempts === 1 ? new DOMException("The operation was aborted due to timeout", "TimeoutError") : new Error(`PAGE_GONE: ${url}`));
+  };
+  const late = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), answer({ message: "", card_ids: ["970S"] })]);
+  const reread = await runAgentTurn({ request: request({}), deps: lookups, client: late.client, model: "claude-sonnet-5" });
+  assert.deepEqual([...outcome(reread, late.bodies), attempts], ["anthropic", nothingLeft, [], true, 2, 2]);
+});
+
+test("an earlier card whose listing is now gone is dropped, read once in the turn, with no repair (r8 R01)", async () => {
+  const counted = () => {
+    const lookups = fakeDeps([blowtorch, safico], { "970S": "gone" });
+    const fetchLive = lookups.fetchLive;
+    const reads = { count: 0 };
+    lookups.fetchLive = (url, ms) => {
+      if (url === blowtorch.source_url) reads.count += 1;
+      return fetchLive(url, ms);
+    };
+    return { lookups, reads };
+  };
+  // Looked up for the first time when the answer re-attaches it.
+  const again = counted();
+  const shown = fakeClient([answer({ message: "That torch can't be confirmed on the store just now.", card_ids: ["970S"], show_contact: true })]);
+  const reattached = await runAgentTurn({ request: askedAgain("show me the torch again"), deps: again.lookups, client: shown.client, model: "claude-sonnet-5" });
+  assert.deepEqual([reattached.cards, again.reads.count, shown.bodies.length], [[], 1, 1]);
+  // On the enquiry, so the re-check finds it gone first: a quoted price makes the answer look up Claire's previous cards, and the
+  // gone one isn't read again (failures leave the turn's memo).
+  const onEnquiry = counted();
+  const priced = fakeClient([answer({ message: "I couldn't confirm the 970S on the store just now. The BTS-8026D is $23.36.", card_ids: ["970S", "BTS-8026D"], show_contact: true })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "how much now" }, history: [{ role: "user", content: "torch" }, twoCardsShown], shownProductIds: ["970S", "BTS-8026D"], enquiry: [{ stockId: "970S", quantity: 2 }] }),
+    deps: onEnquiry.lookups, client: priced.client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual([reply.cards.map((card) => card.stock_id), onEnquiry.reads.count, priced.bodies.length], [["BTS-8026D"], 1, 1]);
+  assert.deepEqual(reply.enquiry.unchecked, ["970S"]);
+});
+
+test("a tapped card whose listing is gone gives Claude no product facts for it, and its card stays off (r8 R01)", async () => {
+  const { client, bodies } = fakeClient([answer({ message: "I couldn't open item 04-00820 on the store just now.", card_ids: ["04-00820"], show_contact: true })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "select_product", stockId: "04-00820" } }), deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.doesNotMatch(JSON.stringify(bodies[0].messages), /Nernst|14355600983/);
+  assert.deepEqual([reply.cards, bodies.length], [[], 1]);
+});
+
+test("a phone-shaped item code whose listing is gone is named back unchanged, not taken for a phone number (r8 R01)", async () => {
+  const old = product({ stock_id: "62231732", name: "OLD ITEM" });
+  const message = "I couldn't confirm item 62231732 on the store just now.";
+  const { client } = fakeClient([toolCall("t1", "get_product", { stock_id: "62231732" }), answer({ message, show_contact: true })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "item 62231732 got?" } }), deps: fakeDeps([old], { "62231732": "gone" }), client, model: "claude-sonnet-5" });
+  assert.equal(reply.message, message);
+});
+
+test("a removed listing's link typed in the reply is cut, and its card stays off (r8 R01)", async () => {
+  const withLink = answer({ message: "I couldn't confirm 04-00820 just now: https://store.siahuat.com/product/14355600983", card_ids: ["04-00820"], show_contact: true });
+  const { client } = fakeClient([lookUpChiller(), withLink, withLink]);
+  const reply = await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.provider, "anthropic");
+  assert.deepEqual(reply.cards, []);
+  assert.doesNotMatch(reply.message, /14355600983/);
+});
+
 test("the memo does not outlive the turn", async () => {
   const shared = deps();
   for (let turn = 0; turn < 2; turn += 1) {
@@ -1560,6 +1790,21 @@ test("a long list gets one round of lookups, then an answer", async () => {
   const noTools = fakeClient([answer({ message: "There are 8 items on your list. Which size of stock pot do you need?" })]);
   await runAgentTurn({ request: request({ event: { type: "text", text: s01List } }), deps: deps(), client: noTools.client, model: "claude-sonnet-5" });
   assert.ok(!noTools.bodies.some((body) => LIST_NOTE.test(JSON.stringify(body.messages))));
+});
+
+test("a pasted bullet list is a list turn too: one round of lookups, then an answer (r8 F7)", async () => {
+  // The message box keeps a paste's line breaks now (F7), so a "- " list arrives as lines, as a numbered list does.
+  const bullets = ["Please quote these:", "- stock pot 12QT", "- strainer for the pot", "- ladle 4oz", "- oyster knife"];
+  const search = (id: string, item: string) => ({ type: "tool_use", id, name: "search_catalogue", input: { queries: [item] } });
+  const threeItems = { ...toolCall("t1", "search_catalogue", {}), content: [search("t1", "stock pot"), search("t2", "strainer"), search("t3", "ladle")] } as unknown as Anthropic.Message;
+  const { client, bodies } = fakeClient([threeItems, answer({ message: "There are 4 items on your list. Which size of stock pot do you need? Next: the ladle." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: bullets.join("\n") } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual(bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(bodies[1]), LIST_NOTE);
+  // The same words run into one line, as the old one-line box sent them, read as no list: the tools went on.
+  const oneLine = fakeClient([threeItems, answer({ message: "Which size of stock pot do you need?" })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: bullets.join(" ") } }), deps: deps(), client: oneLine.client, model: "claude-sonnet-5" });
+  assert.deepEqual(oneLine.bodies.map(choice), ["auto", "auto"]);
 });
 
 test("a recommendation that offers to add a product the customer hasn't picked is sent as it is", async () => {
@@ -2050,4 +2295,240 @@ test("a card tap that runs out of time asks for the tap again", async () => {
   }), 2_500);
   assert.equal(reply.provider, "fallback");
   assert.match(reply.message, /^Sorry, I couldn't open that one just now\. Could you tap it again\?/);
+});
+
+// r8 R02, R09: a search result whose read ran past its limit went out "Price to be confirmed" with time left in the turn.
+const torchSearch = toolCall("t1", "search_catalogue", { queries: ["torch"] });
+const reads = (lookups: ReturnType<typeof fakeDeps>, code: string) => lookups.calls.filter((call) => call === `late:${code}` || call === `live:${code}`);
+
+test("this turn's card whose read ran late is read again before the reply goes out (r8 R02, R09)", async () => {
+  const lookups = fakeDeps([blowtorch, safico], { "970S": "timeout-once" });
+  const { client, bodies } = fakeClient([torchSearch, answer({ message: "This one is a handheld kitchen torch.", card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(reads(lookups, "970S"), ["late:970S", "live:970S"]);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status, card.list_price]), [["970S", "in_stock", 31.31]]);
+  // Named by its code without a card (a 6th item past the card cap), it is read again too; an unnamed one isn't.
+  const lighter = product({ stock_id: "L1", name: "TORCH LIGHTER" });
+  const named = fakeDeps([blowtorch, safico, lighter], { "970S": "timeout-once", L1: "timeout-once" });
+  const second = fakeClient([torchSearch, answer({ message: "970S is a handheld kitchen torch." })]);
+  await runAgentTurn({ request: request({}), deps: named, client: second.client, model: "claude-sonnet-5" });
+  assert.deepEqual([reads(named, "970S"), reads(named, "L1")], [["late:970S", "live:970S"], ["late:L1"]]);
+});
+
+test("in an outage, with no read landing this turn, a late product is read once and its card stays unconfirmed (r8 R02, R09)", async () => {
+  const outage = fakeDeps([blowtorch, safico], { "970S": "timeout", "BTS-8026D": "timeout" });
+  const { client } = fakeClient([torchSearch, answer({ message: "Here it is; its stock still needs checking.", card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: outage, client, model: "claude-sonnet-5" });
+  assert.deepEqual([reads(outage, "970S"), reads(outage, "BTS-8026D")], [["late:970S"], ["late:BTS-8026D"]]);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
+});
+
+test("a read that failed for another reason, or found the listing gone, is not read again (r8 R01, R02)", async () => {
+  for (const override of ["fail", "gone"] as const) {
+    const lookups = fakeDeps([blowtorch, safico], { "970S": override });
+    let attempts = 0;
+    const fetchLive = lookups.fetchLive;
+    lookups.fetchLive = (url, ms) => {
+      if (url === blowtorch.source_url) attempts += 1;
+      return fetchLive(url, ms);
+    };
+    // A gone listing is left out of the search results, so Claude has no card for it.
+    const { client } = fakeClient([torchSearch, answer({ message: "I checked the 970S for you.", card_ids: override === "fail" ? ["970S"] : [] })]);
+    const reply = await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+    assert.deepEqual([reply.provider, attempts, reply.cards.map((card) => card.stock_status)], ["anthropic", 1, override === "fail" ? ["unknown"] : []], override);
+  }
+});
+
+test("a late product's second read that stalls holds the reply about 4 s at most, and its card stays unconfirmed (r8 R09)", async () => {
+  const lookups = fakeDeps([blowtorch, safico], { "970S": "timeout-once" });
+  let attempts = 0;
+  const fetchLive = lookups.fetchLive;
+  // The round's read runs late; the second never answers.
+  lookups.fetchLive = (url, ms) => {
+    if (url !== blowtorch.source_url) return fetchLive(url, ms);
+    attempts += 1;
+    return attempts === 1 ? fetchLive(url, ms) : new Promise(() => undefined);
+  };
+  const { client } = fakeClient([torchSearch, answer({ message: "This one is a handheld kitchen torch.", card_ids: ["970S"] })]);
+  const started = performance.now();
+  const reply = await within(runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" }), 7_000);
+  const ms = performance.now() - started;
+  assert.ok(ms > 3_500 && ms < 5_000, `${Math.round(ms)} ms`);
+  assert.equal(attempts, 2);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
+});
+
+test("an add refused as STOCK_UNVERIFIED is never said to be added, though its card is read again in stock (r8 R02)", async () => {
+  const claim = answer({ message: "Added 2 Safico torch burners (BTS-8026D) to your enquiry.", card_ids: ["BTS-8026D"] });
+  const lookups = fakeDeps([blowtorch, safico]);
+  let attempts = 0;
+  const fetchLive = lookups.fetchLive;
+  // The round's early lookup and the add's own live check both run late; the read before the reply lands.
+  lookups.fetchLive = (url, ms) => {
+    if (url !== safico.source_url) return fetchLive(url, ms);
+    attempts += 1;
+    return attempts <= 2 ? Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")) : fetchLive(url, ms);
+  };
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }), claim, claim, claim]);
+  // The enquiry's 970S line is read first, so the store answered a read this turn.
+  const reply = await checkedTurn({
+    request: request({ event: { type: "text", text: "2 of the BTS-8026D" }, enquiry: [{ stockId: "970S", quantity: 1 }] }), deps: lookups, client, model: "claude-sonnet-5",
+  });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /STOCK_UNVERIFIED/);
+  assert.match(JSON.stringify(bodies[2].messages.at(-1)), NUDGE);
+  assert.match(JSON.stringify(bodies[3].messages.at(-1)), /The enquiry didn't change/);
+  assert.equal(attempts, 3);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 1]]);
+  assert.doesNotMatch(reply.message, /\badded\b/i);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["BTS-8026D", "in_stock"]]);
+});
+
+test("a reply that calls a price unconfirmed after the card re-check priced it is repaired with the live price (r8 R02, R09)", async () => {
+  const lookups = fakeDeps([blowtorch, safico], { "970S": "timeout-once" });
+  const { client, bodies } = fakeClient([
+    torchSearch,
+    answer({ message: "Kitchen torch 970S: price not yet confirmed live.", card_ids: ["970S"] }),
+    answer({ message: "Kitchen torch 970S: $31.31 ex GST.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 3);
+  const repairAsk = JSON.stringify(bodies[2].messages.at(-1));
+  assert.ok(repairAsk.includes(PRICE_HEDGE_PREFIX));
+  assert.match(repairAsk, /970S \$31\.31 \/ PC, in stock/);
+  assert.equal(reply.message, "Kitchen torch 970S: $31.31 ex GST.");
+  assert.deepEqual(reply.cards.map((card) => card.stock_status), ["in_stock"]);
+});
+
+test("a three-search round reads 6 results per search, not 10 (r8 R02, R09)", async () => {
+  const many = Array.from({ length: 12 }, (_, index) => product({ stock_id: `T${index + 1}`, name: `TORCH ${index + 1} BURNER LIGHTER` }));
+  const lookups = fakeDeps(many);
+  const search = (id: string, item: string) => ({ type: "tool_use", id, name: "search_catalogue", input: { queries: [item] } });
+  const threeItems = { ...toolCall("t1", "search_catalogue", {}), content: [search("t1", "torch"), search("t2", "burner"), search("t3", "lighter")] } as unknown as Anthropic.Message;
+  const { client, bodies } = fakeClient([threeItems, answer({ message: "Here is what I found." })]);
+  await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+  const results = (bodies[1].messages.at(-1)!.content as Array<{ content: string }>).map((block) => JSON.parse(block.content).products.length);
+  assert.deepEqual(results, [6, 6, 6]);
+  // The turn memo reads each page once: the three searches share the same 6.
+  assert.equal(lookups.calls.filter((call) => call.startsWith("live:")).length, 6);
+});
+
+// r8 M03, M09, R02, the tester's words.
+const sixItems = "Please find all six items: spice/coffee grinder; black mesh shelf liner; blue nitrile gloves medium; grey cut-resistant glove large; 50ml disposable mini sauce pan; red 14cm cast-iron casserole. Give one catalogue code and price per item. Keep all six separate and do not add them yet.";
+const six = [
+  product({ stock_id: "MC11", name: "Ad Hoc Stainless Steel Coffee Grinder, Moro Ceracut XL", list_price: 84.31 }),
+  product({ stock_id: "07-00019", name: "Safico Pro Mesh Bar Shelf Liner W60xL300cm, Black", list_price: 37.52, uom_id: "ROLL" }),
+  product({ stock_id: "R52232D", name: "Pal Powderfree Nitrile Glove, Medium, Blue", list_price: 9.08, uom_id: "BOX" }),
+  product({ stock_id: "08-00840", name: "Safico Pro Cut Resistant Glove Large, Grey", list_price: 18.26 }),
+  product({ stock_id: "VO57143", name: "Solia Sugarcane Pulp Mini Sauce Pan, 50ml", list_price: 24.31, uom_id: "PKT" }),
+  product({ stock_id: "Y-TC-14-K2-RD", name: "Lava Cast Iron Round Casserole Ø14cm, Red", list_price: 188.99 }),
+];
+const toolRound = (calls: Array<[name: string, input: unknown]>) => ({
+  ...toolCall("t0", calls[0][0], calls[0][1]), content: calls.map(([name, input], i) => ({ type: "tool_use", id: `t${i}`, name, input })),
+}) as unknown as Anthropic.Message;
+
+test("a list of six searches whose answer ends 'None added yet' goes out as it is (r8 R02)", async () => {
+  const words = ["coffee grinder", "shelf liner", "nitrile glove", "cut resistant glove", "mini sauce pan", "cast iron casserole"];
+  const message = `${six.map((item, i) => `${i + 1}. ${item.name}, ${item.stock_id} - $${item.list_price.toFixed(2)}`).join("\n")}\nNone added yet.`;
+  const { client, bodies } = fakeClient([toolRound(words.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.slice(0, 5).map((item) => item.stock_id) })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
+  // No nudge and no repair: R02 took four Claude calls and ended "That change isn't on your enquiry yet. Which item and how many would you like?"
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+});
+
+test("'all found' is said truthfully when a code wasn't found or its store page failed (r8 R03, M04)", async () => {
+  const [grinder, liner] = six;
+  const message = "1. MC11 Coffee Grinder: price not checked\n2. 07-00019 Shelf Liner: $37.52\n3. ZZ-404: not found\nAll 3 lookups succeeded.";
+  const lookUp = (...codes: string[]) => toolRound(codes.map((code) => ["get_product", { stock_id: code }]));
+  const { client } = fakeClient([lookUp("MC11", "07-00019", "ZZ-404"), answer({ message, card_ids: ["MC11", "07-00019"] })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "Find MC11, 07-00019, ZZ-404. State explicitly if any lookup fails." } }), deps: fakeDeps([grinder, liner], { MC11: "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.message, message.replace("All 3 lookups succeeded.", "I couldn't confirm ZZ-404, MC11 on the store just now."));
+  // Every code confirmed: the sentence stays.
+  const fine = "1. MC11: $84.31\n2. 07-00019: $37.52\nAll 2 lookups succeeded.";
+  const confirmed = fakeClient([lookUp("MC11", "07-00019"), answer({ message: fine, card_ids: ["MC11", "07-00019"] })]);
+  const kept = await runAgentTurn({ request: request({ event: { type: "text", text: "Find MC11, 07-00019" } }), deps: fakeDeps([grinder, liner]), client: confirmed.client, model: "claude-sonnet-5" });
+  assert.equal(kept.message, fine);
+});
+
+test("a code whose listing is gone, or whose lookup the work deadline cut, counts as not confirmed (r8 R03)", async () => {
+  // LISTING_GONE: 04-00820 never reaches the turn's products (r8 R01).
+  const gone = fakeClient([
+    toolRound([["get_product", { stock_id: "04-00820" }], ["get_product", { stock_id: "970S" }]]),
+    answer({ message: "970S is the kitchen blow torch at $31.31. All 2 codes were found.", card_ids: ["970S"], show_contact: true }),
+  ]);
+  const goneReply = await runAgentTurn({ request: request({ event: { type: "text", text: "04-00820 and 970S" } }), deps: chillerGone(), client: gone.client, model: "claude-sonnet-5" });
+  assert.equal(goneReply.message, "970S is the kitchen blow torch at $31.31. I couldn't confirm 04-00820 on the store just now.");
+  // NOT_FINISHED: ZZ-9's lookup never answers, so the work deadline cuts the round and the next call answers.
+  const stuck = fakeDeps([blowtorch]);
+  const findByCode = stuck.findByCode;
+  stuck.findByCode = (stockId) => (stockId === "ZZ-9" ? new Promise(() => undefined) : findByCode(stockId));
+  const cut = fakeClient([
+    toolRound([["get_product", { stock_id: "970S" }], ["get_product", { stock_id: "ZZ-9" }]]),
+    answer({ message: "970S is $31.31. All 2 lookups went through.", card_ids: ["970S"] }),
+  ]);
+  const cutReply = await within(runAgentTurn({
+    request: request({ event: { type: "text", text: "970S and ZZ-9" } }), deps: stuck, client: cut.client, model: "claude-sonnet-5", deadlineMs: 2_000, fallbackReserveMs: 1_500, standInMs: 500,
+  }), 3_000);
+  assert.match(JSON.stringify(cut.bodies[1].messages.at(-1)), /NOT_FINISHED/);
+  assert.equal(cutReply.message, "970S is $31.31. I couldn't confirm ZZ-9 on the store just now.");
+});
+
+test("an honest reply that names the failed code and says the others were found goes out as it is (r8 review)", async () => {
+  const [grinder, liner] = six;
+  const lookUp = (...codes: string[]) => toolRound(codes.map((code) => ["get_product", { stock_id: code }]));
+  const message = "1. MC11 Coffee Grinder: its store page didn't load, so I can't confirm its price.\n2. 07-00019 Shelf Liner: $37.52\nThe other one was found.\nThe rest were all found.";
+  const { client } = fakeClient([lookUp("MC11", "07-00019"), answer({ message, card_ids: ["07-00019"] })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "Find MC11, 07-00019. State explicitly if any lookup fails." } }), deps: fakeDeps([grinder, liner], { MC11: "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.message, message);
+});
+
+test("an 'all found' claim is replaced whole: its subject and a closing number go with it (r8 review)", async () => {
+  const [grinder, liner] = six;
+  const lookUp = (...codes: string[]) => toolRound(codes.map((code) => ["get_product", { stock_id: code }]));
+  for (const tail of ["They all came back fine.", "All lookups succeeded, 2 of 2."]) {
+    const message = `1. MC11 Coffee Grinder: price not checked\n2. 07-00019 Shelf Liner: $37.52\n${tail}`;
+    const { client, bodies } = fakeClient([lookUp("MC11", "07-00019"), answer({ message, card_ids: ["MC11", "07-00019"] })]);
+    const reply = await runAgentTurn({
+      request: request({ event: { type: "text", text: "Find MC11, 07-00019. Say if any lookup fails." } }), deps: fakeDeps([grinder, liner], { MC11: "fail" }), client, model: "claude-sonnet-5",
+    });
+    assert.equal(reply.message, message.replace(tail, "I couldn't confirm MC11 on the store just now."), tail);
+    assert.equal(bodies.length, 2);
+  }
+});
+
+test("a code whose lookup failed and then worked on Claude's retry is not said to be unconfirmed (r8 review)", async () => {
+  const [grinder, liner] = six;
+  const flaky = fakeDeps([grinder, liner]);
+  const findByCode = flaky.findByCode;
+  // Two throws make one TOOL_FAILED (the lookup is retried once).
+  let fails = 2;
+  flaky.findByCode = (stockId) => (stockId === "MC11" && fails-- > 0 ? Promise.reject(new Error("DB_TIMEOUT")) : findByCode(stockId));
+  const message = "1. MC11 Coffee Grinder: $84.31\n2. 07-00019 Shelf Liner: $37.52\nAll 2 lookups succeeded.";
+  const { client, bodies } = fakeClient([
+    toolRound([["get_product", { stock_id: "MC11" }], ["get_product", { stock_id: "07-00019" }]]),
+    toolRound([["get_product", { stock_id: "MC11" }]]),
+    answer({ message, card_ids: ["MC11", "07-00019"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "Find MC11, 07-00019" } }), deps: flaky, client, model: "claude-sonnet-5" });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /TOOL_FAILED/);
+  assert.equal(reply.message, message);
+  assert.deepEqual(reply.cards.map((card) => `${card.stock_id}:${card.stock_status}`), ["MC11:in_stock", "07-00019:in_stock"]);
+});
+
+test("a promise to add beside 'none of' still gets the claim nudge (r8 review)", async () => {
+  for (const message of ["I'll add the 2 Safico torches to your enquiry now, none of the blow torches.", "None of the plates fit, so I'll add 2 Safico torches."]) {
+    const asked = "Which torch and how many would you like?";
+    const { client, bodies } = fakeClient([
+      toolCall("t1", "search_catalogue", { queries: ["torch"] }), answer({ message, card_ids: ["BTS-8026D"] }), answer({ message: asked, card_ids: ["BTS-8026D"] }), answer({ message: asked, card_ids: ["BTS-8026D"] }),
+    ]);
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "2 safico torch" } }), deps: deps(), client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 3, message);
+    assert.equal(reply.message, asked, message);
+    assert.deepEqual(reply.enquiry.lines, []);
+  }
 });
