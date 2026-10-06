@@ -1130,7 +1130,7 @@ const stockNumberIssue = (wrong: ReturnType<typeof wrongStockCounts>) => `${STOC
 
 const ALL_IN_STOCK_ISSUE_PREFIX = "You wrote that the cards are all in stock";
 // "All confirmed in stock", "both available", "3 porcelain options in stock"; not "Both are 0 in stock" or "not available".
-const everyCardInStock = /\b(?:all|both|every(?:thing|one)|(?:two|three|four|five|[2-5])\s+(?:[\w-]+\s+){0,3}(?:options?|ones?|models?|sizes?|picks?|items?|choices?))\b[^.?!\n]{0,60}?(?<!\b(?:0|no|not|zero)\s+)\b(?:in\s+stock|available)\b|\b(?:in\s+stock|available)\b[^.?!\n]{0,3}\b(?:all|both)\b/i;
+const everyCardInStock = /\b(?:all|both|every(?:thing|one)|(?:two|three|four|five|six|[2-6])\s+(?:[\w-]+\s+){0,3}(?:options?|ones?|models?|sizes?|picks?|items?|choices?))\b[^.?!\n]{0,60}?(?<!\b(?:0|no|not|zero)\s+)\b(?:in\s+stock|available)\b|\b(?:in\s+stock|available)\b[^.?!\n]{0,3}\b(?:all|both)\b/i;
 
 /** A style issue when the message says every card is in stock but a card isn't (or wasn't checked), unless it says which is out. */
 export function stockIssues(message: string, cards: Product[]) {

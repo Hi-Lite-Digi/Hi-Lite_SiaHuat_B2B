@@ -42,6 +42,7 @@ const EARLIER_CARD_CHECK_MS = 2_000;
 const CARD_RECHECK_MS = 4_000; // a lone store read from the function took 0.9-3.6 s (r8)
 const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
 // A pasted list longer than this gets one round of lookups (exam 3, s01-B T0: 8 items ran 2-3 tool rounds and got a stand-in).
+// That round may look up six items (r8 M03, M09).
 const LIST_ITEMS_PER_TURN = 3;
 // A plain thank-you needs no lookups (exam 3, s01-B T3: 3-4 tool rounds, then a stand-in); "thank u", "tysm" and a trailing emoji too.
 const THANKS_ONLY = /^\s*(?:ok(?:ay)?[\s,.]+)?(?:thanks?|thank (?:you|u)|thx|ty|tq|tysm)(?:\s+(?:so much|a lot|lah?|you))?[\s.!\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}]*$/iu;
@@ -87,7 +88,7 @@ const ASK_NOTE = "[Context from the system, not the customer] update_enquiry nee
 const WHICH_NOTE = "[Context from the system, not the customer] update_enquiry couldn't settle which product the customer means. No more tools this turn: ask the one question its result asked for (which of the fitting cards, naming them, or whether it's the named product), with those cards. Don't ask them to confirm a number they typed.";
 const ANSWER_NOTE = "[Context from the system, not the customer] The customer hasn't picked this product. No more tools this turn: answer what they said; don't add it, don't ask them to confirm it, and don't say it was added.";
 const KEEP_NOTE = "[Context from the system, not the customer] That line stays on the enquiry. No more tools this turn: say plainly it's still on, answer what they said, and don't ask them to confirm again.";
-const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
+const LIST_NOTE = "[Context from the system, not the customer] That's all the lookups for this list this turn: answer now with what you found for the first items, one card each, and if items are left, end with what's next by name ('Next: ...'). Don't say you'll look further. Nothing more can be looked up or changed this turn.";
 const NOT_FINISHED: ToolOutcome = {
   content: JSON.stringify({ error: "NOT_FINISHED", note: "This didn't finish in time, so there is no result. Don't say what it found or changed." }), isError: true, error: "NOT_FINISHED",
 };

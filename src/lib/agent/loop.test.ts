@@ -2427,14 +2427,37 @@ const toolRound = (calls: Array<[name: string, input: unknown]>) => ({
   ...toolCall("t0", calls[0][0], calls[0][1]), content: calls.map(([name, input], i) => ({ type: "tool_use", id: `t${i}`, name, input })),
 }) as unknown as Anthropic.Message;
 
-test("a list of six searches whose answer ends 'None added yet' goes out as it is (r8 R02)", async () => {
-  const words = ["coffee grinder", "shelf liner", "nitrile glove", "cut resistant glove", "mini sauce pan", "cast iron casserole"];
-  const message = `${six.map((item, i) => `${i + 1}. ${item.name}, ${item.stock_id} - $${item.list_price.toFixed(2)}`).join("\n")}\nNone added yet.`;
-  const { client, bodies } = fakeClient([toolRound(words.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.slice(0, 5).map((item) => item.stock_id) })]);
+const sixWords = ["coffee grinder", "shelf liner", "nitrile glove", "cut resistant glove", "mini sauce pan", "cast iron casserole"];
+const sixLines = six.map((item, i) => `${i + 1}. ${item.name}, ${item.stock_id} - $${item.list_price.toFixed(2)}`).join("\n");
+
+test("a list of six is answered in one round with six cards, and 'None added yet' goes out as it is (r8 M03, R02)", async () => {
+  const message = `${sixLines}\nNone added yet.`;
+  const { client, bodies } = fakeClient([toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.map((item) => item.stock_id) })]);
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
   // No nudge and no repair: R02 took four Claude calls and ended "That change isn't on your enquiry yet. Which item and how many would you like?"
   assert.equal(bodies.length, 2);
   assert.equal(reply.message, message);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), six.map((item) => item.stock_id));
+});
+
+test("a numbered list still gets one round of lookups, and a list of six may end without 'Next:' (r8 M03, M09)", async () => {
+  const leftNote = /answer now with what you found for the first items, one card each, and if items are left, end with what's next by name/;
+  // Eight items, six looked up: one round, then the answer names what's next (exam 3, s01-B T0).
+  const eight = ["stock pot", "strainer", "ladle", "half pan", "quarter pan", "oyster knife"];
+  const long = fakeClient([toolRound(eight.map((item) => ["search_catalogue", { queries: [item] }])), answer({ message: "There are 8 items on your list. Which size of stock pot do you need? Next: the lids." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: s01List } }), deps: deps(), client: long.client, model: "claude-sonnet-5" });
+  assert.deepEqual(long.bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(long.bodies[1]), leftNote);
+  // Six numbered items, all looked up: one round, and the answer has nothing left to name.
+  const message = `There are 6 items on your list:\n${sixLines}\nNone added yet.`;
+  const { client, bodies } = fakeClient([toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.map((item) => item.stock_id) })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: `Please quote these: ${sixWords.map((word, i) => `${i + 1}) ${word}`).join(" ")}` } }), deps: fakeDeps(six), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(bodies[1]), leftNote);
+  assert.equal(reply.message, message);
+  assert.equal(reply.cards.length, 6);
 });
 
 test("six cards shown earlier are all looked up and attached again, with no repair (r8 R02)", async () => {

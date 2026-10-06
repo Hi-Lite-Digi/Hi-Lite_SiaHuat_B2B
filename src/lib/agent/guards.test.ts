@@ -1857,6 +1857,8 @@ test("saying all the cards are in stock when one isn't is a style issue", () => 
   const [inStock, out, unchecked] = [card("IN", "in_stock"), card("OUT", "out_of_stock"), card("UNK", "unknown")];
   assert.match(stockIssues("Here are 3 porcelain options in stock.", [inStock, out]).join(" "), /OUT \(out of stock\)/);
   assert.match(stockIssues("These are all confirmed in stock.", [inStock, unchecked]).join(" "), /stock not checked/);
+  // A list of six, one card each (r8 M03).
+  for (const message of ["Six items in stock.", "Here are 6 picks, available now."]) assert.match(stockIssues(message, [inStock, unchecked]).join(" "), /stock not checked/, message);
   assert.deepEqual(stockIssues("Both are in stock.", [inStock, card("IN2", "in_stock")]), []);
   for (const message of ["The first is in stock; the second is out of stock.", "Both are 0 in stock.", "Both are not available now.", "All in stock except the Severin, which is out of stock."]) {
     assert.deepEqual(stockIssues(message, [inStock, out]), [], message);
