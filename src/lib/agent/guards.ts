@@ -1027,6 +1027,24 @@ export function stockIssues(message: string, cards: Product[]) {
   return [`${ALL_IN_STOCK_ISSUE_PREFIX}, but ${which} ${notIn.length > 1 ? "aren't" : "isn't"}. Describe each product's stock as its tool result says.`];
 }
 
+// "All 12 lookups succeeded", "All 12 found, none failed" (r8 R03, M04): 04-00820's store page had failed its live check.
+const allFound = /\b(?:all|every|each)\b(?:\s+[\w-]+){0,3}?\s+(?:(?:were|are|was|have been)\s+)?(?<!\bI\s)(?:found|succeeded|resolved|worked|matched|checked|confirmed|verified|came back|went through)\b|\b(?:none|no\s+(?:lookups?|codes?|items?))\s+(?:of\s+them\s+)?failed\b|\bnothing\s+failed\b/i;
+/**
+ * The message with its first "all found" claim said truthfully, and any other dropped, when a code the reply names or shows wasn't
+ * found or failed its live check. A claim that names every such code ("only 04-00820 is unchecked") is left as it is.
+ */
+export function withoutAllFoundClaims(message: string, unconfirmed: readonly string[]) {
+  const codes = [...new Map(unconfirmed.map((code) => [code.toLowerCase(), code])).values()];
+  // Judged on its own list item: "All 12 found, none failed: 1) 04-00820 ..." is one sentence when the list runs inline.
+  const claims = sentences(message).flatMap((sentence) => sentence.split(/\s(?=\d{1,2}[.)](?:\s|$))/).filter((part) => allFound.test(part)))
+    .filter((claim) => !codes.every((code) => codePattern(code).test(claim)));
+  if (!codes.length || !claims.length) return message;
+  const [first, ...rest] = claims;
+  // From the claim on: an item it shares a line with ("12. 21405 ... $11,460.00 All 12 lookups succeeded.") stays.
+  const fixed = message.replace(first, `${first.slice(0, first.search(allFound))}I couldn't confirm ${codes.join(", ")} on the store just now.`);
+  return rest.reduce((out, claim) => out.replace(claim, ""), fixed).replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").trim();
+}
+
 // Old Claire's reply-style text for a permission question. The new Claire gets NO_SHOW_PERMISSION_ISSUE when a question asks to
 // show a product or check its stock (or the reply never says "add"), else NO_PERMISSION_ISSUE when the add question is the
 // confirm step; an add question before a pick is let through.

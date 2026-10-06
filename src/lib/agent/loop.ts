@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -438,6 +438,8 @@ export async function runAgentTurn(input: {
     const toolNames: string[] = [];
     // Each update_enquiry call as action:error, for the turn log: the real mix of proposals (round 4's log couldn't show it).
     const updateResults: string[] = [];
+    // Item codes whose get_product failed this turn (not found, gone, or cut by the deadline): the answer can't say every lookup worked.
+    const missingCodes: string[] = [];
     let rounds = 0;
     let forcedEarly = false;
     let result: { final: FinalAnswer | null; content: Anthropic.ContentBlock[] } | null = null;
@@ -517,6 +519,7 @@ export async function runAgentTurn(input: {
         finishedTools += outcomes.size;
         slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
+        missingCodes.push(...done.flatMap((call) => (call.name === "get_product" && call.error ? [String((call.input as { stock_id?: unknown }).stock_id ?? "")].filter(Boolean) : [])));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
         stopped = stopped ?? stopNote(done, ctx, before, picked);
         continue;
@@ -646,12 +649,17 @@ export async function runAgentTurn(input: {
     }
 
     // The chat's item codes, so a code that fits the phone pattern isn't taken for a phone number (exam 3, c05-persona T10); the
-    // customer's enquiry codes too, as a line that couldn't be looked up this turn is named nowhere else.
+    // customer's enquiry codes too, as a line that couldn't be looked up this turn is named nowhere else, and the codes no lookup
+    // confirmed, which the reply may now name (r8 R03).
     const chatCodes = [
       ...ctx.seen.keys(), ...ctx.lines.map((line) => line.code), ...request.enquiry.map((line) => line.stockId), ...ctx.shownIds,
-      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)), ...ctx.gone,
+      ...picks.replies.flatMap((reply) => reply.cards.map((card) => card.code)), ...ctx.gone, ...missingCodes,
     ];
-    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(final.message, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    // The products the reply names or shows whose live check failed, and the codes found nothing for (r8 R03).
+    const unconfirmed = [...missingCodes, ...[...ctx.seen.values()].filter(({ product, verified }) => !verified
+      && (review.cards.some((card) => same(card.stock_id, product.stock_id)) || codePattern(product.stock_id).test(final.message))).map(({ product }) => product.stock_id)];
+    const truthful = withoutAllFoundClaims(final.message, unconfirmed);
+    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(truthful, earlier, final.show_contact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
     // an escaped space decoded after the trim) gets past every check above (r7).
     const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);

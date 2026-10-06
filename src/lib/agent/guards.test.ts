@@ -7,7 +7,7 @@ import type { CheckedProduct } from "./facts";
 import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
-  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
+  keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
   withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
@@ -1826,4 +1826,29 @@ test("a price called unconfirmed is an issue only when every product the clause 
     "Or the EZ03 aluminium 3-step ladder (in stock, 1 unit) — capacity also not confirmed.",
     "13122-0104 is out of stock, and the restock date isn't confirmed.",
   ]) assert.deepEqual(issues(message), [], message);
+});
+
+test("an 'all found' claim is said truthfully when a code the reply names or shows wasn't confirmed (r8 R03, M04)", () => {
+  const said = "I couldn't confirm 04-00820 on the store just now.";
+  const list = "1. 04-00820 Display Chiller: price not checked\n2. 07-00019 Shelf Liner: $37.52";
+  assert.equal(withoutAllFoundClaims(`${list}\nAll 12 lookups succeeded.`, ["04-00820"]), `${list}\n${said}`);
+  assert.equal(withoutAllFoundClaims(`All 12 found, none failed:\n${list}\nNothing added.`, ["04-00820"]), `${said}\n${list}\nNothing added.`);
+  assert.equal(withoutAllFoundClaims("All 12 codes came back.", ["04-00820"]), said);
+  // One sentence says it: a second claim goes.
+  assert.equal(withoutAllFoundClaims(`Here are all 12.\n${list}\nAll codes were found. No lookup failed.`, ["04-00820", "ZZ-1"]), `Here are all 12.\n${list}\nI couldn't confirm 04-00820, ZZ-1 on the store just now.`);
+  // The tester's replies, with the list run inline: the claim is judged on its own item, so every item stays, R03's item 12 too.
+  const m04 = "1. 04-00820 Nernst Display Chiller - price needs live check 2. 07-00019 Shelf Liner - $37.52 3. 08-00811 Nitrile Glove M Blue - $9.36 Nothing added.";
+  assert.equal(withoutAllFoundClaims(`All 12 found, none failed: ${m04}`, ["04-00820"]), `${said} ${m04}`);
+  const bracketed = "1) 04-00820 Nernst Display Chiller - price needs live check 2) 07-00019 Shelf Liner - $37.52 Nothing added.";
+  assert.equal(withoutAllFoundClaims(`All 12 found, none failed: ${bracketed}`, ["04-00820"]), `${said} ${bracketed}`);
+  const r03 = "Here are all 12 codes: 1. 04-00820 - Display Chiller - price/stock not confirmed 2. 07-00019 - Shelf Liner - $37.52/roll 12. 21405 - Robot Coupe Blixer 10E VV - $11,460.00/pc";
+  assert.equal(withoutAllFoundClaims(`${r03} All 12 lookups succeeded.`, ["04-00820"]), `${r03} ${said}`);
+  // A claim naming every code it couldn't confirm already says so, and with every code confirmed there is nothing to fix.
+  const named = `${list}\nAll 12 codes resolved; only 04-00820's price is not yet checked live.`;
+  assert.equal(withoutAllFoundClaims(named, ["04-00820"]), named);
+  assert.equal(withoutAllFoundClaims(`${list}\nAll 12 lookups succeeded.`, []), `${list}\nAll 12 lookups succeeded.`);
+  // Not a lookup claim.
+  for (const message of ["All three are in stock.", "Here are all six.", "I checked all 12 codes.", "The chef knives are out of stock in every size I checked."]) {
+    assert.equal(withoutAllFoundClaims(message, ["04-00820"]), message);
+  }
 });

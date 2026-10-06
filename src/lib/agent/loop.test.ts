@@ -2312,3 +2312,42 @@ test("a list of six searches whose answer ends 'None added yet' goes out as it i
   assert.equal(bodies.length, 2);
   assert.equal(reply.message, message);
 });
+
+test("'all found' is said truthfully when a code wasn't found or its store page failed (r8 R03, M04)", async () => {
+  const [grinder, liner] = six;
+  const message = "1. MC11 Coffee Grinder: price not checked\n2. 07-00019 Shelf Liner: $37.52\n3. ZZ-404: not found\nAll 3 lookups succeeded.";
+  const lookUp = (...codes: string[]) => toolRound(codes.map((code) => ["get_product", { stock_id: code }]));
+  const { client } = fakeClient([lookUp("MC11", "07-00019", "ZZ-404"), answer({ message, card_ids: ["MC11", "07-00019"] })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "Find MC11, 07-00019, ZZ-404. State explicitly if any lookup fails." } }), deps: fakeDeps([grinder, liner], { MC11: "fail" }), client, model: "claude-sonnet-5",
+  });
+  assert.equal(reply.message, message.replace("All 3 lookups succeeded.", "I couldn't confirm ZZ-404, MC11 on the store just now."));
+  // Every code confirmed: the sentence stays.
+  const fine = "1. MC11: $84.31\n2. 07-00019: $37.52\nAll 2 lookups succeeded.";
+  const confirmed = fakeClient([lookUp("MC11", "07-00019"), answer({ message: fine, card_ids: ["MC11", "07-00019"] })]);
+  const kept = await runAgentTurn({ request: request({ event: { type: "text", text: "Find MC11, 07-00019" } }), deps: fakeDeps([grinder, liner]), client: confirmed.client, model: "claude-sonnet-5" });
+  assert.equal(kept.message, fine);
+});
+
+test("a code whose listing is gone, or whose lookup the work deadline cut, counts as not confirmed (r8 R03)", async () => {
+  // LISTING_GONE: 04-00820 never reaches the turn's products (r8 R01).
+  const gone = fakeClient([
+    toolRound([["get_product", { stock_id: "04-00820" }], ["get_product", { stock_id: "970S" }]]),
+    answer({ message: "970S is the kitchen blow torch at $31.31. All 2 codes were found.", card_ids: ["970S"], show_contact: true }),
+  ]);
+  const goneReply = await runAgentTurn({ request: request({ event: { type: "text", text: "04-00820 and 970S" } }), deps: chillerGone(), client: gone.client, model: "claude-sonnet-5" });
+  assert.equal(goneReply.message, "970S is the kitchen blow torch at $31.31. I couldn't confirm 04-00820 on the store just now.");
+  // NOT_FINISHED: ZZ-9's lookup never answers, so the work deadline cuts the round and the next call answers.
+  const stuck = fakeDeps([blowtorch]);
+  const findByCode = stuck.findByCode;
+  stuck.findByCode = (stockId) => (stockId === "ZZ-9" ? new Promise(() => undefined) : findByCode(stockId));
+  const cut = fakeClient([
+    toolRound([["get_product", { stock_id: "970S" }], ["get_product", { stock_id: "ZZ-9" }]]),
+    answer({ message: "970S is $31.31. All 2 lookups went through.", card_ids: ["970S"] }),
+  ]);
+  const cutReply = await within(runAgentTurn({
+    request: request({ event: { type: "text", text: "970S and ZZ-9" } }), deps: stuck, client: cut.client, model: "claude-sonnet-5", deadlineMs: 2_000, fallbackReserveMs: 1_500, standInMs: 500,
+  }), 3_000);
+  assert.match(JSON.stringify(cut.bodies[1].messages.at(-1)), /NOT_FINISHED/);
+  assert.equal(cutReply.message, "970S is $31.31. I couldn't confirm ZZ-9 on the store just now.");
+});
