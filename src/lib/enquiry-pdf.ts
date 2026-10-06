@@ -5,6 +5,7 @@ import {
   conversationPdfText,
   enquiryReceiptTotals,
   needsUnicodePdfRendering,
+  receiptPdfText,
   wrapMeasuredText,
   type EnquiryReceiptLine,
 } from "@/lib/conversation-export";
@@ -88,12 +89,12 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
     y += 12;
   } else {
     input.lines.forEach((line, index) => {
-      const detailLines = pdf.splitTextToSize([
+      const detailLines = pdf.splitTextToSize(receiptPdfText([
         `${index + 1}. ${line.item}`,
         `Code: ${line.code}  |  Quantity: ${line.quantity} ${line.uom}`,
         `Unit price: $${line.pricePerItem.toFixed(2)} / ${line.uom}  |  Line total: $${line.total.toFixed(2)} (ex GST)`,
         ...(line.sourceUrl ? [line.sourceUrl] : []),
-      ].join("\n"), textWidth) as string[];
+      ].join("\n")), textWidth) as string[];
       const itemHeight = 9 + detailLines.length * lineHeight;
       if (y + itemHeight > pageHeight - margin - 12) {
         addPage();
@@ -182,7 +183,8 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(9.5);
         pdf.setTextColor(51, 75, 68);
-        pdf.text(chunk, margin + 5, y + 12 + photoHeight, { lineHeightFactor: 1.25 });
+        // lineHeight apart, as the box heights assume and the picture path draws (1.25 left a gap under long card lists).
+        pdf.text(chunk, margin + 5, y + 12 + photoHeight, { lineHeightFactor: lineHeight / (9.5 * 25.4 / 72) });
       }
       y += boxHeight + 5;
       lineIndex += chunk.length;
