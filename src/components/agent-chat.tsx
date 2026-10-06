@@ -9,26 +9,9 @@ import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
 import { MAX_MESSAGE_CHARS, agentReplySchema, cardsToPick, historyFor, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { abortAfter, isNewChatCommand, newChatWarning } from "@/lib/agent/new-chat";
-import { MAX_PHOTO_BYTES, photoAttachment } from "@/lib/agent/photo";
+import { MAX_PHOTO_BYTES, photoAttachment, photoThumbnail } from "@/lib/agent/photo";
+import { readSavedChat, saveChat, type ChatItem } from "@/lib/agent/saved-chat";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
-
-type ChatItem = {
-  id: number;
-  role: "user" | "assistant";
-  text: string;
-  time: string;
-  cards?: Product[];
-  chips?: string[];
-  showContact?: boolean;
-  imageUrl?: string;
-  tap?: boolean;
-  chip?: boolean;
-  /** false hides the contact block's PDF link and the "Tap a product" line (exam 3: both judged templated). */
-  pdf?: boolean;
-  pickHint?: boolean;
-  /** What Claude reads in the history instead of text (a failed photo's line). */
-  historyText?: string;
-};
 
 const GREETING = "Hi, I'm Claire from Sia Huat 👋 What are you looking for today? You can send me a photo too.";
 const NEW_CHAT_GREETING = "New chat started. What are you looking for today? You can send me a photo too.";
@@ -39,6 +22,19 @@ const COUNTER_FROM = MAX_MESSAGE_CHARS - 500;
 
 const timeLabel = () => new Intl.DateTimeFormat("en-SG", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Singapore" }).format(new Date());
 const newSessionId = () => `agent-${crypto.randomUUID()}`;
+/** The tab's storage, or null where the browser blocks it. */
+const tabStore = () => { try { return window.sessionStorage; } catch { return null; } };
+
+// A reply that didn't arrive. A photo that didn't get through gets its own line (owner, 2 Oct). Claire reads it as a plain statement, not
+// a question, so the PHOTO_AGAIN guard can't stop her own resend ask next turn, and user and assistant turns keep alternating.
+// No error tone (owner, 2026-09-30: a reply that gives up looks like a broken system): ask for a resend; the contact block shows below.
+const lostReply = (photo: boolean, pdf: boolean): Omit<ChatItem, "id"> => ({
+  role: "assistant", time: timeLabel(), showContact: true, pdf,
+  text: photo
+    ? "Sorry, that photo didn't come through. Could you send it again? Sia Huat sales can also help (details below)."
+    : "Sorry, my reply didn't come through. Could you send that again? Sia Huat sales can also help (details below).",
+  ...(photo ? { historyText: "That photo didn't come through on my side." } : {}),
+});
 
 function stockLabel(card: Product) {
   if (card.stock_status === "in_stock") return "Website: in stock";
@@ -51,13 +47,15 @@ export function AgentChat() {
   const [items, setItems] = useState<ChatItem[]>([{ id: 1, role: "assistant", text: GREETING, time: "" }]);
   const [enquiry, setEnquiry] = useState<AgentReply["enquiry"]>(EMPTY_ENQUIRY);
   const [query, setQuery] = useState("");
-  const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
+  const [attachment, setAttachment] = useState<(ImageAttachment & { thumbUrl?: string }) | null>(null);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [showLines, setShowLines] = useState(false);
   const [notice, setNotice] = useState("");
   const [confirmingReset, setConfirmingReset] = useState(false);
+  // False until the mount effect has read the saved chat, so the greeting never overwrites it.
+  const [ready, setReady] = useState(false);
   const itemsRef = useRef(items);
   const enquiryRef = useRef(enquiry);
   const loadingRef = useRef(false);
@@ -69,19 +67,43 @@ export function AgentChat() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const jumpToEnd = useRef(false);
   const newChatRef = useRef<HTMLButtonElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { itemsRef.current = items; }, [items]);
   useEffect(() => { enquiryRef.current = enquiry; }, [enquiry]);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [items, loading]);
-  // The greeting's time is the browser's, set after hydration (F5). This is React's two-pass render for content only the browser has,
-  // which the lint rule can't tell apart from a needless effect.
+  useEffect(() => {
+    if (!ready) return; // the first render's greeting may be replaced by a restored chat at once (F1): it would use up the jump
+    endRef.current?.scrollIntoView({ behavior: jumpToEnd.current ? "instant" : "smooth", block: "end" });
+    jumpToEnd.current = false;
+  }, [ready, items, loading]);
+  // After a refresh the chat comes back from the tab (F1). Read after the first render, never in it: the server's page has only the
+  // greeting, and reading it during hydration would be React #418 again. A layout effect, so the swap lands before the next paint.
+  // This is React's two-pass render for content only the browser has, which the lint rule can't tell apart from a needless effect.
   /* eslint-disable react-hooks/set-state-in-effect */
   useLayoutEffect(() => {
-    setItems((current) => current.map((item) => ({ ...item, time: item.time || timeLabel() })));
+    const saved = readSavedChat(tabStore(), Date.now());
+    if (saved) {
+      // A reply cut off by the reload may still hold its session's turn on the server (session-queue.ts): the resend starts a new one.
+      sessionId.current = saved.unanswered ? newSessionId() : saved.sessionId;
+      nextId.current = saved.nextId;
+      shownIds.current = new Set(saved.shownIds);
+      jumpToEnd.current = true;
+      setEnquiry(saved.enquiry);
+      // Reloaded while Claire was replying: that reply is gone, so the chat says so as a failed reply would, with the words back in the box.
+      setItems(saved.unanswered ? [...saved.items, { id: nextId.current++, ...lostReply(Boolean(saved.unanswered.imageUrl), saved.enquiry.lines.length > 0) }] : saved.items);
+      setQuery(saved.draft);
+    } else {
+      // The greeting's time is the browser's, set after hydration (F5).
+      setItems((current) => current.map((item) => ({ ...item, time: item.time || timeLabel() })));
+    }
+    setReady(true);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (ready) saveChat(tabStore(), { sessionId: sessionId.current, items, enquiry, shownIds: [...shownIds.current] }, Date.now());
+  }, [ready, items, enquiry]);
   // The box grows with the message up to its max height, then scrolls. Empty, it stays one line (a narrow phone wraps the placeholder).
   useLayoutEffect(() => {
     const box = inputRef.current;
@@ -134,17 +156,7 @@ export function AgentChat() {
       }]);
     } catch {
       if (sessionId.current !== session) return;
-      // A photo that didn't get through gets its own line (owner, 2 Oct). Claire reads it as a plain statement, not a question,
-      // so the PHOTO_AGAIN guard can't stop her own resend ask next turn, and user and assistant turns keep alternating.
-      const photo = event.type === "image";
-      setItems((current) => [...current, {
-        id: nextId.current++, role: "assistant", time: timeLabel(), showContact: true, pdf: enquiryRef.current.lines.length > 0,
-        // No error tone (owner, 2026-09-30: a reply that gives up looks like a broken system): ask for a resend; the contact block shows below.
-        text: photo
-          ? "Sorry, that photo didn't come through. Could you send it again? Sia Huat sales can also help (details below)."
-          : "Sorry, my reply didn't come through. Could you send that again? Sia Huat sales can also help (details below).",
-        ...(photo ? { historyText: "That photo didn't come through on my side." } : {}),
-      }]);
+      setItems((current) => [...current, { id: nextId.current++, ...lostReply(event.type === "image", enquiryRef.current.lines.length > 0) }]);
     } finally {
       if (sessionId.current === session) {
         loadingRef.current = false;
@@ -160,10 +172,10 @@ export function AgentChat() {
     // counter under it says so (worked out from the box, so it goes once the text is short enough: F8's stale warning).
     if (text.length > MAX_MESSAGE_CHARS) return;
     if (attachment) {
-      const image = attachment;
+      const { thumbUrl, ...image } = attachment;
       setAttachment(null);
       setQuery("");
-      void send({ type: "image", image, ...(text ? { caption: text } : {}) }, { text, imageUrl: image.dataUrl });
+      void send({ type: "image", image, ...(text ? { caption: text } : {}) }, { text, imageUrl: image.dataUrl, thumbUrl });
       return;
     }
     if (!text) return;
@@ -196,6 +208,8 @@ export function AgentChat() {
         if (sessionId.current !== session) return;
         setAttachment(image);
         setNotice(""); // a good photo clears the warning a rejected one left (F8)
+        // The saved chat's small copy (F1), made after the photo so a phone never holds two full-size decodes at once.
+        void photoThumbnail(file).then((thumbUrl) => setAttachment((current) => (current?.dataUrl === image.dataUrl ? { ...current, thumbUrl } : current)));
       },
       () => { if (sessionId.current === session) setNotice("That photo couldn't be opened. Please try another one."); },
     );

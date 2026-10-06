@@ -127,8 +127,9 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
       stockLabel(card),
       card.source_url ?? "",
     ].filter(Boolean).join("\n")).join("\n\n");
-    // A photo that can't be drawn keeps the old line, so sales still know one was sent.
-    const photo = item.imageUrl ? await jpegOf(item.imageUrl, PHOTO_EDGE_PX).catch(() => null) : null;
+    // A photo that can't be drawn keeps the old line, so sales still know one was sent. A restored chat keeps only a thumbnail,
+    // or a "Photo sent" picture when it couldn't (saved-chat.ts): that one stays a line.
+    const photo = item.imageUrl && !item.imageUrl.startsWith("data:image/svg") ? await jpegOf(item.imageUrl, PHOTO_EDGE_PX).catch(() => null) : null;
     const body = conversationPdfText([item.imageUrl && !photo ? "[Product photo attached]" : "", item.text, cardText].filter(Boolean).join("\n\n"));
     const needsCanvasText = needsUnicodePdfRendering(body);
     const canvasScale = 2;

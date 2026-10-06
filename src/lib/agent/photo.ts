@@ -11,6 +11,8 @@ export const SEND_AS_IS_BYTES = 1_000_000;
 export const AS_IS_FALLBACK_BYTES = 3_000_000;
 /** The largest photo the picker takes; anything over SEND_AS_IS_BYTES is shrunk first. */
 export const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
+/** The saved chat's copy of a photo (saved-chat.ts): small enough that a tab's storage holds a long chat. */
+export const THUMB_EDGE = 320;
 
 /** The size a photo is shrunk to: at most `edge` (PHOTO_EDGE) on its longest side, never enlarged. */
 export function shrunkSize(width: number, height: number, edge = PHOTO_EDGE) {
@@ -43,10 +45,10 @@ export async function jpegOf(src: string, edge = PHOTO_EDGE, quality = 0.85) {
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-async function shrink(file: File) {
+async function shrink(file: File, edge = PHOTO_EDGE, quality = 0.85) {
   const url = URL.createObjectURL(file);
   try {
-    return await jpegOf(url);
+    return await jpegOf(url, edge, quality);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -65,3 +67,6 @@ export async function photoAttachment(file: File): Promise<ImageAttachment> {
     return asIs();
   }
 }
+
+/** A small JPEG of the photo for the chat's saved copy, or undefined when it can't be drawn (the copy then shows a placeholder). */
+export const photoThumbnail = (file: File) => shrink(file, THUMB_EDGE, 0.7).catch(() => undefined);
