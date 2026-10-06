@@ -1781,6 +1781,21 @@ test("a long list gets one round of lookups, then an answer", async () => {
   assert.ok(!noTools.bodies.some((body) => LIST_NOTE.test(JSON.stringify(body.messages))));
 });
 
+test("a pasted bullet list is a list turn too: one round of lookups, then an answer (r8 F7)", async () => {
+  // The message box keeps a paste's line breaks now (F7), so a "- " list arrives as lines, as a numbered list does.
+  const bullets = ["Please quote these:", "- stock pot 12QT", "- strainer for the pot", "- ladle 4oz", "- oyster knife"];
+  const search = (id: string, item: string) => ({ type: "tool_use", id, name: "search_catalogue", input: { queries: [item] } });
+  const threeItems = { ...toolCall("t1", "search_catalogue", {}), content: [search("t1", "stock pot"), search("t2", "strainer"), search("t3", "ladle")] } as unknown as Anthropic.Message;
+  const { client, bodies } = fakeClient([threeItems, answer({ message: "There are 4 items on your list. Which size of stock pot do you need? Next: the ladle." })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: bullets.join("\n") } }), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual(bodies.map(choice), ["auto", "none"]);
+  assert.match(lastMessage(bodies[1]), LIST_NOTE);
+  // The same words run into one line, as the old one-line box sent them, read as no list: the tools went on.
+  const oneLine = fakeClient([threeItems, answer({ message: "Which size of stock pot do you need?" })]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: bullets.join(" ") } }), deps: deps(), client: oneLine.client, model: "claude-sonnet-5" });
+  assert.deepEqual(oneLine.bodies.map(choice), ["auto", "auto"]);
+});
+
 test("a recommendation that offers to add a product the customer hasn't picked is sent as it is", async () => {
   // exam 3, c09-stress T1: the permission nudge turned "which one is better?" into "How many Safico tongs do you need?".
   const message = "For cooking I'd go with the Safico, it runs on gas. Want me to add the Safico one?";

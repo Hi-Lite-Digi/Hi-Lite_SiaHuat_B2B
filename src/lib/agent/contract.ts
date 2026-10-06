@@ -5,11 +5,15 @@ import { enquiryReceiptTotals } from "@/lib/conversation-export";
 
 /** The most product cards one reply shows. */
 const MAX_CARDS = 5;
+/** The longest message the chat sends (r8 F7: a 616-character brief was cut at 500 and lost its S$10 budget). */
+export const MAX_MESSAGE_CHARS = 2_000;
+/** A history entry's cap: room for "[photo] " and a voice note's mark before a full message. */
+export const HISTORY_ENTRY_CHARS = MAX_MESSAGE_CHARS + 100;
 
 export const agentEventSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(500), voice: z.boolean().optional(), chip: z.boolean().optional() }),
+  z.object({ type: z.literal("text"), text: z.string().trim().min(1).max(MAX_MESSAGE_CHARS), voice: z.boolean().optional(), chip: z.boolean().optional() }),
   z.object({ type: z.literal("select_product"), stockId: z.string().trim().min(1).max(100) }),
-  z.object({ type: z.literal("image"), image: imageAttachmentSchema, caption: z.string().trim().max(500).optional() }),
+  z.object({ type: z.literal("image"), image: imageAttachmentSchema, caption: z.string().trim().max(MAX_MESSAGE_CHARS).optional() }),
 ]);
 
 export const enquiryEchoLineSchema = z.object({
@@ -22,7 +26,7 @@ export const agentRequestSchema = z.object({
   event: agentEventSchema,
   history: z.array(z.object({
     role: z.enum(["user", "assistant"]),
-    content: z.string().trim().min(1).max(2_000),
+    content: z.string().trim().min(1).max(HISTORY_ENTRY_CHARS),
   })).max(30).default([]),
   enquiry: z.array(enquiryEchoLineSchema).max(60).default([]),
   shownProductIds: z.array(z.string().trim().min(1).max(100)).max(100).default([]),
@@ -122,17 +126,17 @@ export function parseCardsNote(content: string): ShownCard[] {
 /** A chat bubble as the browser keeps it. historyText, when set, is what Claude reads instead of the shown text. */
 export type ChatBubble = { role: "user" | "assistant"; text: string; cards?: Product[]; imageUrl?: string; tap?: boolean; chip?: boolean; historyText?: string };
 
-/** The history the browser sends: the last 30 bubbles, each capped at 2,000 characters with the cards note kept. */
+/** The history the browser sends: the last 30 bubbles, each capped at HISTORY_ENTRY_CHARS with the cards note kept. */
 export function historyFor(items: ChatBubble[]) {
   return items.slice(-30).map((item) => {
-    // The text is trimmed rather than the cards note, so the note survives the 2,000-character cap.
+    // The text is trimmed rather than the cards note, so the note survives the cap.
     const note = item.role === "assistant" ? cardsNote(item.cards ?? []) : "";
     const said = item.historyText ?? item.text;
     return {
       role: item.role,
       content: item.role === "user"
-        ? (item.tap ? `${TAP_PREFIX} ${item.text}` : item.chip ? `${CHIP_PREFIX} ${item.text}` : item.imageUrl ? `${PHOTO_PREFIX} ${item.text || NO_CAPTION}` : item.text).slice(0, 2_000)
-        : `${said.slice(0, Math.max(0, 2_000 - note.length))}${note}`.slice(0, 2_000),
+        ? (item.tap ? `${TAP_PREFIX} ${item.text}` : item.chip ? `${CHIP_PREFIX} ${item.text}` : item.imageUrl ? `${PHOTO_PREFIX} ${item.text || NO_CAPTION}` : item.text).slice(0, HISTORY_ENTRY_CHARS)
+        : `${said.slice(0, Math.max(0, HISTORY_ENTRY_CHARS - note.length))}${note}`.slice(0, HISTORY_ENTRY_CHARS),
     };
   }).filter((item) => item.content.trim().length > 0);
 }

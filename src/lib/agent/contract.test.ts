@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
-import { CHIP_PREFIX, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, historyFor, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote, type ChatBubble } from "./contract";
+import { CHIP_PREFIX, HISTORY_ENTRY_CHARS, MAX_MESSAGE_CHARS, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, historyFor, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote, type ChatBubble } from "./contract";
 import { product } from "./testing";
 
 test("a card tap is a product choice, never text", () => {
@@ -16,9 +16,25 @@ test("a card tap is a product choice, never text", () => {
 test("request limits are enforced", () => {
   const ok = (value: unknown) => agentRequestSchema.safeParse(value).success;
   assert.equal(ok({ sessionId: "short", event: { type: "text", text: "hi" } }), false);
-  assert.equal(ok({ sessionId: "session-1234", event: { type: "text", text: "x".repeat(501) } }), false);
+  assert.equal(ok({ sessionId: "session-1234", event: { type: "text", text: "x".repeat(MAX_MESSAGE_CHARS + 1) } }), false);
   assert.equal(ok({ sessionId: "session-1234", event: { type: "text", text: "hi" }, enquiry: [{ stockId: "A", quantity: 0 }] }), false);
   assert.equal(ok({ sessionId: "session-1234", event: { type: "text", text: "hi" }, enquiry: [{ stockId: "A", quantity: 2 }] }), true);
+});
+
+test("a long pasted brief goes through whole, as text or a photo's caption, and stays whole in the history (r8 F7)", () => {
+  // Stress test F7 (3 Oct): a 616-character brief was cut at 500 and lost its last clause, the S$10 budget.
+  const budget = "CRITICAL REQUIREMENT: no items over S$10 each.";
+  const brief = `${"I am sourcing tableware for a busy restaurant. ".repeat(50).slice(0, MAX_MESSAGE_CHARS - budget.length)}${budget}`;
+  assert.equal(brief.length, 2_000);
+  const parse = (event: unknown, history: unknown[] = []) => agentRequestSchema.safeParse({ sessionId: "session-1234", event, history }).success;
+  const image = { dataUrl: "data:image/png;base64,AA", mimeType: "image/png", name: "plate.png" };
+  assert.equal(parse({ type: "text", text: brief }), true);
+  assert.equal(parse({ type: "text", text: `${brief}x` }), false);
+  assert.equal(parse({ type: "image", image, caption: brief }), true);
+  assert.equal(parse({ type: "image", image, caption: `${brief}x` }), false);
+  const history = historyFor([{ role: "user", text: brief, imageUrl: image.dataUrl }, { role: "assistant", text: "Here are some plates." }]);
+  assert.equal(history[0].content, `${PHOTO_PREFIX} ${brief}`);
+  assert.equal(parse({ type: "text", text: "and bowls" }, history), true);
 });
 
 test("an enquiry echo may carry up to 60 lines", () => {
@@ -120,7 +136,7 @@ test("the history the browser sends: the last 30 bubbles, each marked and capped
     { role: "user", text: "Folding tables", chip: true },
     { role: "user", text: "Bro then what is this", imageUrl: "data:image/png;base64,AA" },
     { role: "user", text: "", imageUrl: "data:image/png;base64,AA" },
-    { role: "assistant", text: "x".repeat(2_100), cards: [torch] },
+    { role: "assistant", text: "x".repeat(HISTORY_ENTRY_CHARS + 100), cards: [torch] },
     { role: "assistant", text: "" },
   ];
   const note = cardsNote([torch]);
@@ -131,7 +147,7 @@ test("the history the browser sends: the last 30 bubbles, each marked and capped
     { role: "user", content: `${CHIP_PREFIX} Folding tables` },
     { role: "user", content: `${PHOTO_PREFIX} Bro then what is this` },
     { role: "user", content: `${PHOTO_PREFIX} ${NO_CAPTION}` },
-    { role: "assistant", content: `${"x".repeat(2_000 - note.length)}${note}` },
+    { role: "assistant", content: `${"x".repeat(HISTORY_ENTRY_CHARS - note.length)}${note}` },
   ]);
 });
 

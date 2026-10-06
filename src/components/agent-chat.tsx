@@ -1,14 +1,13 @@
 // src/components/agent-chat.tsx
 "use client";
 
-import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ChangeEvent, ClipboardEvent, FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ExternalLink, FileDown, ImagePlus, LoaderCircle, Mic, Send, Square, SquarePen, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { agentReplySchema, cardsToPick, historyFor, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { MAX_MESSAGE_CHARS, agentReplySchema, cardsToPick, historyFor, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { abortAfter, isNewChatCommand, newChatWarning } from "@/lib/agent/new-chat";
 import { MAX_PHOTO_BYTES, photoAttachment } from "@/lib/agent/photo";
 import { downloadEnquiryPdf } from "@/lib/enquiry-pdf";
@@ -35,6 +34,8 @@ const GREETING = "Hi, I'm Claire from Sia Huat 👋 What are you looking for tod
 const NEW_CHAT_GREETING = "New chat started. What are you looking for today? You can send me a photo too.";
 const EMPTY_ENQUIRY: AgentReply["enquiry"] = { lines: [], totals: { lineCount: 0, quantitiesByUom: [], grandTotal: 0 } };
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+/** The counter under the box shows from here, so a long paste is never cut or refused by surprise (F7). */
+const COUNTER_FROM = MAX_MESSAGE_CHARS - 500;
 
 const timeLabel = () => new Intl.DateTimeFormat("en-SG", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Singapore" }).format(new Date());
 const newSessionId = () => `agent-${crypto.randomUUID()}`;
@@ -67,7 +68,7 @@ export function AgentChat() {
   const shownIds = useRef(new Set<string>());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const newChatRef = useRef<HTMLButtonElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -81,8 +82,16 @@ export function AgentChat() {
     setItems((current) => current.map((item) => ({ ...item, time: item.time || timeLabel() })));
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
+  // The box grows with the message up to its max height, then scrolls. Empty, it stays one line (a narrow phone wraps the placeholder).
+  useLayoutEffect(() => {
+    const box = inputRef.current;
+    if (!box) return;
+    box.style.height = "auto";
+    if (query) box.style.height = `${box.scrollHeight}px`;
+  }, [query]);
 
   const latestAssistantId = [...items].reverse().find((item) => item.role === "assistant")?.id;
+  const typed = query.trim().length;
   const resetWarning = newChatWarning(items.some((item) => item.role === "user"), enquiry.totals);
 
   async function send(event: AgentEvent, bubble: Omit<ChatItem, "id" | "role" | "time">) {
@@ -146,7 +155,10 @@ export function AgentChat() {
 
   function submit(event?: FormEvent) {
     event?.preventDefault();
-    const text = query.trim().slice(0, 500);
+    const text = query.trim();
+    // Never cut (F7: the cut-off end of a 616-character brief held the budget): the words stay in the box to shorten, and the
+    // counter under it says so (worked out from the box, so it goes once the text is short enough: F8's stale warning).
+    if (text.length > MAX_MESSAGE_CHARS) return;
     if (attachment) {
       const image = attachment;
       setAttachment(null);
@@ -159,6 +171,15 @@ export function AgentChat() {
     // "start over", "reset", "new chat" typed on their own do what the New chat button does, asking first when there's anything to lose.
     if (isNewChatCommand(text)) return resetWarning ? setConfirmingReset(true) : reset();
     void send({ type: "text", text }, { text });
+  }
+
+  // Enter sends and Shift+Enter starts a new line; an Enter that picks a word in a Chinese or Japanese keyboard does neither
+  // (Safari ends the composition before that keydown, so only its 229 key code tells). While Claire replies Enter does nothing
+  // and the words stay, as in the one-line box before.
+  function sendOnEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!loading) submit();
   }
 
   function pickCard(card: Product) {
@@ -180,7 +201,7 @@ export function AgentChat() {
     );
   }
 
-  function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const file = [...event.clipboardData.items].find((entry) => entry.kind === "file" && entry.type.startsWith("image/"))?.getAsFile();
     if (file) {
       event.preventDefault();
@@ -215,7 +236,7 @@ export function AgentChat() {
         try {
           const response = await fetch("/api/transcribe", { method: "POST", body: form, signal: abortAfter(40_000, chatAbort.current.signal) });
           const body = await response.json().catch(() => null) as { transcript?: string } | null;
-          const transcript = body?.transcript?.trim().slice(0, 500) ?? "";
+          const transcript = body?.transcript?.trim().slice(0, MAX_MESSAGE_CHARS) ?? "";
           if (sessionId.current !== session) return;
           if (!response.ok || !transcript) throw new Error("VOICE_FAILED");
           await send({ type: "text", text: transcript, voice: true }, { text: `🎤 ${transcript}` });
@@ -351,13 +372,14 @@ export function AgentChat() {
         <Button type="button" size="icon" variant="ghost" aria-label="Remove photo" onClick={() => setAttachment(null)} className="size-8 rounded-full"><X className="size-4" /></Button>
       </div>}
       <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" aria-label="Choose product image" onChange={(event: ChangeEvent<HTMLInputElement>) => { acceptImage(event.target.files?.[0]); event.target.value = ""; }} />
-      <form onSubmit={submit} className="flex min-w-0 gap-2">
+      <form onSubmit={submit} className="flex min-w-0 items-end gap-2">
         <Button type="button" size="icon" variant="ghost" aria-label="Add a product photo" onClick={() => fileInputRef.current?.click()} className="size-12 shrink-0 rounded-full"><ImagePlus className="size-5" /></Button>
-        <Input ref={inputRef} aria-label="Product question" value={query} maxLength={500} onChange={(event) => setQuery(event.target.value)} onPaste={handlePaste} placeholder={recording ? "Recording… tap stop when done" : "Type a message…"} disabled={recording || transcribing} className="h-12 min-w-0 rounded-full border-0 bg-[#f3f3f0] px-4" />
+        <textarea ref={inputRef} aria-label="Product question" rows={1} enterKeyHint="send" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={sendOnEnter} onPaste={handlePaste} placeholder={recording ? "Recording… tap stop when done" : "Type a message…"} disabled={recording || transcribing} className="max-h-36 min-h-12 min-w-0 flex-1 resize-none rounded-3xl border-0 bg-[#f3f3f0] px-4 py-3 text-base leading-6 outline-none placeholder:truncate placeholder:text-muted-foreground focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm" />
         {query.trim() || attachment
           ? <Button type="submit" aria-label="Send question" disabled={loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button>
           : <Button type="button" aria-label={recording ? "Stop voice recording" : "Record voice note"} disabled={loading || transcribing} onClick={() => void toggleRecording()} size="icon" className="size-12 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]">{transcribing ? <LoaderCircle className="size-4 animate-spin" /> : recording ? <Square className="size-4 fill-current" /> : <Mic className="size-5" />}</Button>}
       </form>
+      {typed > COUNTER_FROM && <p role={typed > MAX_MESSAGE_CHARS ? "alert" : undefined} className={`mt-1 pr-16 text-right text-[11px] ${typed > MAX_MESSAGE_CHARS ? "font-semibold text-red-600" : "text-[#667a74]"}`}>{typed > MAX_MESSAGE_CHARS ? "Too long to send: please shorten it, or send it in two parts. " : ""}{typed.toLocaleString("en-SG")} / {MAX_MESSAGE_CHARS.toLocaleString("en-SG")}</p>}
     </div>
   </div>;
 }
