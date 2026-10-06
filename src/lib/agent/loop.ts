@@ -11,7 +11,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  quotedBefore, withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -321,6 +321,8 @@ type Stop = "which" | "ask" | "answer" | "keep" | "gone";
 const STUCK: Partial<Record<string, Stop>> = { NOT_PICKED: "answer", PICK_UNCLEAR: "which", PICK_UNCONFIRMED: "which", PICK_UNCHECKED: "which", REMOVE_REFUSED: "keep", SWAP_NOT_DONE: "keep" };
 // The same code, action and number refused again (another number is a new call).
 const BY_KEY: Partial<Record<string, Stop>> = { PICKED_OTHER: "which", QTY_NOT_FOR_ITEM: "which" };
+// "Do not add anything" (r8 R03), "don't add yet", "dun add", "no need to add".
+const noAddAsked = /\b(?:do\s+not|don['’]?t|dun|no\s+need(?:\s+to)?)\s+add\b/i;
 
 /**
  * Why the tool rounds stop when only the customer can unblock update_enquiry: every call refused again (STUCK, BY_KEY; "which"
@@ -328,13 +330,15 @@ const BY_KEY: Partial<Record<string, Stop>> = { PICKED_OTHER: "which", QTY_NOT_F
  * (exam 3, c09-stress T7: three update rounds, 13.4 s). A swap's held remove waits on its add, so the add's error decides. Errors
  * another call can fix (OVER_STOCK, UNIT_MISMATCH, a missing stock_id, a quantity sent in pieces for cartons) leave the tools on,
  * and so does any other tool call in the round. A round that only looks up again codes an earlier round found gone ("gone") has
- * nothing left to learn. before: the codes refused or kept, the calls refused, and the codes get_product found gone, before this round.
+ * nothing left to learn, when the customer said not to add: otherwise an add they asked for may still follow (r8 review).
+ * before: the codes refused or kept, the calls refused, and the codes get_product found gone, before this round.
  */
 function stopNote(
   done: ToolCallDone[], ctx: TurnContext, before: { codes: ReadonlySet<string>; keys: ReadonlySet<string>; gone: ReadonlySet<string> }, picked: (code: string) => boolean,
 ): Stop | null {
   // r8 R03: after its second look at 04-00820 Claude sent update_enquiry for "placeholder", though the customer said not to add.
-  if (done.length && done.every((call) => call.name === "get_product" && call.error === "LISTING_GONE" && before.gone.has(lookupCode(call.input)))) return "gone";
+  if (done.length && noAddAsked.test(ctx.currentText ?? "")
+    && done.every((call) => call.name === "get_product" && call.error === "LISTING_GONE" && before.gone.has(lookupCode(call.input)))) return "gone";
   if (!done.length || done.some((call) => call.name !== "update_enquiry" || !call.error)) return null;
   const judged = done.some((call) => call.error !== "SWAP_NOT_DONE") ? done.filter((call) => call.error !== "SWAP_NOT_DONE") : done;
   const stuck = judged.map((call) => (before.codes.has(updateCode(call.input)) && STUCK[call.error!])
@@ -463,6 +467,8 @@ export async function runAgentTurn(input: {
     // attaching it, so the nudge and the review both get the earlier replies' cards: an unknown card would count as the confirm
     // step (exam 3, c09-stress T1).
     const earlierCards = picks.replies.flatMap((reply) => reply.cards);
+    const knownBefore = (code: string) => [...request.shownProductIds, ...earlierCards.map((card) => card.code), ...request.enquiry.map((line) => line.stockId)]
+      .some((known) => same(known, code));
     // What the work deadline cut, if anything, and how many tool calls finished this turn. A search the cut left running may land
     // while Claude answers: only the searches before the cut back a claim, as Claude never saw the rest.
     let cut: "call" | "tools" | null = null;
@@ -533,7 +539,8 @@ export async function runAgentTurn(input: {
         slowestTools = Math.max(slowestTools, performance.now() - toolsStarted);
         updateResults.push(...done.filter((call) => call.name === "update_enquiry").map((call) => `${updateAction(call.input)}:${call.error ?? "ok"}`));
         missingCodes.push(...done.flatMap((call) => (call.name === "get_product" && call.error ? [String((call.input as { stock_id?: unknown }).stock_id ?? "")].filter(Boolean) : [])));
-        mostLookups = Math.max(mostLookups, done.filter((call) => call.name === "search_catalogue" || call.name === "get_product").length);
+        // A get_product for a code shown or on the enquiry before this turn re-checks it ("what are the prices of these 4?"): no new item.
+        mostLookups = Math.max(mostLookups, done.filter((call) => call.name === "search_catalogue" || (call.name === "get_product" && !knownBefore(lookupCode(call.input)))).length);
         for (const call of done) if (call.name === "get_product" && call.error === "LISTING_GONE") lookedGone.add(lookupCode(call.input));
         messages.push({ role: "assistant", content: response.content }, { role: "user", content: results });
         stopped = stopped ?? stopNote(done, ctx, before, picked);
@@ -684,9 +691,11 @@ export async function runAgentTurn(input: {
     // An answer to a list of more than three items, from the customer's numbered list or a round that looked four or more up, points
     // once in the chat to a formal quote from Sia Huat sales, with the contact (r8 C1: both M03 runs left it out).
     const listAnswer = (listTurn || mostLookups > LIST_ITEMS_PER_TURN) && Math.max(listItemCount(truthful), review.cards.length) > LIST_ITEMS_PER_TURN;
-    const quoted = listAnswer ? withListQuote(truthful, earlier.replies ?? []) : null;
-    const showContact = final.show_contact || quoted !== null;
-    const cleaned = customerMessage(withoutRepeatedCloser(dropRepeatedPitch(quoted ?? truthful, earlier, showContact), earlier.previousMessage, ctx.changes.length > 0), chatCodes);
+    const quoteDue = listAnswer && !quotedBefore(earlier.replies ?? []);
+    const showContact = final.show_contact || quoteDue;
+    // Claude's own pointer can go as a repeated pitch: the line, which is no pitch, stands in for it then (r8 review).
+    const pitched = dropRepeatedPitch(truthful, earlier, showContact);
+    const cleaned = customerMessage(withoutRepeatedCloser(quoteDue ? withListQuote(pitched) : pitched, earlier.previousMessage, ctx.changes.length > 0), chatCodes);
     // Never a blank bubble: a reply of only spaces, invisible format characters or lone marks (a zero-width space, a direction mark,
     // an escaped space decoded after the trim) gets past every check above (r7).
     const blank = !/[^\s\p{C}\p{M}]/u.test(cleaned.message);

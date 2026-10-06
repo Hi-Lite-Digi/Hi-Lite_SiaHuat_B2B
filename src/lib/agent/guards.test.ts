@@ -8,7 +8,7 @@ import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withListQuote, withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  quotedBefore, withListQuote, withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -343,18 +343,18 @@ test("a reply saying nothing has reached Sia Huat yet keeps its route to order (
 
 test("a list answer points once in the chat to a formal quote from Sia Huat sales (r8 C1: M03 x2 left it out)", () => {
   const list = "1. MC11 - $84.31\n2. 07-00019 - $37.52\n3. R52232D - $9.08\n4. 08-00840 - $18.26\nWant me to add any of these?";
-  assert.equal(withListQuote(list, []), `${list}\n\n${LIST_QUOTE_LINE}`);
+  assert.equal(withListQuote(list), `${list}\n\n${LIST_QUOTE_LINE}`);
   // Claude's own pointer, either way round, isn't said twice.
   for (const own of [`${list} You can send this list straight to Sia Huat sales for a formal quote.`, `${list} For a formal quote on the whole list, send it to Sia Huat sales.`]) {
-    assert.equal(withListQuote(own, []), own);
+    assert.equal(withListQuote(own), own);
   }
-  // An earlier reply gave it: nothing is added, and the contact isn't forced (null).
-  assert.equal(withListQuote(list, ["Here are the first six.", `Nothing added. ${LIST_QUOTE_LINE}`]), null);
+  // An earlier reply gave it: nothing is added, and the contact isn't forced.
+  assert.equal(quotedBefore(["Here are the first six.", `Nothing added. ${LIST_QUOTE_LINE}`]), true);
   // A GST estimate's "Sia Huat's quote" is no pointer to sales.
-  assert.equal(withListQuote(list, ["About $50.92 with GST (GST $4.20); the checkout or Sia Huat's quote shows the exact amount."]), `${list}\n\n${LIST_QUOTE_LINE}`);
+  assert.equal(quotedBefore(["About $50.92 with GST (GST $4.20); the checkout or Sia Huat's quote shows the exact amount."]), false);
   // A Chinese reply keeps its language: the contact block alone points to sales.
   const chinese = "1. MC11 - $84.31\n2. 07-00019 - $37.52\n3. R52232D - $9.08\n4. 08-00840 - $18.26\n需要加入哪几样？";
-  assert.equal(withListQuote(chinese, []), chinese);
+  assert.equal(withListQuote(chinese), chinese);
 });
 
 test("a closing 'Anything else?' is kept right after a change, but not with no change or twice running (r4 c09-persona)", () => {
@@ -682,6 +682,8 @@ test("honest or conditional wording is not a claim", () => {
     "Just say if you would like them added.",
     "If you'd like the plates added too, tell me how many.",
     "Let me know whether you need the torch removed.",
+    "Let me know if you'd like the plates to be added.",
+    "Say which ones you need added.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
     assert.equal(withoutEnquiryClaims(message, { lines: [], changes: [], seen: shop }), message);
@@ -828,10 +830,27 @@ test("real claims and unconditional promises are still caught", () => {
     "Let me know if you'd like the plates added; I added the Safico torch.",
     "The torches you'd like added are on your enquiry now.",
     "Let me know which ones you'd like added - I've added the Safico torch already.",
+    // An offer's words never swallow the claim's own verb or the next clause (r8 review).
+    "Got what you need added: 2 Safico torches.",
+    "Sorted what you need added - 2 Safico torches.",
+    "What you need is added: 2 Safico torches.",
+    "What you'd like is now added: 2 Safico torches.",
+    "Which ones you need have been added: the Safico torch.",
+    "Which ones you need are added: the Safico torch and the Rooster plate.",
+    "If you like these I've added 2 Safico torches.",
+    "How many you need is added: 2 Safico torches.",
+    "Let me know which ones you'd like and I've added the Safico torch.",
+    "Let me know which plates you'd like and I added 2 Safico torches.",
+    "Tell me how many plates you need and I've added the Safico torch for now.",
+    "If you'd like the plates too I added 2 Safico torches.",
     "Sorted the hiccup adding these and added 2 Safico torches.",
     // A closing "confirmed once more" set off by dashes is no condition either.
     "Adding 1 Safico torch now - confirmed once more - it's the BTS-8026D.",
   ]) assert.equal(toasterClaims(message).length, 1, message);
+  // The torch is on the enquiry and no removal ran: a removal said around an offer's words is still false (r8 review).
+  for (const message of ["What you'd like is removed: the Safico torch.", "Which one you need is removed now, the Safico torch."]) {
+    assert.equal(claimIssues(message, { lines: [line("BTS-8026D", 2)] }).length, 1, message);
+  }
   // exam 3, c02-A T12 echoed "That change hasn't been made yet" after "what the fk": the repair says so only for an asked change.
   assert.match(toasterClaims("Confirm and I'll get 2 added.")[0], /If the customer asked for that change, say it hasn't been made yet .*; if they didn't ask for one, just leave that sentence out and answer what they said\.$/);
 });

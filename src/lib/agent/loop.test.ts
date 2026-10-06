@@ -2467,6 +2467,34 @@ test("a list answer of more than three items points once in the chat to a formal
   assert.deepEqual([single.message, single.showContact], [options, false]);
 });
 
+test("Claude's own quote pointer dropped as a repeated pitch gives way to the line, with the contact (r8 review)", async () => {
+  for (const [said, own, showContact] of [
+    ["Yes. For delivery charges, please contact Sia Huat sales.", "Contact Sia Huat sales for a formal quote on the whole list.", false],
+    ["You can download the PDF of your enquiry from the panel and send it along.", "You can email this list to Sia Huat sales for a formal quote.", true],
+    ["You can download the PDF of your enquiry from the panel and send it along.", "Download the PDF and send it to Sia Huat sales for a formal quote.", true],
+  ] as const) {
+    const { client } = fakeClient([
+      toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message: `${sixLines}\n${own}`, card_ids: six.map((item) => item.stock_id), show_contact: showContact }),
+    ]);
+    const history = [{ role: "user" as const, content: "do you deliver?" }, { role: "assistant" as const, content: said }];
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems }, history }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
+    assert.deepEqual([reply.message, reply.showContact], [`${sixLines}\n\n${LIST_QUOTE_LINE}`, true], own);
+  }
+});
+
+test("a price check of four cards shown before is no list: no quote line and no forced contact (r8 review)", async () => {
+  const four = six.slice(0, 4);
+  const history = [{ role: "user" as const, content: "gloves and liners" }, { role: "assistant" as const, content: `Here are four options.${cardsNote(four)}` }];
+  const message = four.map((item, i) => `${i + 1}. ${item.name} - $${item.list_price.toFixed(2)}`).join("\n");
+  const { client, bodies } = fakeClient([toolRound(four.map((item) => ["get_product", { stock_id: item.stock_id }])), answer({ message })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "what are the prices of these 4?" }, history, shownProductIds: four.map((item) => item.stock_id) }),
+    deps: fakeDeps(six), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual([reply.message, reply.showContact], [message, false]);
+});
+
 test("an honest closing offer to add goes out with no nudge and no repair (r8 M03 run 2)", async () => {
   for (const offer of ["Let me know if you'd like any of these added.", "Let me know which ones you'd like added."]) {
     const { client, bodies } = fakeClient([
@@ -2631,4 +2659,18 @@ test("a removed listing looked up again ends the tool rounds, so the next call a
   const online = fakeClient([lookUpChiller(), answer({ message: "I couldn't confirm 04-00820 on the store just now." })]);
   await runAgentTurn({ request: { ...chillerAsked, enquiry: [{ stockId: "04-00820", quantity: 1 }] }, deps: chillerGone(), client: online.client, model: "claude-sonnet-5" });
   assert.deepEqual(online.bodies.map(choice), ["auto", "auto"]);
+});
+
+test("a lone second look at a removed listing keeps the tools when the customer didn't say not to add (r8 review)", async () => {
+  for (const text of ["Add 2 of 970S please, and what is 04-00820?", "add 2 pcs 04-00820 and 2 pcs 970S"]) {
+    const { client, bodies } = fakeClient([
+      toolRound([["get_product", { stock_id: "04-00820" }], ["get_product", { stock_id: "970S" }]]),
+      lookUpChiller(),
+      toolCall("t2", "update_enquiry", { action: "add", stock_id: "970S", quantity: 2 }),
+      answer({ message: "Got it: 2 Kitchen Blow Torch 970S. I couldn't confirm 04-00820 on the store just now.", show_contact: true }),
+    ]);
+    const reply = await checkedTurn({ request: request({ event: { type: "text", text } }), deps: chillerGone(), client, model: "claude-sonnet-5" });
+    assert.deepEqual(bodies.map(choice), ["auto", "auto", "auto", "none"], text);
+    assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2]], text);
+  }
 });
