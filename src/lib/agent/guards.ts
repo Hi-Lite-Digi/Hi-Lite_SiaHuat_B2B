@@ -6,7 +6,7 @@ import { honestManualHandoff } from "@/lib/honest-handoff";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
-import { withGstCents } from "./enquiry";
+import { listItemCount, withGstCents } from "./enquiry";
 import type { CheckedProduct } from "./facts";
 import { codePattern, hits, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -1110,6 +1110,9 @@ export function permissionCodes(answer: FinalAnswer, seen: ReadonlyMap<string, C
 const promiseLater = /\b(?:get|come) back to you\b|\bcircle back\b|\bfollow up (?:with you )?later\b/i;
 export const PROMISE_LATER_ISSUE = "You only reply when the customer writes, so don't promise to get back to them. Give what you have now and say what comes next.";
 const UNKNOWN_CARD_ISSUE_PREFIX = "card_ids must come from a tool result";
+// A list answer gives each item its own line: 12 codes ran 837 characters, and the repair still left 690 (r8 R03).
+const LONG_REPLY = "Keep the reply within 600 characters";
+const longListAnswer = (message: string) => listItemCount(message) >= 4 && message.length <= 1_000;
 
 export function reviewAnswer(
   answer: FinalAnswer,
@@ -1124,7 +1127,8 @@ export function reviewAnswer(
   const ids = [...new Set(answer.card_ids)];
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn or shown earlier in this chat; not found: ${unknown.join(", ")}.`);
-  if (ids.length > 5) style.push("Show at most 5 cards.");
+  // A list answer's cards are its first items; the message names the rest (r8 R03: 12 card_ids cost a repair).
+  if (ids.length > 5 && !longListAnswer(answer.message)) style.push("Show at most 5 cards.");
   const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A long chip or a 'Yes, add it' chip (the confirm step the owner
   // ruled out; 'Add more items' is not) is dropped alone, and a fourth chip moves up. A chip with a number or amount among the
@@ -1171,8 +1175,8 @@ export function reviewAnswer(
   // with the earlier cards, as the loop's nudge is: a recommendation naming an earlier card it doesn't attach names a product
   // (exam 3, c09-stress T1).
   const confirmStep = asksConfirmStep(answer, seen, turn.picked, turn.earlierCards);
-  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }).flatMap((issue) => (!issue.startsWith(CHOOSE_FIRST) ? [issue]
-    : !/\badd\b/i.test(answer.message) || said.some((s) => asksToShow.test(s)) ? [NO_SHOW_PERMISSION_ISSUE] : [])));
+  style.push(...replyStyleIssues({ message: answer.message, products: cards, selectedProduct: null }).flatMap((issue) => (issue.startsWith(LONG_REPLY) && longListAnswer(answer.message) ? []
+    : !issue.startsWith(CHOOSE_FIRST) ? [issue] : !/\badd\b/i.test(answer.message) || said.some((s) => asksToShow.test(s)) ? [NO_SHOW_PERMISSION_ISSUE] : [])));
   if (confirmStep) style.push(NO_PERMISSION_ISSUE);
   if (promiseLater.test(answer.message)) style.push(PROMISE_LATER_ISSUE);
   if (endsMidSentence(answer.message)) style.push(MID_SENTENCE_ISSUE);

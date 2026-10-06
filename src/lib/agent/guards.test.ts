@@ -1852,3 +1852,22 @@ test("an 'all found' claim is said truthfully when a code the reply names or sho
     assert.equal(withoutAllFoundClaims(message, ["04-00820"]), message);
   }
 });
+
+test("a list answer of 4 or more items isn't sent back for its length or its cards (r8 R03: 837 characters and 12 card_ids)", () => {
+  const codes = Array.from({ length: 12 }, (_, i) => `CODE-${i + 1}`);
+  const listed = new Map<string, CheckedProduct>(codes.map((code) => [code, { product: product({ stock_id: code }), verified: true }]));
+  const review = (message: string, card_ids: string[] = []) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, listed, allowed);
+  const tooLong = (message: string) => review(message).style.some((issue) => issue.startsWith("Keep the reply within 600 characters"));
+  // The list run inline, as in 5 of the 10 numbered-list replies in past runs.
+  const inline = `Here are the four: ${[1, 2, 3, 4].map((n) => `${n}) CODE-${n} - Stainless steel gastronorm pan with lid, 1/1 size, 150mm deep, heavy gauge, dishwasher safe, stackable for hot or cold holding on a buffet line or in a bain-marie`).join(" ")} None added yet.`;
+  assert.ok(inline.length > 600 && inline.length <= 1_000, String(inline.length));
+  assert.equal(tooLong(inline), false);
+  // 12 card_ids under a 12-line list: no repair, and the first 5 are shown.
+  const twelve = review(`Here are all 12:\n${codes.map((code, i) => `${i + 1}. ${code} - Product ${i + 1}`).join("\n")}\nNone added yet.`, codes);
+  assert.ok(!twelve.style.includes("Show at most 5 cards."));
+  assert.equal(twelve.cards.length, 5);
+  // Not a list answer: 7 cards under a plain reply, a plain 700-character reply, and a list past 1,000 characters.
+  assert.ok(review("Here are the closest matches I found.", codes.slice(0, 7)).style.includes("Show at most 5 cards."));
+  assert.ok(tooLong("A long reply about the steamers. ".repeat(22)));
+  assert.ok(tooLong(`${inline}\n${"More words here. ".repeat(30)}`));
+});
