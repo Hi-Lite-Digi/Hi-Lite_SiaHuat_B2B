@@ -52,6 +52,15 @@ test("reply schema accepts the server's reply shape", () => {
   assert.equal(reply.provider, "anthropic");
 });
 
+test("a reply with six cards parses in the browser, and one with seven does not (r8 R02)", () => {
+  const ok = (count: number) => agentReplySchema.safeParse({
+    message: "Here they are.", cards: Array.from({ length: count }, (_, i) => product({ stock_id: `C${i}` })), chips: [], showContact: false, provider: "anthropic",
+    enquiry: { lines: [], totals: { lineCount: 0, quantitiesByUom: [], grandTotal: 0 } },
+  }).success;
+  assert.equal(ok(6), true);
+  assert.equal(ok(7), false);
+});
+
 test("the browser keeps its own copy of lines the server could not re-check", () => {
   const torch = { item: "TORCH", code: "970S", pricePerItem: 31.31, quantity: 2, total: 62.62, uom: "PC" };
   const pan = { item: "PAN", code: "PAN-1", pricePerItem: 10.1, quantity: 1, total: 10.1, uom: "PC" };
@@ -98,9 +107,9 @@ test("older notes without prices or links still read", () => {
   ]);
 });
 
-test("a note listing more cards than a reply can show is read as its first 5", () => {
+test("a note listing more cards than a reply can show is read as its first 6", () => {
   const note = `[cards shown: ${Array.from({ length: 8 }, (_, i) => `C${i} Card ${i}`).join("; ")}]`;
-  assert.deepEqual(parseCardsNote(note).map((card) => card.code), ["C0", "C1", "C2", "C3", "C4"]);
+  assert.deepEqual(parseCardsNote(note).map((card) => card.code), ["C0", "C1", "C2", "C3", "C4", "C5"]);
 });
 
 test("a name with a semicolon or a leading bracket survives", () => {

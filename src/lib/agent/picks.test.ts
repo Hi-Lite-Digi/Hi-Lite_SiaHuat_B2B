@@ -159,12 +159,12 @@ test("a request crafted with many look-alike cards is read quickly", () => {
   const refusal = `no ${words.join(" ")}`;
   const history: Array<{ role: "user" | "assistant"; content: string }> = [];
   for (let a = 0; a < 24; a += 1) {
-    const cards = [...Array.from({ length: 5 }, (_, i) => `A${a * 5 + i} ${shared}`), `B${a} ${words.join(" ")}`];
+    const cards = [...Array.from({ length: 6 }, (_, i) => `A${a * 6 + i} ${shared}`), `B${a} ${words.join(" ")}`];
     history.push({ role: "assistant", content: `Here.\n[cards shown: ${cards.join("; ")}]` });
   }
   for (let u = 0; u < 5; u += 1) history.push({ role: "user", content: Array(6).fill(refusal).join(". ") });
   const picks = pickEvidence(history, { type: "text", text: refusal });
-  assert.ok(picks.replies.every((item) => item.cards.length <= 5));
+  assert.ok(picks.replies.every((item) => item.cards.length <= 6));
   const cards = picks.replies.flatMap((item) => item.cards);
   const start = performance.now();
   for (const text of picks.texts) pointedCards(text.text, cards);

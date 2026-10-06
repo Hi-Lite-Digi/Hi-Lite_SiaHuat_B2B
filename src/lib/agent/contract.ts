@@ -3,8 +3,8 @@ import { z } from "zod";
 import { imageAttachmentSchema, productSchema, type Product } from "@/lib/chat-contract";
 import { enquiryReceiptTotals } from "@/lib/conversation-export";
 
-/** The most product cards one reply shows. */
-const MAX_CARDS = 5;
+/** The most product cards one reply shows: one each for a list of six (r8 R02: the sixth item got no card). */
+export const MAX_CARDS = 6;
 /** The longest message the chat sends (r8 F7: a 616-character brief was cut at 500 and lost its S$10 budget). */
 export const MAX_MESSAGE_CHARS = 2_000;
 /** A history entry's cap: room for "[photo] " and a voice note's mark before a full message. */
@@ -108,7 +108,7 @@ export function cardsNote(cards: Product[]) {
 
 /**
  * The cards noted on an assistant history entry. Older notes ("CODE name" or just "CODE") read with no price or link.
- * A reply shows at most 5 cards, so a note from the client listing more is cut to 5.
+ * A reply shows at most MAX_CARDS cards, so a note from the client listing more is cut to that.
  */
 export function parseCardsNote(content: string): ShownCard[] {
   const start = content.lastIndexOf(CARDS_NOTE);
