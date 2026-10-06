@@ -2467,6 +2467,18 @@ test("a list answer of more than three items points once in the chat to a formal
   assert.deepEqual([single.message, single.showContact], [options, false]);
 });
 
+test("an honest closing offer to add goes out with no nudge and no repair (r8 M03 run 2)", async () => {
+  for (const offer of ["Let me know if you'd like any of these added.", "Let me know which ones you'd like added."]) {
+    const { client, bodies } = fakeClient([
+      toolRound(sixWords.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message: `${sixLines}\n${offer}`, card_ids: six.map((item) => item.stock_id) }),
+    ]);
+    const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
+    assert.equal(bodies.length, 2, offer);
+    assert.equal(reply.message, `${sixLines}\n${offer}\n\n${LIST_QUOTE_LINE}`, offer);
+    assert.deepEqual(reply.enquiry.lines, []);
+  }
+});
+
 test("a numbered list still gets one round of lookups, and a list of six may end without 'Next:' (r8 M03, M09)", async () => {
   const leftNote = /answer now with what you found for the first items, one card each, and if items are left, end with what's next by name/;
   // Eight items, six looked up: one round, then the answer names what's next (exam 3, s01-B T0).

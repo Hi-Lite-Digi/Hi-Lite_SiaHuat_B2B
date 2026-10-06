@@ -410,6 +410,10 @@ const deniedChange = /\b(?:none|no\s+(?:items?|products?|lines?|changes?))\b(?:\
 // your enquiry now" and "Can confirm the 2 you need added" are claims.
 const wantsChange = /\b(?:want|like|need)s?\s+(?:[\w'’″-]+\s+){0,5}(?:added|removed|updated)\b/i;
 const questionOpen = /^(?:is|are|was|were|do|does|did|which|what|how many|should|shall|can|could|would)\b/i;
+// An offer that waits on the customer is no claim either: "Let me know if you'd like any of these added", "which ones you'd like
+// added" (r8 M03 run 2: an honest closing offer cost a repair). Only the offer itself: "What you'd like added is now on your
+// enquiry" and "Added 2 torches if you'd like more added" still claim.
+const offerToChange = /\b(?:if|whether|which|what|how many)\b(?:\s+[\w'’]+){0,4}?\s+you(?:['’]d)?(?:\s+\w+)?\s+(?:want|like|need)s?\s+(?:[\w'’″-]+\s+){0,5}?(?:added|removed|updated)\b/i;
 // A clause saying an add failed ("having a hiccup adding these", exam 3, c05-persona T10); it never excuses a whole sentence, so
 // "Sorry for the hiccup, I'll add 2 now" is still a promise.
 const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updating|removing)\b/i;
@@ -417,6 +421,7 @@ const failedWording = /\b(?:hiccup|snag|trouble)s?\s+(?:with\s+)?(?:adding|updat
 const notAClaim = (clause: string, question: boolean) => honestWording.test(clause)
   || (failedWording.test(clause) && !changeClaim.test(clause.replace(failedWording, " ")))
   || (deniedChange.test(clause) && !changeClaim.test(clause.replace(deniedChange, " ")))
+  || (offerToChange.test(clause) && !changeClaim.test(clause.replace(offerToChange, " ")))
   || (question && questionOpen.test(clause) && wantsChange.test(clause) && !changeClaim.test(clause.replace(wantsChange, " ")));
 // GST sums are not enquiry changes: "Adding 9% to $119.09 gets you the GST-inclusive total" (exam 3, c12-persona T11). Stripped like
 // featureWording, so "Added 2 torches - adding 9% GST, about $153.72" is still judged on its add; "I'll add GST and 2 torches now"

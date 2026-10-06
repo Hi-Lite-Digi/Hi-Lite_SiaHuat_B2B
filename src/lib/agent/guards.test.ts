@@ -674,6 +674,14 @@ test("honest or conditional wording is not a claim", () => {
     "No items added yet.",
     "No items were added, as requested.",
     "No items have been added to your enquiry.",
+    // r8 M03 run 2: an honest closing offer cost a repair. Offers and questions about adding wait on the customer.
+    "Let me know if you'd like any of these added.",
+    "Let me know which ones you'd like added.",
+    "Let me know how many of each you'd like added to your enquiry.",
+    "Tell me which of these you want added, and how many.",
+    "Just say if you would like them added.",
+    "If you'd like the plates added too, tell me how many.",
+    "Let me know whether you need the torch removed.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
     assert.equal(withoutEnquiryClaims(message, { lines: [], changes: [], seen: shop }), message);
@@ -813,6 +821,13 @@ test("real claims and unconditional promises are still caught", () => {
     "What you need added is now in your enquiry.",
     "Can confirm the Safico torch you need added is on your enquiry now.",
     "Can confirm the 2 you need added.",
+    // An offer beside a claim never excuses the claim (r8 tier 3).
+    "What you'd like added is now on your enquiry.",
+    "Added the Safico torch, and let me know if you'd like the plates added.",
+    "Added 2 Safico torches if you'd like more added later.",
+    "Let me know if you'd like the plates added; I added the Safico torch.",
+    "The torches you'd like added are on your enquiry now.",
+    "Let me know which ones you'd like added - I've added the Safico torch already.",
     "Sorted the hiccup adding these and added 2 Safico torches.",
     // A closing "confirmed once more" set off by dashes is no condition either.
     "Adding 1 Safico torch now - confirmed once more - it's the BTS-8026D.",
