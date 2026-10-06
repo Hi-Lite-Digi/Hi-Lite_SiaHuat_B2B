@@ -92,7 +92,9 @@ export function parseSiaHuatProductPage(html: string, productUrl: string): Scrap
       .text()
       .replace(/^code\s*:\s*/i, ""),
   );
-  if (!itemCode) throw new Error(`ITEM_CODE_NOT_FOUND: ${productUrl}`);
+  // A removed product still answers 200 with Next's not-found page, titled "Product - <id>" (04-00820's old page, r8): only its
+  // digest says the listing is gone. A page with no code and no digest may be a layout change, so it stays a plain failure.
+  if (!itemCode) throw new Error(`${html.includes("NEXT_HTTP_ERROR_FALLBACK;404") ? "PAGE_GONE" : "ITEM_CODE_NOT_FOUND"}: ${productUrl}`);
 
   const attributes: Record<string, string> = {};
   title.closest(".MuiGrid-container").find("h6").each((_index, heading) => {

@@ -73,6 +73,15 @@ test("a failed or mismatched live check leaves the product unverified", async ()
   assert.equal(mismatch.verified, false);
 });
 
+test("a removed listing, or a page now showing another code, is gone; a failed read is only unverified", async () => {
+  const torch = product({ stock_id: "970S" });
+  const gone = await liveCheck(torch, fakeDeps([torch], { "970S": "gone" }));
+  assert.equal(gone.verified, false);
+  assert.equal(gone.gone, true);
+  assert.equal((await liveCheck(torch, fakeDeps([torch], { "970S": "fail" }))).gone, undefined);
+  assert.equal((await liveCheck(torch, fakeDeps([torch], { "970S": { stock_id: "OTHER" } }))).gone, true);
+});
+
 test("a live check always hands the store fetch a whole number of milliseconds", async () => {
   // exam 3: a time left from performance.now() made AbortSignal.timeout throw, so 101 re-shown cards went out TBC.
   const torch = product({ stock_id: "970S" });

@@ -21,7 +21,7 @@ export function product(overrides: Partial<Product> & { stock_id: string }): Cat
   };
 }
 
-export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id">> | "fail";
+export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id">> | "fail" | "gone";
 
 export function fakeDeps(
   catalogue: CatalogueProduct[],
@@ -65,6 +65,7 @@ export function fakeDeps(
       const item = byUrl(url);
       if (!item) throw new Error("NOT_FOUND");
       const override = live[item.stock_id];
+      if (override === "gone") throw new Error(`PAGE_GONE: ${url}`);
       if (override === "fail") throw new Error("LIVE_DOWN");
       calls.push(`live:${item.stock_id}`);
       return {
