@@ -976,6 +976,57 @@ function standIn(text: string, cards: ShownCard[]) {
   const sizes = measures(words);
   return [...found].filter((hit) => !sizes.has(hit)).length >= 2 && [...sizes].every((size) => found.has(size)) ? pointed : [];
 }
+/**
+ * Whether the text types every name word of the card and no size it lacks: "Royal Bone China Verona Deep Plate" is all of N2906's,
+ * "the 4-slot stainless steel toaster" is not HET-6's (Stainless Steel 6-Slots Toaster).
+ */
+const wholeName = (card: ShownCard, text: string) => {
+  const words = nameText(text);
+  const said = hits(card, words);
+  const sizes = measures(card.name);
+  return [...hits(card, card.name)].every((hit) => sizes.has(hit) || said.has(hit)) && [...measures(words)].every((size) => said.has(size));
+};
+/** Whether the text gives this product's live stock count or checked price, which none of the cards has. */
+function givesFacts(text: string, checked: CheckedProduct | undefined, cards: readonly CheckedProduct[]) {
+  if (!checked?.verified) return false;
+  const qty = ({ product }: CheckedProduct) => product.available_quantity;
+  const cents = ({ product }: CheckedProduct) => Math.round(product.list_price * 100);
+  return stockCounts(text).some((match) => Number(match[1].replace(/,/g, "")) === qty(checked) && !cards.some((card) => qty(card) === qty(checked)))
+    || [...text.matchAll(moneyPattern)].some((match) => toCents(match) === cents(checked) && !cards.some((card) => cents(card) === cents(checked)));
+}
+/**
+ * The answer with the card of each product its words name but don't attach, put before the card the customer would take for it: a
+ * part (partsOf's breaks) points at that product among all looked up this turn, by its whole name or with its stock or price in the
+ * rest of the sentence, and stands for one card that no other part names and the message doesn't type. r8 F6, 3 Oct: "Royal Bone
+ * China Verona Deep Plate ... only 1 left" over the N0536 Coupe Plate card, and the tap added 12 N0536. Never an enquiry line, nor a
+ * sixth card.
+ */
+export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, lines: readonly EnquiryReceiptLine[], changes: readonly EnquiryChange[]): FinalAnswer {
+  const all = seenCards(seen);
+  const { text, parts } = partsOf(answer.message);
+  const named = parts.map(({ part }) => pointedBy(part, all));
+  const ids = [...answer.card_ids];
+  for (const [at, { part, start }] of parts.entries()) {
+    const product = named[at].length === 1 ? named[at][0] : null;
+    const checked = product && seen.get(product.code);
+    // Never an unchecked or sold-out product, an enquiry line, or one changed this turn ("removed the Verona and added 12 of this one").
+    if (!product || !checked?.verified || soldOutProduct(checked) || ids.length >= 5 || ids.some((id) => same(id, product.code))
+      || lines.some((line) => same(line.code, product.code)) || changes.some((change) => change.code && same(change.code, product.code))) continue;
+    const shown = ids.flatMap((id) => (seen.has(id) ? [seen.get(id)!] : []));
+    const cards = shown.map((item) => asCard(item.product));
+    const [card] = standIn(part, cards);
+    if (!card || codePattern(card.code).test(answer.message)) continue;
+    // Another part about the card keeps it the product the words offer: "Instead of the Verona (only 1 left), I'd go with this bone china plate".
+    const about = (k: number) => (named[k].length ? named[k] : standIn(parts[k].part, cards));
+    if (parts.some((_, k) => k !== at && about(k).length === 1 && same(about(k)[0].code, card.code))) continue;
+    // Feature words fit a card's short name too ("stainless" for "S/S UTILITY TONG 12″", "keypad"): only the product's whole name, or
+    // its own stock or price in the rest of the sentence, names it (43 of 3,676 past replies with cards would gain one without this).
+    const sentence = text.slice(start).split(/[.!?](?=\s|\p{Script=Han}|$)|[。！？]|\n/u)[0];
+    if (!(wholeName(product, part) && !wholeName(card, part)) && !givesFacts(sentence, seen.get(product.code), shown)) continue;
+    ids.splice(ids.findIndex((id) => same(id, card.code)), 0, product.code);
+  }
+  return ids.length === answer.card_ids.length ? answer : { ...answer, card_ids: ids };
+}
 
 /**
  * Stock counts the message types for one of its cards that differ from that card's live available_quantity: only where the count's

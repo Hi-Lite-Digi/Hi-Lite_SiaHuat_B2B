@@ -124,31 +124,73 @@ test("a wrong stock count left after the repair is dropped from its bracket, nev
   assert.equal(reply.message, "A few options in stock: 16in Iron Wok. Which size do you need?");
 });
 
+// Four of the 6 Oct "24cm plate" results: N2906 and N0536 are sister plates, and "Royal Bone China骨瓷圆盘" fits both.
+const plates = [
+  product({ stock_id: "Q1930", name: "Luminarc Everyday Opal Glass Dinner Plate Ø24cm", list_price: 5.41, available_quantity: 121 }),
+  product({ stock_id: "3500-0224", name: "Patra Soup Plate 24cm, Porcelain White", list_price: 14.22, available_quantity: 33 }),
+  product({ stock_id: "N2906", name: "Royal Bone China Verona Deep Plate 24cm", list_price: 14.21, available_quantity: 1 }),
+  product({ stock_id: "N0536", name: "Royal Bone China Chinese Round Coupe Plate 24cm", list_price: 14.77, available_quantity: 74 }),
+];
+const platesAsked = (overrides: Partial<AgentRequest> = {}) => request({ event: { type: "text", text: "我要12个直径约24厘米的餐盘，每个不超过20新元。" }, ...overrides });
+const plateSearch = () => toolCall("t1", "search_catalogue", { queries: ["plate"], max_price: 20 });
+
 test("a Chinese count said of the card its words stand for is repaired, and said as 有现货 if it stays (r8 F6 run 6)", async () => {
-  // Four of the 6 Oct "24cm plate" results: N2906 and N0536 are sister plates, and "Royal Bone China骨瓷圆盘" fits both.
-  const plates = [
-    product({ stock_id: "Q1930", name: "Luminarc Everyday Opal Glass Dinner Plate Ø24cm", list_price: 5.41, available_quantity: 121 }),
-    product({ stock_id: "3500-0224", name: "Patra Soup Plate 24cm, Porcelain White", list_price: 14.22, available_quantity: 33 }),
-    product({ stock_id: "N2906", name: "Royal Bone China Verona Deep Plate 24cm", list_price: 14.21, available_quantity: 1 }),
-    product({ stock_id: "N0536", name: "Royal Bone China Chinese Round Coupe Plate 24cm", list_price: 14.77, available_quantity: 74 }),
-  ];
   const run6 = () => answer({
     message: "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，不够12个）。您比较倾向玻璃还是瓷器材质？",
     card_ids: ["Q1930", "3500-0224", "N0536"],
   });
   const fixed = "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款有现货）。您比较倾向玻璃还是瓷器材质？";
-  const asked = request({ event: { type: "text", text: "我要12个直径约24厘米的餐盘，每个不超过20新元。" } });
-  const search = () => toolCall("t1", "search_catalogue", { queries: ["plate"], max_price: 20 });
-  const { client, bodies } = fakeClient([search(), run6(), run6()]);
+  const asked = platesAsked();
+  const { client, bodies } = fakeClient([plateSearch(), run6(), run6()]);
   const reply = await runAgentTurn({ request: asked, deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
   assert.match(String(bodies[2].messages.at(-1)!.content), /只剩1个.*for N0536 \(live 74\); 1 matches N2906/);
   assert.equal(reply.message, fixed);
   assert.deepEqual(reply.cards.map((card) => card.stock_id), ["Q1930", "3500-0224", "N0536"]);
   // With no time for a repair, code says it the same way.
-  const late = fakeClient([search(), run6()]);
+  const late = fakeClient([plateSearch(), run6()]);
   const quick = await runAgentTurn({ request: asked, deps: fakeDeps(plates), client: late.client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
   assert.equal(late.bodies.length, 2);
   assert.equal(quick.message, fixed);
+});
+
+// 3 Oct (report page 7): the Verona Deep Plate with 1 left is named, and the only bone china card is N0536, the Coupe plate.
+const OCT3 = "几款24cm餐盘供您参考：Luminarc Everyday玻璃餐盘、Patra瓷汤盘、Royal Bone China Verona深盘（只剩1个，不够12个）。您比较倾向哪一款？";
+const COUPE_CARDS = ["Q1930", "3500-0224", "N0536"];
+
+test("the product the words name gets its card before the card they would otherwise stand for, with no repair (r8 F6, 3 Oct)", async () => {
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message: OCT3, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({ request: platesAsked(), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["Q1930", "3500-0224", "N2906", "N0536"]);
+  assert.equal(bodies.length, 2);
+});
+
+test("a set shown twice that names the Verona still loses its cards, and none is added (r8 F6)", async () => {
+  const shown = (message: string) => ({ role: "assistant" as const, content: `${message}${cardsNote(plates.filter((item) => COUPE_CARDS.includes(item.stock_id)))}` });
+  const { client } = fakeClient([plateSearch(), answer({ message: OCT3, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({
+    request: platesAsked({
+      event: { type: "text", text: "哪款适合汤菜？" },
+      history: [{ role: "user", content: "我要12个直径约24厘米的餐盘，每个不超过20新元。" }, shown("这几款可以参考。"), { role: "user", content: "还有别的吗？" }, shown("还是这几款最合适。")],
+      shownProductIds: COUPE_CARDS,
+    }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.cards, []);
+});
+
+test("a card whose link the customer says doesn't open is never added for the words that name it (r8 F6)", async () => {
+  const message = "Sorry that link isn't opening. Here are other 24cm plates: the Luminarc Everyday Opal Glass Dinner Plate, the Patra Soup Plate, and the Royal Bone China Verona Deep Plate (only 1 left, not enough for 12).";
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: COUPE_CARDS })]);
+  const reply = await runAgentTurn({
+    request: platesAsked({
+      event: { type: "text", text: "the Verona link not working" },
+      history: [{ role: "user", content: "24cm plates" }, { role: "assistant", content: `This one is a deeper bone china plate.${cardsNote([plates[2]])}` }],
+      shownProductIds: ["N2906"],
+    }),
+    deps: fakeDeps(plates), client, model: "claude-sonnet-5",
+  });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), COUPE_CARDS);
+  assert.equal(bodies.length, 2);
 });
 
 test("an unverified amount that survives the repair is removed", async () => {

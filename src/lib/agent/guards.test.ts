@@ -8,7 +8,7 @@ import {
   BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
   NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -1751,17 +1751,55 @@ test("English words that fit a card and an uncarded sister alike are read as the
   assert.deepEqual(plateCounts("The Royal Bone China 27cm plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), []);
 });
 
+// The F6 reproduction's real replies (runs r1-r4, then p1 and p2) with their real cards.
+const PLATE_REPLIES = [
+  ["找到几款直径24cm左右、预算20新元内且有库存的餐盘:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,库存121个\n- Patra 瓷汤盘 24cm,每个约$14.22,库存33个\n- Royal Bone China Verona 深盘 24cm,每个约$14.21,但库存只剩1个,不够12个\n\n您要哪一款？或者告诉我是西式还是中式餐盘风格,我再帮您挑。", ["Q1930", "3500-0224", "N2906"]],
+  ["这几款直径24cm左右、均在预算内且有库存超过12个的餐盘可以参考:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,$5.41/个\n- Patra 瓷汤盘 24cm,$14.22/个\n- Royal Bone China 圆形骨瓷盘 24cm,$14.77/个\n您比较倾向哪一款？", COUPE_CARDS],
+  ["找到几款24cm餐盘，库存充足且在您预算内：\n- Luminarc Everyday Opal Glass 餐盘 Ø24cm，$5.41/个，玻璃材质\n- Patra 汤盘 24cm，$14.22/个，瓷质\n- Royal Bone China Verona 深盘 24cm，$14.21/个（库存仅剩1个，可能不够12个）\n- Royal Bone China 中式圆形Coupe盘 24cm，$14.77/个，瓷质\n\n您比较倾向哪一款材质或风格？", COUPE_CARDS],
+  ["找到几款Ø24cm的餐盘，价格都在您的预算内：Luminarc玻璃款($5.41/个，库存121)、Patra瓷汤盘款($14.22/个，库存33)。另外Royal Bone China 24cm深盘($14.21)目前只剩1个，不够12个。您想要哪一款？", ["Q1930", "3500-0224", "N2906"]],
+  ["找到几款直径24cm、预算内的餐盘，库存都充足（12个没问题）：\n- Luminarc Everyday Opal Glass Dinner Plate Ø24cm，$5.41/个\n- Patra Soup Plate 24cm 瓷白，$14.22/个\n- Royal Bone China Verona Deep Plate 24cm，不过库存只剩1个，不够12个\n\n推荐前两款，哪款比较合适？", ["Q1930", "3500-0224"]],
+  ["符合24cm左右、每个不超过20新元的几款餐盘：Luminarc Everyday玻璃盘 Ø24cm库存121件；Patra陶瓷汤盘24cm库存33件；Royal Bone China Verona深盘24cm但现货只剩1件，不够12个。您想要哪一款？数量12个的话请确认选哪款。", ["Q1930", "3500-0224", "N2906"]],
+] as Array<[string, string[]]>;
+
 test("the F6 reproduction's real replies with their real cards give no wrong count (r8 F6)", () => {
-  for (const [message, ids] of [
-    ["找到几款直径24cm左右、预算20新元内且有库存的餐盘:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,库存121个\n- Patra 瓷汤盘 24cm,每个约$14.22,库存33个\n- Royal Bone China Verona 深盘 24cm,每个约$14.21,但库存只剩1个,不够12个\n\n您要哪一款？或者告诉我是西式还是中式餐盘风格,我再帮您挑。", ["Q1930", "3500-0224", "N2906"]],
-    ["这几款直径24cm左右、均在预算内且有库存超过12个的餐盘可以参考:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,$5.41/个\n- Patra 瓷汤盘 24cm,$14.22/个\n- Royal Bone China 圆形骨瓷盘 24cm,$14.77/个\n您比较倾向哪一款？", COUPE_CARDS],
-    ["找到几款24cm餐盘，库存充足且在您预算内：\n- Luminarc Everyday Opal Glass 餐盘 Ø24cm，$5.41/个，玻璃材质\n- Patra 汤盘 24cm，$14.22/个，瓷质\n- Royal Bone China Verona 深盘 24cm，$14.21/个（库存仅剩1个，可能不够12个）\n- Royal Bone China 中式圆形Coupe盘 24cm，$14.77/个，瓷质\n\n您比较倾向哪一款材质或风格？", COUPE_CARDS],
-    ["找到几款Ø24cm的餐盘，价格都在您的预算内：Luminarc玻璃款($5.41/个，库存121)、Patra瓷汤盘款($14.22/个，库存33)。另外Royal Bone China 24cm深盘($14.21)目前只剩1个，不够12个。您想要哪一款？", ["Q1930", "3500-0224", "N2906"]],
-    ["找到几款直径24cm、预算内的餐盘，库存都充足（12个没问题）：\n- Luminarc Everyday Opal Glass Dinner Plate Ø24cm，$5.41/个\n- Patra Soup Plate 24cm 瓷白，$14.22/个\n- Royal Bone China Verona Deep Plate 24cm，不过库存只剩1个，不够12个\n\n推荐前两款，哪款比较合适？", ["Q1930", "3500-0224"]],
-    ["符合24cm左右、每个不超过20新元的几款餐盘：Luminarc Everyday玻璃盘 Ø24cm库存121件；Patra陶瓷汤盘24cm库存33件；Royal Bone China Verona深盘24cm但现货只剩1件，不够12个。您想要哪一款？数量12个的话请确认选哪款。", ["Q1930", "3500-0224", "N2906"]],
-  ] as Array<[string, string[]]>) {
+  for (const [message, ids] of PLATE_REPLIES) {
     assert.deepEqual(plateCounts(message, ids), [], message);
   }
+});
+
+const namedCards = (message: string, ids: string[], from = plateSeen, enquiry: typeof lines = [], changes: EnquiryChange[] = []) =>
+  withNamedCards({ message, card_ids: ids, chips: [], show_contact: false }, from, enquiry, changes).card_ids;
+// 3 Oct (report page 7), in Chinese and in English: the third option is the Verona Deep Plate with 1 left, under the N0536 card.
+const OCT3 = "几款24cm餐盘供您参考：Luminarc Everyday玻璃餐盘、Patra瓷汤盘、Royal Bone China Verona深盘（只剩1个，不够12个）。";
+const OCT3_EN = "Here are some 24cm plates: the Luminarc Everyday Opal Glass Dinner Plate, the Patra Soup Plate, and the Royal Bone China Verona Deep Plate (only 1 left, not enough for 12).";
+
+test("a product the words name gets its card before the card they would otherwise stand for (r8 F6, 3 Oct)", () => {
+  for (const message of [OCT3, OCT3_EN]) {
+    const ids = namedCards(message, COUPE_CARDS);
+    assert.deepEqual(ids, ["Q1930", "3500-0224", "N2906", "N0536"], message);
+    assert.deepEqual(wrongStockCounts(message, plateCards(ids), plateSeen), [], message);
+  }
+  // With no stock or price, the whole name still names it; part of it does not.
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is a deeper style for curries.", ["N0536"]), ["N2906", "N0536"]);
+  assert.deepEqual(namedCards("The Royal Bone China deep plate suits curries.", ["N0536"]), ["N0536"]);
+});
+
+test("no card is added for an enquiry line, a product changed this turn, an unchecked or sold-out one, or one another part offers a card for (r8 F6)", () => {
+  const line = { item: "Royal Bone China Verona Deep Plate 24cm", code: "N2906", pricePerItem: 14.21, quantity: 1, total: 14.21, uom: "PC" };
+  assert.deepEqual(namedCards(OCT3_EN, COUPE_CARDS, plateSeen, [line]), COUPE_CARDS);
+  // "Removed the Verona and added 12 of this one" would otherwise put the removed Verona back.
+  assert.deepEqual(namedCards("Swapped: removed the Royal Bone China Verona Deep Plate and added 12 of this bone china plate.", ["N0536"], plateSeen, [], [{ action: "remove", code: "N2906" }]), ["N0536"]);
+  const verona = plateSeen.get("N2906")!;
+  const unchecked = new Map([...plateSeen, ["N2906", { ...verona, verified: false }]]);
+  for (const message of [OCT3, OCT3_EN]) assert.deepEqual(namedCards(message, COUPE_CARDS, unchecked), COUPE_CARDS, message);
+  const soldOut = new Map([...plateSeen, ["N2906", { product: { ...verona.product, available_quantity: 0, stock_status: "out_of_stock" as const, in_stock: false }, verified: true }]]);
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate is sold out.", ["N0536"], soldOut), ["N0536"]);
+  // Another part about the card keeps it the product the words offer.
+  assert.deepEqual(namedCards("Instead of the Royal Bone China Verona Deep Plate (only 1 left), I'd go with this bone china plate.", ["N0536"]), ["N0536"]);
+  assert.deepEqual(namedCards("The Royal Bone China Verona Deep Plate has only 1 left, so I've shown the Royal Bone China Coupe Plate instead.", ["N0536"]), ["N0536"]);
+  assert.deepEqual(namedCards("Unlike the Evelin round plate, this one is porcelain white.", ["3500-0224"]), ["3500-0224"]);
+  // The reproduction's consistent replies (r1-r4) keep their cards.
+  for (const [message, ids] of PLATE_REPLIES.slice(0, 4)) assert.deepEqual(namedCards(message, ids), ids, message);
 });
 
 test("saying all the cards are in stock when one isn't is a style issue", () => {
