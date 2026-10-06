@@ -173,8 +173,9 @@ const NO_MATCH_NOTE = "No catalogue matches for these words. Try other words the
 // Removed listings ranked first filled a search's reads (a list round's 5 for "grey cut resistant glove", r8 Batch 1 review): never
 // "no matches", which reads as "we don't carry it".
 const REMOVED_MATCHES_NOTE = "The top catalogue matches for these words are store listings that have been removed, so none can be shown. Don't say we don't carry it: search again with other or shorter words the customer might mean, or ask one question.";
-// 15 of the 131 removed pages have their code live on a new page: "couldn't confirm", never "not sold".
-const LISTING_GONE_NOTE = "This item code's store listing has been removed, so it can't be confirmed here right now. Don't name or describe a product for it, show its card or give its link. Say plainly you couldn't confirm that code on the store just now and set show_contact true so Sia Huat sales can check it; if the customer said what it is, offer to search for it.";
+// 15 of the 131 removed pages have their code live on a new page: "couldn't confirm", never "not sold". Read as a passing failure, it
+// was looked up again in R03 (r8 tier 3), so the note says a second look gives the same.
+const LISTING_GONE_NOTE = "This item code's store listing has been removed, so it can't be confirmed here right now. Looking it up again this turn gives this same result: don't call get_product for it again. Don't name or describe a product for it, show its card or give its link. Say plainly you couldn't confirm that code on the store just now and set show_contact true so Sia Huat sales can check it; if the customer said what it is, offer to search for it.";
 // Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
 const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
@@ -398,6 +399,8 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
 async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnContext) {
   const url = input.url ? storeProductUrl(input.url) : null;
   if (!url && !input.stock_id) return fail("MISSING_FIELDS");
+  // A code whose listing came back gone this turn gives the same result again, with no read (r8 R03: 04-00820 was looked up twice).
+  if (!url && ctx.gone.has(input.stock_id!)) return fail("LISTING_GONE", { stock_id: input.stock_id, note: LISTING_GONE_NOTE });
   const found = await retryOnce(() => (url ? ctx.deps.findBySourceUrl(url) : ctx.deps.findByCode(input.stock_id!)));
   if (!found) return fail("NOT_FOUND");
   const [checked, details] = await Promise.all([liveCheck(found, ctx.deps), lookupDetails(ctx, [found.stock_id])]);

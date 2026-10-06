@@ -2605,3 +2605,30 @@ test("a promise to add beside 'none of' still gets the claim nudge (r8 review)",
     assert.deepEqual(reply.enquiry.lines, []);
   }
 });
+
+test("a removed listing looked up again ends the tool rounds, so the next call answers with no store read and no update (r8 R03)", async () => {
+  // R03: "Do not add anything." Claude looked 04-00820 up again, then sent update_enquiry for "placeholder", in 4 calls.
+  const lookups = chillerGone();
+  const { client, bodies } = fakeClient([
+    toolRound([["get_product", { stock_id: "04-00820" }], ["get_product", { stock_id: "970S" }]]),
+    lookUpChiller(),
+    answer({ message: "1. 04-00820 - couldn't confirm this code on the store just now\n2. 970S - $31.31", card_ids: ["970S"], show_contact: true }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "Find 04-00820 and 970S. Do not add anything." } }), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.deepEqual(bodies.map(choice), ["auto", "auto", "none"]);
+  assert.match(lastMessage(bodies[2]), /Looking that item code up again gave the same result/);
+  assert.deepEqual(lookups.calls.filter((call) => call.includes("04-00820")), ["code:04-00820", "details:04-00820"]);
+  assert.deepEqual([reply.cards.map((card) => card.stock_id), reply.enquiry.lines], [["970S"], []]);
+  // A round that also does something else keeps its tools.
+  const mixed = fakeClient([
+    lookUpChiller(),
+    toolRound([["get_product", { stock_id: "04-00820" }], ["search_catalogue", { queries: ["display chiller"] }]]),
+    answer({ message: "I couldn't confirm 04-00820 on the store just now." }),
+  ]);
+  await runAgentTurn({ request: chillerAsked, deps: chillerGone(), client: mixed.client, model: "claude-sonnet-5" });
+  assert.deepEqual(mixed.bodies.map(choice), ["auto", "auto", "auto"]);
+  // An enquiry line the turn's re-check found gone, looked up once: no second look yet, so the tools stay on.
+  const online = fakeClient([lookUpChiller(), answer({ message: "I couldn't confirm 04-00820 on the store just now." })]);
+  await runAgentTurn({ request: { ...chillerAsked, enquiry: [{ stockId: "04-00820", quantity: 1 }] }, deps: chillerGone(), client: online.client, model: "claude-sonnet-5" });
+  assert.deepEqual(online.bodies.map(choice), ["auto", "auto"]);
+});
