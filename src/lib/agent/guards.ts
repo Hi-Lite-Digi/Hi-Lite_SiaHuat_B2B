@@ -5,7 +5,7 @@ import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { honestManualHandoff } from "@/lib/honest-handoff";
 import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
-import type { ShownCard } from "./contract";
+import { MAX_CARDS, type ShownCard } from "./contract";
 import { listItemCount, withGstCents } from "./enquiry";
 import type { CheckedProduct } from "./facts";
 import { codePattern, hits, measures, pointedCards, same } from "./picks";
@@ -1003,7 +1003,7 @@ function givesFacts(text: string, checked: CheckedProduct | undefined, cards: re
  * part (partsOf's breaks) points at that product among all looked up this turn, by its whole name or with its stock or price in the
  * rest of the sentence, and stands for one card that no other part names and the message doesn't type. r8 F6, 3 Oct: "Royal Bone
  * China Verona Deep Plate ... only 1 left" over the N0536 Coupe Plate card, and the tap added 12 N0536. Never an enquiry line, nor a
- * sixth card.
+ * card past MAX_CARDS.
  */
 export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, CheckedProduct>, lines: readonly EnquiryReceiptLine[], changes: readonly EnquiryChange[]): FinalAnswer {
   const all = seenCards(seen);
@@ -1014,7 +1014,7 @@ export function withNamedCards(answer: FinalAnswer, seen: ReadonlyMap<string, Ch
     const product = named[at].length === 1 ? named[at][0] : null;
     const checked = product && seen.get(product.code);
     // Never an unchecked or sold-out product, an enquiry line, or one changed this turn ("removed the Verona and added 12 of this one").
-    if (!product || !checked?.verified || soldOutProduct(checked) || ids.length >= 5 || ids.some((id) => same(id, product.code))
+    if (!product || !checked?.verified || soldOutProduct(checked) || ids.length >= MAX_CARDS || ids.some((id) => same(id, product.code))
       || lines.some((line) => same(line.code, product.code)) || changes.some((change) => change.code && same(change.code, product.code))) continue;
     const shown = ids.flatMap((id) => (seen.has(id) ? [seen.get(id)!] : []));
     const cards = shown.map((item) => asCard(item.product));
@@ -1270,8 +1270,8 @@ export function reviewAnswer(
   const unknown = ids.filter((id) => !seen.has(id));
   if (unknown.length) safety.push(`${UNKNOWN_CARD_ISSUE_PREFIX} in this turn or shown earlier in this chat; not found: ${unknown.join(", ")}.`);
   // A list answer's cards are its first items; the message names the rest (r8 R03: 12 card_ids cost a repair).
-  if (ids.length > 5 && !longListAnswer(answer.message)) style.push("Show at most 5 cards.");
-  const cards = ids.filter((id) => seen.has(id)).slice(0, 5).map((id) => seen.get(id)!.product);
+  if (ids.length > MAX_CARDS && !longListAnswer(answer.message)) style.push(`Show at most ${MAX_CARDS} cards.`);
+  const cards = ids.filter((id) => seen.has(id)).slice(0, MAX_CARDS).map((id) => seen.get(id)!.product);
   // Chips that break the rules are dropped rather than sent back. A long chip or a 'Yes, add it' chip (the confirm step the owner
   // ruled out; 'Add more items' is not) is dropped alone, and a fourth chip moves up. A chip with a number or amount among the
   // three shown takes the set along: a lone 'with silicone grip' under an either/or question reads as the only answer (exam 3: 43

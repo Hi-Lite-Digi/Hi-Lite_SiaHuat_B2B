@@ -1822,6 +1822,10 @@ test("a product the words name gets its card before the card they would otherwis
 test("no card is added for an enquiry line, a product changed this turn, an unchecked or sold-out one, or one another part offers a card for (r8 F6)", () => {
   const line = { item: "Royal Bone China Verona Deep Plate 24cm", code: "N2906", pricePerItem: 14.21, quantity: 1, total: 14.21, uom: "PC" };
   assert.deepEqual(namedCards(OCT3_EN, COUPE_CARDS, plateSeen, [line]), COUPE_CARDS);
+  // It may be the sixth card, never a seventh.
+  const five = [...COUPE_CARDS, "10293", "55-12123"];
+  assert.deepEqual(namedCards(OCT3_EN, five), ["Q1930", "3500-0224", "N2906", "N0536", "10293", "55-12123"]);
+  assert.deepEqual(namedCards(OCT3_EN, [...five, "RS-J1006-6"]), [...five, "RS-J1006-6"]);
   // "Removed the Verona and added 12 of this one" would otherwise put the removed Verona back.
   assert.deepEqual(namedCards("Swapped: removed the Royal Bone China Verona Deep Plate and added 12 of this bone china plate.", ["N0536"], plateSeen, [], [{ action: "remove", code: "N2906" }]), ["N0536"]);
   const verona = plateSeen.get("N2906")!;
@@ -2066,12 +2070,15 @@ test("a list answer of 4 or more items isn't sent back for its length or its car
   const inline = `Here are the four: ${[1, 2, 3, 4].map((n) => `${n}) CODE-${n} - Stainless steel gastronorm pan with lid, 1/1 size, 150mm deep, heavy gauge, dishwasher safe, stackable for hot or cold holding on a buffet line or in a bain-marie`).join(" ")} None added yet.`;
   assert.ok(inline.length > 600 && inline.length <= 1_000, String(inline.length));
   assert.equal(tooLong(inline), false);
-  // 12 card_ids under a 12-line list: no repair, and the first 5 are shown.
+  const tooManyCards = ({ style }: { style: string[] }) => style.some((issue) => issue.startsWith("Show at most"));
+  // 12 card_ids under a 12-line list: no repair, and the first 6 are shown (r8 R02: one card each for a list of six).
   const twelve = review(`Here are all 12:\n${codes.map((code, i) => `${i + 1}. ${code} - Product ${i + 1}`).join("\n")}\nNone added yet.`, codes);
-  assert.ok(!twelve.style.includes("Show at most 5 cards."));
-  assert.equal(twelve.cards.length, 5);
+  assert.equal(tooManyCards(twelve), false);
+  assert.deepEqual(twelve.cards.map((card) => card.stock_id), codes.slice(0, 6));
+  // A plain reply may show 6 cards.
+  assert.equal(tooManyCards(review("Here are the closest matches I found.", codes.slice(0, 6))), false);
   // Not a list answer: 7 cards under a plain reply, a plain 700-character reply, and a list past 1,000 characters.
-  assert.ok(review("Here are the closest matches I found.", codes.slice(0, 7)).style.includes("Show at most 5 cards."));
+  assert.ok(review("Here are the closest matches I found.", codes.slice(0, 7)).style.includes("Show at most 6 cards."));
   assert.ok(tooLong("A long reply about the steamers. ".repeat(22)));
   assert.ok(tooLong(`${inline}\n${"More words here. ".repeat(30)}`));
 });

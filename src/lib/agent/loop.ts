@@ -4,7 +4,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
-import { CHIP_PREFIX, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
+import { CHIP_PREFIX, MAX_CARDS, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
 import { enquiryTotals, gstWords, listItemCount, sameQuantityText, statesAnyQuantity, verifyEnquiry } from "./enquiry";
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
@@ -211,7 +211,7 @@ async function attachEarlierCards(
   ];
   // A code tried earlier this turn isn't looked up again after the repair: a stalled check would stall again.
   const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
-    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, 5);
+    .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, MAX_CARDS);
   for (const id of wanted) tried.add(id);
   // One time limit covers each card's code lookup and live check together; a read of this turn's own product gets longer.
   const limit = wanted.some((id) => again.some((code) => same(code, id))) ? CARD_RECHECK_MS : EARLIER_CARD_CHECK_MS;

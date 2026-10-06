@@ -218,7 +218,7 @@ test("Claire uses the prices in the cards notes only to tell which product the c
 
 test("Claire attaches a card she mentions or asks the customer to tap, and never promises to pull it up later", () => {
   assert.ok(CLAIRE_AGENT_PROMPT.includes("any card shown earlier in this chat can be attached again"));
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("card_ids (0-5 item codes from tool results in this turn, or of cards already shown in this chat)"));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("card_ids (0-6 item codes from tool results in this turn, or of cards already shown in this chat)"));
 });
 
 test("Claire attaches an earlier card only when it's needed, not again for an item she just changed", () => {

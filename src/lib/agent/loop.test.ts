@@ -2308,7 +2308,7 @@ test("this turn's card whose read ran late is read again before the reply goes o
   assert.equal(bodies.length, 2);
   assert.deepEqual(reads(lookups, "970S"), ["late:970S", "live:970S"]);
   assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status, card.list_price]), [["970S", "in_stock", 31.31]]);
-  // Named by its code without a card (a 6th item past the card cap), it is read again too; an unnamed one isn't.
+  // Named by its code without a card (a 7th item past the card cap), it is read again too; an unnamed one isn't.
   const lighter = product({ stock_id: "L1", name: "TORCH LIGHTER" });
   const named = fakeDeps([blowtorch, safico, lighter], { "970S": "timeout-once", L1: "timeout-once" });
   const second = fakeClient([torchSearch, answer({ message: "970S is a handheld kitchen torch." })]);
@@ -2435,6 +2435,17 @@ test("a list of six searches whose answer ends 'None added yet' goes out as it i
   // No nudge and no repair: R02 took four Claude calls and ended "That change isn't on your enquiry yet. Which item and how many would you like?"
   assert.equal(bodies.length, 2);
   assert.equal(reply.message, message);
+});
+
+test("six cards shown earlier are all looked up and attached again, with no repair (r8 R02)", async () => {
+  const codes = six.map((item) => item.stock_id);
+  const shown = { role: "assistant" as const, content: `Here are all six.\n[cards shown: ${six.map((item) => `${item.stock_id} ${item.name} ($${item.list_price.toFixed(2)})`).join("; ")}]` };
+  const { client, bodies } = fakeClient([answer({ message: "Here they are again - tap the one you want.", card_ids: codes })]);
+  const reply = await runAgentTurn({
+    request: request({ event: { type: "text", text: "show me the six again" }, history: [{ role: "user", content: sixItems }, shown], shownProductIds: codes }), deps: fakeDeps(six), client, model: "claude-sonnet-5",
+  });
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), codes);
 });
 
 test("'all found' is said truthfully when a code wasn't found or its store page failed (r8 R03, M04)", async () => {
