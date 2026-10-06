@@ -1325,3 +1325,39 @@ test("a read that ran past its limit is marked late; a read that failed otherwis
   await runTool("search_catalogue", { queries: ["torch"] }, ctx);
   assert.deepEqual([...ctx.seen.values()].map((item) => [item.product.stock_id, item.verified, item.late ?? false]), [["T1", false, true], ["T2", false, false], ["T3", true, false]]);
 });
+
+test("a round's searches share its live reads: 10 each for one or two, 6 for three, at least 5 (r8 R02, R09)", async () => {
+  for (const [roundSearches, shown] of [[undefined, 10], [2, 10], [3, 6], [4, 5], [6, 5]] as const) {
+    const deps = fakeDeps(torches(12));
+    const body = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(deps, { roundSearches }))).content) as { products: FactBody[]; more_available: boolean };
+    assert.equal(body.products.length, shown, String(roundSearches));
+    assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, shown, String(roundSearches));
+    assert.equal(body.more_available, true, String(roundSearches));
+  }
+});
+
+test("a category of 7 is listed whole only by a search that has the room: in a round of three it isn't 'that's all'", async () => {
+  const one = JSON.parse((await runTool("search_catalogue", { queries: ["utility tong"], category: "kitchen tongs" }, context(fakeDeps(tongs(7))))).content) as SearchBody;
+  const three = JSON.parse((await runTool("search_catalogue", { queries: ["utility tong"], category: "kitchen tongs" }, context(fakeDeps(tongs(7)), { roundSearches: 3 }))).content) as SearchBody;
+  assert.deepEqual([one.products.length, one.complete, three.products.length, three.complete, three.more_available], [7, true, 6, false, true]);
+});
+
+const pans = Array.from({ length: 8 }, (_, index) => product({ stock_id: `PAN-${index}`, name: `Frying Pan ${20 + index}cm`, list_price: 10 + index, third_category: "Frying pans" }));
+
+test("a list's search runs its first two queries and live-checks its top 5 (r8 M03 at six items a turn)", async () => {
+  const deps = fakeDeps(pans);
+  const ctx = context(deps, { roundSearches: 6 });
+  const body = JSON.parse((await runTool("search_catalogue", { queries: ["frying pan", "pan", "skillet"] }, ctx)).content) as SearchBody;
+  assert.deepEqual(deps.calls.filter((call) => call.startsWith("search:")), ["search:frying pan", "search:pan"]);
+  assert.equal(body.products.length, 5);
+  assert.equal(deps.calls.filter((call) => call.startsWith("live:")).length, 5);
+  assert.deepEqual(ctx.searches.map((search) => search.queries), [["frying pan", "pan"]]);
+});
+
+test("a list's search with a category runs one query plus the category", async () => {
+  const deps = fakeDeps(pans);
+  const ctx = context(deps, { roundSearches: 6 });
+  await runTool("search_catalogue", { queries: ["frying pan", "pan"], category: "frying pans" }, ctx);
+  assert.deepEqual(deps.calls.filter((call) => /^(?:search|category):/.test(call)), ["search:frying pan", "category:frying pans"]);
+  assert.deepEqual(ctx.searches.map((search) => [search.queries, search.category]), [[["frying pan"], "frying pans"]]);
+});

@@ -282,6 +282,8 @@ async function runToolBlocks(content: Anthropic.ContentBlock[], ctx: TurnContext
   const calls = content.filter((block): block is Anthropic.ToolUseBlock => block.type === "tool_use");
   names.push(...calls.map((call) => call.name));
   const updates = calls.filter((item) => item.name === "update_enquiry");
+  // The round's searches share its live reads, and more than three at once are a list's (searchCatalogueTool, r8 R02, R09, M03).
+  ctx.roundSearches = calls.filter((call) => call.name === "search_catalogue").length;
   const action = (call: Anthropic.ToolUseBlock) => updateFields(call.input).action;
   // Every update's pick check starts now, side by side ("these 2. 6 each" costs one check round, not two), and the adds' lookups
   // run together and fill the turn's memo, so the updates don't wait in turn.

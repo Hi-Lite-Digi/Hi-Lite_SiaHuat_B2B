@@ -2248,3 +2248,16 @@ test("a reply that calls a price unconfirmed after the card re-check priced it i
   assert.equal(reply.message, "Kitchen torch 970S: $31.31 ex GST.");
   assert.deepEqual(reply.cards.map((card) => card.stock_status), ["in_stock"]);
 });
+
+test("a three-search round reads 6 results per search, not 10 (r8 R02, R09)", async () => {
+  const many = Array.from({ length: 12 }, (_, index) => product({ stock_id: `T${index + 1}`, name: `TORCH ${index + 1} BURNER LIGHTER` }));
+  const lookups = fakeDeps(many);
+  const search = (id: string, item: string) => ({ type: "tool_use", id, name: "search_catalogue", input: { queries: [item] } });
+  const threeItems = { ...toolCall("t1", "search_catalogue", {}), content: [search("t1", "torch"), search("t2", "burner"), search("t3", "lighter")] } as unknown as Anthropic.Message;
+  const { client, bodies } = fakeClient([threeItems, answer({ message: "Here is what I found." })]);
+  await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+  const results = (bodies[1].messages.at(-1)!.content as Array<{ content: string }>).map((block) => JSON.parse(block.content).products.length);
+  assert.deepEqual(results, [6, 6, 6]);
+  // The turn memo reads each page once: the three searches share the same 6.
+  assert.equal(lookups.calls.filter((call) => call.startsWith("live:")).length, 6);
+});

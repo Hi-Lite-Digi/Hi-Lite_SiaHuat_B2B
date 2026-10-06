@@ -64,6 +64,8 @@ export type TurnContext = {
    * nothing when they land (r6 review: an add whose pick verdict came after the cut still went onto the enquiry).
    */
   closed?: boolean;
+  /** search_catalogue calls in this tool round: they share READS_PER_ROUND live reads; more than LIST_SEARCHES is a list's round. */
+  roundSearches?: number;
   /** Item codes (exact) whose store listing came back gone this turn: never a card, link or fact (r8 R01). */
   gone: Set<string>;
 };
@@ -153,6 +155,13 @@ const enquiryInput = z.object({
 const QUERY_ROWS = 10;
 const CATEGORY_ROWS = 200;
 const RESULTS_PER_SEARCH = 10; // all are live-checked: unchecked rows showed "price to be confirmed" and were called out of stock
+// A round's searches share about this many live reads, at least 5 each (6 searches at once read 30): from the function in iad1,
+// 30 at once ran the last past the 5 s limit and went out "Price to be confirmed" (r8 R02, R09); 20 (R08) didn't.
+const READS_PER_ROUND = 20;
+const MIN_RESULTS_PER_SEARCH = 5; // R02's glove 08-00840 was 5th, behind dead catalogue rows
+// A list's six searches of 2-3 queries each ran 13-18 catalogue calls, 4 at a time, past the 35 s work deadline (r8 M03 at six items):
+// in a round of more searches than this, each search makes two catalogue calls at most.
+const LIST_SEARCHES = 3;
 const NO_CATEGORY: CategoryResult = { products: [], total: 0, exists: false };
 const DETAILS_TIMEOUT_MS = 1_500;
 const BUDGET_NOTE = "Nothing within max_price among the top matches for these words; they are all above it. Try the customer's own shorter words (one key word) with max_price, or a category from categories, before saying there is nothing cheaper.";
@@ -258,7 +267,9 @@ function remember(ctx: TurnContext, checked: CheckedProduct) {
   return ctx.gstAsked && fact.price_ex_gst !== null ? { ...fact, price_with_gst: withGstCents(fact.price_ex_gst) / 100 } : fact;
 }
 
-async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: TurnContext) {
+async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: TurnContext) {
+  const listRound = (ctx.roundSearches ?? 0) > LIST_SEARCHES;
+  const input = listRound ? { ...asked, queries: asked.queries.slice(0, asked.category ? 1 : 2) } : asked;
   const category = input.category;
   // One slow or failed search must not sink the others: each is retried once and the ones that succeed are used.
   const [settled, [categoryOutcome]] = await Promise.all([
@@ -323,7 +334,8 @@ async function searchCatalogueTool(input: z.infer<typeof searchInput>, ctx: Turn
     scopeByHits.forEach(add); // 4. the rest of the category, most stocked first
     byRank(() => true); // 5. the rest of the query hits
   }
-  const top = varied(merged, RESULTS_PER_SEARCH, input.queries, phrases);
+  const shared = Math.floor(READS_PER_ROUND / Math.max(1, ctx.roundSearches ?? 1));
+  const top = varied(merged, Math.max(MIN_RESULTS_PER_SEARCH, Math.min(RESULTS_PER_SEARCH, shared)), input.queries, phrases);
   const topIds = new Set(top.map((item) => item.stock_id));
   // Only a category read in full, with every product in it listed (or rejected), backs "that's all". A brand the customer ruled
   // out still exists, so exclude_brands doesn't count as covered: "that's all" would be false.
