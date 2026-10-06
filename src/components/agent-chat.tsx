@@ -1,7 +1,7 @@
 // src/components/agent-chat.tsx
 "use client";
 
-import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, ClipboardEvent, FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ExternalLink, FileDown, ImagePlus, LoaderCircle, Mic, Send, Square, SquarePen, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,8 @@ function stockLabel(card: Product) {
 }
 
 export function AgentChat() {
-  const [items, setItems] = useState<ChatItem[]>([{ id: 1, role: "assistant", text: GREETING, time: timeLabel() }]);
+  // No time yet: the page is built ahead, so a time here would be the build's (React #418, F5). The mount effect sets it.
+  const [items, setItems] = useState<ChatItem[]>([{ id: 1, role: "assistant", text: GREETING, time: "" }]);
   const [enquiry, setEnquiry] = useState<AgentReply["enquiry"]>(EMPTY_ENQUIRY);
   const [query, setQuery] = useState("");
   const [attachment, setAttachment] = useState<ImageAttachment | null>(null);
@@ -73,6 +74,13 @@ export function AgentChat() {
   useEffect(() => { itemsRef.current = items; }, [items]);
   useEffect(() => { enquiryRef.current = enquiry; }, [enquiry]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [items, loading]);
+  // The greeting's time is the browser's, set after hydration (F5). This is React's two-pass render for content only the browser has,
+  // which the lint rule can't tell apart from a needless effect.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useLayoutEffect(() => {
+    setItems((current) => current.map((item) => ({ ...item, time: item.time || timeLabel() })));
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const latestAssistantId = [...items].reverse().find((item) => item.role === "assistant")?.id;
   const resetWarning = newChatWarning(items.some((item) => item.role === "user"), enquiry.totals);
@@ -314,7 +322,7 @@ export function AgentChat() {
             <p>{SALES_CONTACT.phone} · {SALES_CONTACT.email}</p>
             {item.pdf !== false && <button type="button" onClick={() => void savePdf()} className="mt-2 font-semibold text-[#176853] underline">Download your enquiry PDF to send along</button>}
           </div>}
-          <p className={`mt-2 text-[10px] text-[#667a74]/80 ${item.role === "user" ? "text-right" : ""}`}>{item.role === "user" ? "Sent" : "Received"} · {item.time}</p>
+          <p className={`mt-2 text-[10px] text-[#667a74]/80 ${item.role === "user" ? "text-right" : ""}`}>{item.role === "user" ? "Sent" : "Received"}{item.time && ` · ${item.time}`}</p>
         </div>
         {item.role === "assistant" && item.id === latestAssistantId && item.chips?.length ? <div className="mt-2 flex flex-wrap gap-2">
           {item.chips.map((chip) => <button key={chip} type="button" disabled={loading} onClick={() => void send({ type: "text", text: chip, chip: true }, { text: chip, chip: true })} className="rounded-full border border-[#176853]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#176853] hover:bg-[#eef7f3] disabled:opacity-50">{chip}</button>)}
