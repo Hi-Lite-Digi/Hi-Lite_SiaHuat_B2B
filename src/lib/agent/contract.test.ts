@@ -65,9 +65,10 @@ test("the browser keeps its own copy of lines the server could not re-check", ()
   assert.equal(nextEnquiry(current, checked), checked);
 });
 
-test("sales contact stays a placeholder until Sia Huat confirms it", () => {
-  assert.equal(SALES_CONTACT.phone, "[SALES PHONE]");
-  assert.equal(SALES_CONTACT.email, "[SALES EMAIL]");
+test("sales contact is a real Singapore number and a Sia Huat email, never a placeholder (r8 F2)", () => {
+  assert.match(SALES_CONTACT.phone, /^\+65 [3689]\d{3} \d{4}$/);
+  assert.doesNotMatch(SALES_CONTACT.email, /[[\]]/);
+  assert.match(SALES_CONTACT.email, /^[\w.+-]+@siahuat\.com(?:\.sg)?$/);
 });
 
 const torch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 31.31, source_url: "https://store.siahuat.com/product/1234" });

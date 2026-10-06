@@ -1,5 +1,6 @@
 // src/lib/enquiry-pdf.ts
 import type { Product } from "@/lib/chat-contract";
+import { SALES_CONTACT } from "@/lib/agent/contact";
 import { jpegOf } from "@/lib/agent/photo";
 import {
   conversationPdfText,
@@ -115,6 +116,8 @@ export async function downloadEnquiryPdf(input: { lines: EnquiryReceiptLine[]; t
   pdf.setFontSize(9.5);
   pdf.setTextColor(21, 54, 47);
   pdf.text("Status: Enquiry only - no purchase has been placed.", margin, y + 4);
+  pdf.setFont("helvetica", "normal");
+  pdf.text(`Send this PDF to Sia Huat sales: ${SALES_CONTACT.phone} · ${SALES_CONTACT.email}`, margin, y + 10);
 
   addPage();
   addHeader("Sia Huat Conversation Transcript");

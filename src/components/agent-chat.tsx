@@ -354,7 +354,7 @@ export function AgentChat() {
           </div> : null}
           {item.showContact && <div className="mt-3 rounded-xl border border-[#176853]/20 bg-[#eef7f3] p-3 text-xs text-[#15362f]">
             <p className="font-semibold">Sia Huat sales</p>
-            <p>{SALES_CONTACT.phone} · {SALES_CONTACT.email}</p>
+            <p><a href={`tel:${SALES_CONTACT.phone.replace(/ /g, "")}`} className="font-semibold text-[#176853] underline">{SALES_CONTACT.phone}</a> · <a href={`mailto:${SALES_CONTACT.email}`} className="font-semibold text-[#176853] underline">{SALES_CONTACT.email}</a></p>
             {item.pdf !== false && <button type="button" onClick={() => void savePdf()} className="mt-2 font-semibold text-[#176853] underline">Download your enquiry PDF to send along</button>}
           </div>}
           <p className={`mt-2 text-[10px] text-[#667a74]/80 ${item.role === "user" ? "text-right" : ""}`}>{item.role === "user" ? "Sent" : "Received"}{item.time && ` · ${item.time}`}</p>

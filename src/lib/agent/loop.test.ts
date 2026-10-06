@@ -421,6 +421,17 @@ test("a staff claim is removed and the reply shows the sales contact", async () 
   assert.equal(reply.showContact, true);
 });
 
+test("Claire quoting the sales contact reaches the customer unchanged; the store's other number is replaced (r8 F2)", async () => {
+  const asked = request({ event: { type: "text", text: "what's your phone number and email?" } });
+  const quoted = "You can reach Sia Huat sales at +65 6268 3922 or enquiry@siahuat.com.";
+  const { client } = fakeClient([answer({ message: quoted, show_contact: true })]);
+  const reply = await runAgentTurn({ request: asked, deps: deps(), client, model: "claude-sonnet-5" });
+  assert.deepEqual([reply.message, reply.showContact], [quoted, true]);
+  const other = fakeClient([answer({ message: "Call the shop at 6223 1732.", show_contact: true })]);
+  const replaced = await runAgentTurn({ request: asked, deps: deps(), client: other.client, model: "claude-sonnet-5" });
+  assert.deepEqual([replaced.message, replaced.showContact], ["Call the shop at Sia Huat sales (details below).", true]);
+});
+
 test("an item code from the chat that looks like a phone number reaches the customer unchanged", async () => {
   // exam 3, c05-persona T10: "3500-0018" was sent as "Sia Huat sales (details below)".
   const plate = product({ stock_id: "3500-0018", name: "Patra Rim Plate 18cm, Porcelain White", list_price: 7.8 });
