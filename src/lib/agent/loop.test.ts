@@ -2288,3 +2288,27 @@ test("a three-search round reads 6 results per search, not 10 (r8 R02, R09)", as
   // The turn memo reads each page once: the three searches share the same 6.
   assert.equal(lookups.calls.filter((call) => call.startsWith("live:")).length, 6);
 });
+
+// r8 M03, M09, R02, the tester's words.
+const sixItems = "Please find all six items: spice/coffee grinder; black mesh shelf liner; blue nitrile gloves medium; grey cut-resistant glove large; 50ml disposable mini sauce pan; red 14cm cast-iron casserole. Give one catalogue code and price per item. Keep all six separate and do not add them yet.";
+const six = [
+  product({ stock_id: "MC11", name: "Ad Hoc Stainless Steel Coffee Grinder, Moro Ceracut XL", list_price: 84.31 }),
+  product({ stock_id: "07-00019", name: "Safico Pro Mesh Bar Shelf Liner W60xL300cm, Black", list_price: 37.52, uom_id: "ROLL" }),
+  product({ stock_id: "R52232D", name: "Pal Powderfree Nitrile Glove, Medium, Blue", list_price: 9.08, uom_id: "BOX" }),
+  product({ stock_id: "08-00840", name: "Safico Pro Cut Resistant Glove Large, Grey", list_price: 18.26 }),
+  product({ stock_id: "VO57143", name: "Solia Sugarcane Pulp Mini Sauce Pan, 50ml", list_price: 24.31, uom_id: "PKT" }),
+  product({ stock_id: "Y-TC-14-K2-RD", name: "Lava Cast Iron Round Casserole Ø14cm, Red", list_price: 188.99 }),
+];
+const toolRound = (calls: Array<[name: string, input: unknown]>) => ({
+  ...toolCall("t0", calls[0][0], calls[0][1]), content: calls.map(([name, input], i) => ({ type: "tool_use", id: `t${i}`, name, input })),
+}) as unknown as Anthropic.Message;
+
+test("a list of six searches whose answer ends 'None added yet' goes out as it is (r8 R02)", async () => {
+  const words = ["coffee grinder", "shelf liner", "nitrile glove", "cut resistant glove", "mini sauce pan", "cast iron casserole"];
+  const message = `${six.map((item, i) => `${i + 1}. ${item.name}, ${item.stock_id} - $${item.list_price.toFixed(2)}`).join("\n")}\nNone added yet.`;
+  const { client, bodies } = fakeClient([toolRound(words.map((word) => ["search_catalogue", { queries: [word] }])), answer({ message, card_ids: six.slice(0, 5).map((item) => item.stock_id) })]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: sixItems } }), deps: fakeDeps(six), client, model: "claude-sonnet-5" });
+  // No nudge and no repair: R02 took four Claude calls and ended "That change isn't on your enquiry yet. Which item and how many would you like?"
+  assert.equal(bodies.length, 2);
+  assert.equal(reply.message, message);
+});

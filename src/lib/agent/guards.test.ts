@@ -650,11 +650,24 @@ test("honest or conditional wording is not a claim", () => {
     "Got it, 4 pax. A 12L pot would suit.",
     "Got it, 16in is the longer one.",
     "OK, 2 options fit your budget.",
+    // r8 R02: "do not add them yet" was answered so, and the fixed line replaced it.
+    "None added yet.",
+    "None of these are on your enquiry yet.",
+    "Kept all six separate, none added.",
+    "Held off adding them, as you asked.",
+    "No items added yet.",
+    "No items were added, as requested.",
+    "No items have been added to your enquiry.",
   ]) {
     assert.deepEqual(claimIssues(message), [], message);
     assert.equal(withoutEnquiryClaims(message, { lines: [], changes: [], seen: shop }), message);
   }
   assert.deepEqual(claimIssues("Your updated total is $46.72.", { lines: [line("BTS-8026D", 2)] }), []);
+});
+
+test("a false add beside 'none' is still a claim", () => {
+  assert.equal(claimIssues("Added 2 Safico torches, none of the plates.").length, 1);
+  assert.equal(claimIssues("None of the plates fit, so I added 2 Safico torches.").length, 1);
 });
 
 test("a false claim is replaced by one plain line where the first one was", () => {

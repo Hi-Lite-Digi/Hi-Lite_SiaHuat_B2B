@@ -387,7 +387,8 @@ const promiseChange = /\b(?:I'?ll|I will|let me|going to)\s+(?:add|put|remove|up
 // "I'll get 2 added" and "I'll have it updated" promise a change; they don't report one (exam 3, c06-persona T8 replayed). Lazy, so
 // it ends at the promise's own "added": "I'll get 2 added - I've added the torch" still reports one.
 const futureChange = /\b(?:I'?ll|I will|let me|going to|can)\s+(?:get|have)\s+(?:[\w'’″-]+\s+){0,4}?(?:added|removed|updated)\b/i;
-const honestWording = /\b(?:not|never|nothing|no longer|yet to|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
+// "None added yet", "No items added" and "held off adding them" deny a change (r8 R02: "do not add them yet" got the fixed line).
+const honestWording = /\b(?:not|never|nothing|none|no longer|no (?:items?|products?|lines?|changes?)|yet to|held off|holding off|trouble|unable|cannot|failed|want me to|shall I|should I|would you like)\b|n['’]t\b|\?\s*$/i;
 // A question about what the customer wants: "is it the HET-4 you want added, qty 1?" (exam 3, c11-stress T9 replayed: split from its
 // "?" by the comma). Only a clause that opens as a question in a sentence that ends as one counts, so "The torch you want added is on
 // your enquiry now" and "Can confirm the 2 you need added" are claims.
