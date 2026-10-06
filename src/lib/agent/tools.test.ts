@@ -1319,3 +1319,9 @@ test("invalid input is rejected without running the tool", async () => {
   assert.equal(outcome.isError, true);
   assert.match(outcome.content, /INVALID_INPUT/);
 });
+
+test("a read that ran past its limit is marked late; a read that failed otherwise is not (r8 R02, R09)", async () => {
+  const ctx = context(fakeDeps(torches(3), { T1: "timeout", T2: "fail" }));
+  await runTool("search_catalogue", { queries: ["torch"] }, ctx);
+  assert.deepEqual([...ctx.seen.values()].map((item) => [item.product.stock_id, item.verified, item.late ?? false]), [["T1", false, true], ["T2", false, false], ["T3", true, false]]);
+});

@@ -2145,3 +2145,90 @@ test("a card tap that runs out of time asks for the tap again", async () => {
   assert.equal(reply.provider, "fallback");
   assert.match(reply.message, /^Sorry, I couldn't open that one just now\. Could you tap it again\?/);
 });
+
+// r8 R02, R09: a search result whose read ran past its limit went out "Price to be confirmed" with time left in the turn.
+const torchSearch = toolCall("t1", "search_catalogue", { queries: ["torch"] });
+const reads = (lookups: ReturnType<typeof fakeDeps>, code: string) => lookups.calls.filter((call) => call === `late:${code}` || call === `live:${code}`);
+
+test("this turn's card whose read ran late is read again before the reply goes out (r8 R02, R09)", async () => {
+  const lookups = fakeDeps([blowtorch, safico], { "970S": "timeout-once" });
+  const { client, bodies } = fakeClient([torchSearch, answer({ message: "This one is a handheld kitchen torch.", card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(reads(lookups, "970S"), ["late:970S", "live:970S"]);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status, card.list_price]), [["970S", "in_stock", 31.31]]);
+  // Named by its code without a card (a 6th item past the card cap), it is read again too; an unnamed one isn't.
+  const lighter = product({ stock_id: "L1", name: "TORCH LIGHTER" });
+  const named = fakeDeps([blowtorch, safico, lighter], { "970S": "timeout-once", L1: "timeout-once" });
+  const second = fakeClient([torchSearch, answer({ message: "970S is a handheld kitchen torch." })]);
+  await runAgentTurn({ request: request({}), deps: named, client: second.client, model: "claude-sonnet-5" });
+  assert.deepEqual([reads(named, "970S"), reads(named, "L1")], [["late:970S", "live:970S"], ["late:L1"]]);
+});
+
+test("in an outage, with no read landing this turn, a late product is read once and its card stays unconfirmed (r8 R02, R09)", async () => {
+  const outage = fakeDeps([blowtorch, safico], { "970S": "timeout", "BTS-8026D": "timeout" });
+  const { client } = fakeClient([torchSearch, answer({ message: "Here it is; its stock still needs checking.", card_ids: ["970S"] })]);
+  const reply = await runAgentTurn({ request: request({}), deps: outage, client, model: "claude-sonnet-5" });
+  assert.deepEqual([reads(outage, "970S"), reads(outage, "BTS-8026D")], [["late:970S"], ["late:BTS-8026D"]]);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
+});
+
+test("a read that failed for another reason, or found the listing gone, is not read again (r8 R01, R02)", async () => {
+  for (const override of ["fail", "gone"] as const) {
+    const lookups = fakeDeps([blowtorch, safico], { "970S": override });
+    let attempts = 0;
+    const fetchLive = lookups.fetchLive;
+    lookups.fetchLive = (url, ms) => {
+      if (url === blowtorch.source_url) attempts += 1;
+      return fetchLive(url, ms);
+    };
+    // A gone listing is left out of the search results, so Claude has no card for it.
+    const { client } = fakeClient([torchSearch, answer({ message: "I checked the 970S for you.", card_ids: override === "fail" ? ["970S"] : [] })]);
+    const reply = await runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" });
+    assert.deepEqual([reply.provider, attempts, reply.cards.map((card) => card.stock_status)], ["anthropic", 1, override === "fail" ? ["unknown"] : []], override);
+  }
+});
+
+test("a late product's second read that stalls holds the reply about 4 s at most, and its card stays unconfirmed (r8 R09)", async () => {
+  const lookups = fakeDeps([blowtorch, safico], { "970S": "timeout-once" });
+  let attempts = 0;
+  const fetchLive = lookups.fetchLive;
+  // The round's read runs late; the second never answers.
+  lookups.fetchLive = (url, ms) => {
+    if (url !== blowtorch.source_url) return fetchLive(url, ms);
+    attempts += 1;
+    return attempts === 1 ? fetchLive(url, ms) : new Promise(() => undefined);
+  };
+  const { client } = fakeClient([torchSearch, answer({ message: "This one is a handheld kitchen torch.", card_ids: ["970S"] })]);
+  const started = performance.now();
+  const reply = await within(runAgentTurn({ request: request({}), deps: lookups, client, model: "claude-sonnet-5" }), 7_000);
+  const ms = performance.now() - started;
+  assert.ok(ms > 3_500 && ms < 5_000, `${Math.round(ms)} ms`);
+  assert.equal(attempts, 2);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["970S", "unknown"]]);
+});
+
+test("an add refused as STOCK_UNVERIFIED is never said to be added, though its card is read again in stock (r8 R02)", async () => {
+  const claim = answer({ message: "Added 2 Safico torch burners (BTS-8026D) to your enquiry.", card_ids: ["BTS-8026D"] });
+  const lookups = fakeDeps([blowtorch, safico]);
+  let attempts = 0;
+  const fetchLive = lookups.fetchLive;
+  // The round's early lookup and the add's own live check both run late; the read before the reply lands.
+  lookups.fetchLive = (url, ms) => {
+    if (url !== safico.source_url) return fetchLive(url, ms);
+    attempts += 1;
+    return attempts <= 2 ? Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")) : fetchLive(url, ms);
+  };
+  const { client, bodies } = fakeClient([toolCall("t1", "update_enquiry", { action: "add", stock_id: "BTS-8026D", quantity: 2 }), claim, claim, claim]);
+  // The enquiry's 970S line is read first, so the store answered a read this turn.
+  const reply = await checkedTurn({
+    request: request({ event: { type: "text", text: "2 of the BTS-8026D" }, enquiry: [{ stockId: "970S", quantity: 1 }] }), deps: lookups, client, model: "claude-sonnet-5",
+  });
+  assert.match(JSON.stringify(bodies[1].messages.at(-1)), /STOCK_UNVERIFIED/);
+  assert.match(JSON.stringify(bodies[2].messages.at(-1)), NUDGE);
+  assert.match(JSON.stringify(bodies[3].messages.at(-1)), /The enquiry didn't change/);
+  assert.equal(attempts, 3);
+  assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 1]]);
+  assert.doesNotMatch(reply.message, /\badded\b/i);
+  assert.deepEqual(reply.cards.map((card) => [card.stock_id, card.stock_status]), [["BTS-8026D", "in_stock"]]);
+});

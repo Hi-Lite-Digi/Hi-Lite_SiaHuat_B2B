@@ -21,7 +21,9 @@ export function product(overrides: Partial<Product> & { stock_id: string }): Cat
   };
 }
 
-export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id">> | "fail" | "gone";
+export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id">> | "fail" | "gone" | "timeout" | "timeout-once";
+/** A read that ran past its limit, as AbortSignal.timeout ends it. */
+const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
 export function fakeDeps(
   catalogue: CatalogueProduct[],
@@ -30,6 +32,7 @@ export function fakeDeps(
   details: Record<string, Record<string, string>> = {},
 ): FactDeps & { calls: string[] } {
   const calls: string[] = [];
+  const late = new Set<string>();
   const byUrl = (url: string) => catalogue.find((item) => item.source_url === url);
   return {
     calls,
@@ -67,6 +70,12 @@ export function fakeDeps(
       const override = live[item.stock_id];
       if (override === "gone") throw new Error(`PAGE_GONE: ${url}`);
       if (override === "fail") throw new Error("LIVE_DOWN");
+      // "timeout-once": the round's read ran late, a later read lands.
+      if (override === "timeout" || (override === "timeout-once" && !late.has(item.stock_id))) {
+        late.add(item.stock_id);
+        calls.push(`late:${item.stock_id}`);
+        throw timedOut();
+      }
       calls.push(`live:${item.stock_id}`);
       return {
         stock_id: item.stock_id, source_stock_id: null, source_product_id: "1", name: item.name, source_url: url,
@@ -74,7 +83,7 @@ export function fakeDeps(
         price_ex_gst: item.list_price, in_stock: true, available_quantity: item.available_quantity ?? 50,
         stock_status: "in_stock", category: null, subcategory: null, third_category: null, uom_id: item.uom_id,
         attributes: {}, last_scraped_at: "2026-09-26T06:00:00.000Z",
-        ...override,
+        ...(typeof override === "object" ? override : {}),
       };
     },
     async lookupImage() {

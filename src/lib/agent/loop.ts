@@ -39,6 +39,7 @@ const VERIFY_FLOOR_MS = 1_000;
 const STYLE_REPAIR_MIN_MS = 8_000; // a style-only repair needs about this long; with less left, the tidied answer is sent
 const LAST_CALL_MS = 12_000; // below this, the next Claude call answers with what it has
 const EARLIER_CARD_CHECK_MS = 2_000;
+const CARD_RECHECK_MS = 4_000; // a lone store read from the function took 0.9-3.6 s (r8)
 const CLAIM_NUDGE_MIN_MS = 15_000; // the nudge costs a Claude round, and the reply may still need a repair after it
 // A pasted list longer than this gets one round of lookups (exam 3, s01-B T0: 8 items ran 2-3 tool rounds and got a stand-in).
 const LIST_ITEMS_PER_TURN = 3;
@@ -191,24 +192,34 @@ function readFinal(response: Anthropic.Message): FinalAnswer | null {
 /**
  * Cards Claude chose that this turn hasn't looked up but the customer has already seen or has on the enquiry, plus (when the
  * message quotes an amount code can't back yet) the cards of Claire's previous reply and earlier-shown codes named in the message:
- * looked up and live-checked by code now, so every card and price still comes from this turn's facts.
+ * looked up and live-checked by code now, so every card and price still comes from this turn's facts. This turn's own products whose
+ * read ran late are read again the same way when the answer shows them or names their code.
  */
 async function attachEarlierCards(
   final: FinalAnswer, ctx: TurnContext, previousCodes: string[], amountsUnbacked: boolean, timeLeft: () => number, tried: Set<string>,
 ): Promise<FinalAnswer> {
-  const known = new Map([...ctx.shownIds, ...ctx.lines.map((line) => line.code), ...previousCodes].map((id) => [id.toLowerCase(), id]));
+  // This turn's products whose live check ran past its limit in the tool round: read again when the answer shows or names them, so a
+  // price the store gives isn't sent as "to be confirmed" (r8 R02, R09). Only while the store answered another read this turn: in an
+  // outage a second read would only add its wait.
+  const storeUp = [...ctx.seen.values()].some((item) => item.verified);
+  const again = storeUp ? [...ctx.seen.values()].filter((item) => item.late).map((item) => item.product.stock_id) : [];
+  const known = new Map([...ctx.shownIds, ...ctx.lines.map((line) => line.code), ...previousCodes, ...again].map((id) => [id.toLowerCase(), id]));
   const seen = new Map([...ctx.seen.keys()].map((id) => [id.toLowerCase(), id]));
-  const named = amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : [];
+  const named = [
+    ...(amountsUnbacked ? [...previousCodes, ...[...known.values()].filter((id) => codePattern(id).test(final.message))] : []),
+    ...again.filter((id) => codePattern(id).test(final.message)),
+  ];
   // A code tried earlier this turn isn't looked up again after the repair: a stalled check would stall again.
   const wanted = [...new Set([...final.card_ids, ...named].map((id) => id.toLowerCase()))]
     .filter((id) => known.has(id) && !tried.has(id) && !ctx.seen.get(seen.get(id) ?? "")?.verified && !ctx.gone.has(known.get(id)!)).slice(0, 5);
   for (const id of wanted) tried.add(id);
-  // One time limit covers each card's code lookup and live check together.
-  const end = performance.now() + Math.max(1, Math.min(EARLIER_CARD_CHECK_MS, timeLeft() - 1_000));
+  // One time limit covers each card's code lookup and live check together; a read of this turn's own product gets longer.
+  const limit = wanted.some((id) => again.some((code) => same(code, id))) ? CARD_RECHECK_MS : EARLIER_CARD_CHECK_MS;
+  const end = performance.now() + Math.max(1, Math.min(limit, timeLeft() - 1_000));
   const left = () => Math.max(1, end - performance.now());
   const details = lookupDetails(ctx, wanted.map((id) => known.get(id)!), left());
   await Promise.all(wanted.map(async (id) => {
-    const found = await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), left(), null);
+    const found = ctx.seen.get(seen.get(id) ?? "")?.product ?? await withTimeout(ctx.deps.findByCode(known.get(id)!).catch(() => null), left(), null);
     if (!found) return;
     // A live check that stalls sends the card unconfirmed, like a search result that wasn't checked.
     const unconfirmed: CheckedProduct = { product: { ...found, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
