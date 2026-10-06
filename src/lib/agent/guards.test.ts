@@ -1674,6 +1674,96 @@ test("a wrong count left after the repair is dropped from its bracket, else said
   assert.equal(withoutWrongStockCounts("16in Iron Wok: 35 available.", [soldOut.get("13103-1601")!.product], soldOut), "16in Iron Wok: out of stock.");
 });
 
+// r8 F6: the 6 Oct reproduction's results for "24cm plate" (max $20), live-checked. N2906 and N0536 are sister plates.
+const plateSeen = new Map<string, CheckedProduct>(([
+  ["Q1930", "Luminarc Everyday Opal Glass Dinner Plate Ø24cm", 5.41, 121],
+  ["3500-0224", "Patra Soup Plate 24cm, Porcelain White", 14.22, 33],
+  ["N2906", "Royal Bone China Verona Deep Plate 24cm", 14.21, 1],
+  ["N0536", "Royal Bone China Chinese Round Coupe Plate 24cm", 14.77, 74],
+  ["10293", "Evelin Round Plate Ø23.5cm", 18.26, 37],
+  ["55-12123", "Taihei Soup Plate 23cm", 9.08, 240],
+  ["F3-CRR-01008-20", "Cerabon Petye Carrara Porcelain Round Dinner Plate Ø20cm", 14.59, 0],
+  ["RS-J1006-6", "Rooster Series Round Plate 6″", 2.8, 691],
+  ["55-12126", "Taihei Soup Plate 26cm", 16.42, 130],
+  ["RS-J1009-7", "Rooster Series Round Plate 7″", 3.46, 394],
+] as Array<[string, string, number, number]>).map(([stock_id, name, list_price, available_quantity]) => [stock_id, {
+  product: product({ stock_id, name, list_price, available_quantity, stock_status: available_quantity ? "in_stock" : "out_of_stock", in_stock: available_quantity > 0 }), verified: true,
+}]));
+const plateCards = (ids: string[]) => ids.map((id) => plateSeen.get(id)!.product);
+const plateCounts = (message: string, ids: string[]) => wrongStockCounts(message, plateCards(ids), plateSeen).map(({ said, code }) => `${said}->${code}`);
+const COUPE_CARDS = ["Q1930", "3500-0224", "N0536"];
+// 4 Oct run 6, word for word: the 1 left is N2906's, the card is N0536 (74 in stock).
+const RUN6 = "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，不够12个）。您比较倾向玻璃还是瓷器材质？";
+
+test("a Chinese stock count is checked against the card its words stand for (r8 F6 run 6)", () => {
+  assert.deepEqual(wrongStockCounts(RUN6, plateCards(COUPE_CARDS), plateSeen).map(({ said, code, live, alsoMatches }) => [said, code, live, alsoMatches.map((item) => item.stock_id)]),
+    [["只剩1个", "N0536", 74, ["N2906"]]]);
+  assert.ok(reviewAnswer({ message: RUN6, card_ids: COUPE_CARDS, chips: [], show_contact: false }, plateSeen, allowedCents(plateSeen, [], 0)).style.map(issueCode).includes("STOCK_NUMBER"));
+  // Said as 有现货, with the 不够12个 made from it.
+  assert.equal(withoutWrongStockCounts(RUN6, plateCards(COUPE_CARDS), plateSeen),
+    "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款有现货）。您比较倾向玻璃还是瓷器材质？");
+  // With the N2906 card it is right.
+  assert.deepEqual(wrongStockCounts(RUN6, plateCards(["Q1930", "3500-0224", "N2906"]), plateSeen), []);
+});
+
+test("a count in a Chinese clause after the product's name is that product's (r8 F6 reruns: r1, p1 and r3 layouts)", () => {
+  assert.deepEqual(plateCounts("- Royal Bone China 骨瓷圆盘 24cm,每个约$14.77,但库存只剩1个,不够12个", COUPE_CARDS), ["库存只剩1个->N0536"]);
+  assert.deepEqual(plateCounts("- Royal Bone China 圆形骨瓷盘 24cm，不过库存只剩1个，不够12个", COUPE_CARDS), ["库存只剩1个->N0536"]);
+  assert.deepEqual(plateCounts("- Royal Bone China 骨瓷盘 24cm，$14.77/个（库存仅剩1个，可能不够12个）", COUPE_CARDS), ["库存仅剩1个->N0536"]);
+  assert.deepEqual(plateCounts("- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,库存120个", COUPE_CARDS), ["库存120个->Q1930"]);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存121个，Patra瓷汤盘库存30个。", COUPE_CARDS), ["库存30个->3500-0224"]);
+  // Right counts in the same layouts pass.
+  assert.deepEqual(plateCounts("- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,目前库存121个\n- Royal Bone China 骨瓷盘 24cm，$14.77/个（库存74个）", COUPE_CARDS), []);
+  assert.equal(withoutWrongStockCounts("Royal Bone China骨瓷圆盘，库存只剩1个，不够12个。", plateCards(COUPE_CARDS), plateSeen), "Royal Bone China骨瓷圆盘，有现货。");
+});
+
+test("a Chinese clause with its own subject or after another count is not read as the clause before it, and 。！？ end a part", () => {
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘很耐用，骨瓷盘只剩1个。", ["Q1930", "N2906"]), []);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存121个，另外骨瓷盘只剩1个。", ["Q1930", "N2906"]), []);
+  // Its own Latin words still decide: the N2906 card has 1, the N0536 card doesn't.
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘很耐用，Royal Bone China骨瓷盘只剩1个。", ["Q1930", "N2906"]), []);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘很耐用，Royal Bone China骨瓷盘只剩1个。", ["Q1930", "N0536"]), ["只剩1个->N0536"]);
+  assert.deepEqual(plateCounts("Royal Bone China Verona Deep Plate只剩1个。Royal Bone China Coupe Plate库存74个。", ["Q1930", "N2906", "N0536"]), []);
+});
+
+test("approximate Chinese counts, kinds and 'the other two' are no counts; a Chinese count is read whole", () => {
+  for (const message of [
+    "Luminarc玻璃餐盘库存有100多个。", "Luminarc玻璃餐盘库存120个左右。", "Luminarc玻璃餐盘库存12个以上，够您用。", "Luminarc是玻璃的，剩下2个Royal Bone China都是骨瓷。",
+    "Luminarc玻璃餐盘只有1个尺寸。", "Luminarc玻璃餐盘剩下2款。", "Luminarc玻璃餐盘现货有3个颜色。", "Luminarc玻璃餐盘库存约120个。", "Luminarc玻璃餐盘（库存：121）",
+  ]) {
+    assert.deepEqual(plateCounts(message, COUPE_CARDS), [], message);
+  }
+  // A count before an ASCII comma, and one with a thousands comma, are read whole; a price is no count.
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存12, $5.41/个", ["Q1930"]), ["库存12->Q1930"]);
+  assert.deepEqual(plateCounts("Luminarc玻璃餐盘库存1,210个", ["Q1930"]), ["库存1,210个->Q1930"]);
+  // The 够 or 不够 claim made from a wrong count goes with it.
+  assert.equal(withoutWrongStockCounts("Luminarc玻璃餐盘库存仅剩5个，可能不够12个。", plateCards(["Q1930"]), plateSeen), "Luminarc玻璃餐盘有现货。");
+  assert.equal(withoutWrongStockCounts("Luminarc玻璃餐盘：库存只有5个，够12个吗？", plateCards(["Q1930"]), plateSeen), "Luminarc玻璃餐盘：有现货吗？");
+});
+
+test("English words that fit a card and an uncarded sister alike are read as the card (r8 F6)", () => {
+  assert.deepEqual(plateCounts("The Royal Bone China plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), ["only 1 left->N0536"]);
+  // The "not enough" made from the wrong count goes with it.
+  assert.equal(withoutWrongStockCounts("The Royal Bone China plate (only 1 left, not enough for 12) is premium.", plateCards(["Q1930", "N0536"]), plateSeen), "The Royal Bone China plate is premium.");
+  assert.equal(withoutWrongStockCounts("The Royal Bone China plate has only 1 left, not enough for 12.", plateCards(["Q1930", "N0536"]), plateSeen), "The Royal Bone China plate is in stock.");
+  // One shared word is not enough ("plate"), nor a size the card lacks.
+  assert.deepEqual(plateCounts("The plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), []);
+  assert.deepEqual(plateCounts("The Royal Bone China 27cm plate (only 1 left) is the premium pick.", ["Q1930", "N0536"]), []);
+});
+
+test("the F6 reproduction's real replies with their real cards give no wrong count (r8 F6)", () => {
+  for (const [message, ids] of [
+    ["找到几款直径24cm左右、预算20新元内且有库存的餐盘:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,每个约$5.41,库存121个\n- Patra 瓷汤盘 24cm,每个约$14.22,库存33个\n- Royal Bone China Verona 深盘 24cm,每个约$14.21,但库存只剩1个,不够12个\n\n您要哪一款？或者告诉我是西式还是中式餐盘风格,我再帮您挑。", ["Q1930", "3500-0224", "N2906"]],
+    ["这几款直径24cm左右、均在预算内且有库存超过12个的餐盘可以参考:\n- Luminarc Everyday 玻璃餐盘 Ø24cm,$5.41/个\n- Patra 瓷汤盘 24cm,$14.22/个\n- Royal Bone China 圆形骨瓷盘 24cm,$14.77/个\n您比较倾向哪一款？", COUPE_CARDS],
+    ["找到几款24cm餐盘，库存充足且在您预算内：\n- Luminarc Everyday Opal Glass 餐盘 Ø24cm，$5.41/个，玻璃材质\n- Patra 汤盘 24cm，$14.22/个，瓷质\n- Royal Bone China Verona 深盘 24cm，$14.21/个（库存仅剩1个，可能不够12个）\n- Royal Bone China 中式圆形Coupe盘 24cm，$14.77/个，瓷质\n\n您比较倾向哪一款材质或风格？", COUPE_CARDS],
+    ["找到几款Ø24cm的餐盘，价格都在您的预算内：Luminarc玻璃款($5.41/个，库存121)、Patra瓷汤盘款($14.22/个，库存33)。另外Royal Bone China 24cm深盘($14.21)目前只剩1个，不够12个。您想要哪一款？", ["Q1930", "3500-0224", "N2906"]],
+    ["找到几款直径24cm、预算内的餐盘，库存都充足（12个没问题）：\n- Luminarc Everyday Opal Glass Dinner Plate Ø24cm，$5.41/个\n- Patra Soup Plate 24cm 瓷白，$14.22/个\n- Royal Bone China Verona Deep Plate 24cm，不过库存只剩1个，不够12个\n\n推荐前两款，哪款比较合适？", ["Q1930", "3500-0224"]],
+    ["符合24cm左右、每个不超过20新元的几款餐盘：Luminarc Everyday玻璃盘 Ø24cm库存121件；Patra陶瓷汤盘24cm库存33件；Royal Bone China Verona深盘24cm但现货只剩1件，不够12个。您想要哪一款？数量12个的话请确认选哪款。", ["Q1930", "3500-0224", "N2906"]],
+  ] as Array<[string, string[]]>) {
+    assert.deepEqual(plateCounts(message, ids), [], message);
+  }
+});
+
 test("saying all the cards are in stock when one isn't is a style issue", () => {
   const card = (stock_id: string, stock_status: "in_stock" | "out_of_stock" | "unknown") => product({
     stock_id, stock_status, in_stock: stock_status === "in_stock", available_quantity: stock_status === "in_stock" ? 5 : null,

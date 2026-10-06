@@ -8,7 +8,7 @@ import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import { listItemCount, withGstCents } from "./enquiry";
 import type { CheckedProduct } from "./facts";
-import { codePattern, hits, pointedCards, same } from "./picks";
+import { codePattern, hits, measures, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
 
 export type FinalAnswer = { message: string; card_ids: string[]; chips: string[]; show_contact: boolean };
@@ -916,21 +916,65 @@ export const STOCK_NUMBER_PREFIX = "These stock numbers";
 // "35 available", "only 2 left", "(12 in stock)", "131 units in stock", "(2,702 in stock)" read whole; never a code's digits ("HET-6
 // units in stock"), a price or "2 left-handed".
 const STOCK_COUNT = /(?:\b(?:only|just)\s+)?(?<![\p{L}\p{N}.,$-])(\d{1,3}(?:,\d{3})+|\d{1,5})\s*(?:(pcs?|pieces?|units?|sets?|pkts?|packets?)\s+)?(?:available|left|in\s+stock)(?:\s+in\s+stock)?(?![\w-])/giu;
+// The same in Chinese: "只剩1个", "仅剩1件", "库存121个", "库存仅剩1个", "库存只有1个", "现货33件" (r8 F6: "骨瓷这款只剩1个，不够12个" under a card
+// with 74). "只有1个" alone is often a count of kinds ("只有1个尺寸"), and "剩下2个" is "the other two", so only after 库存 or 现货;
+// "库存约120个", "库存超过12个", "库存有100多个", "库存120个左右", "剩下2款" and "现货有3个颜色" are no count to check.
+const STOCK_COUNT_ZH = /(?:(?:库存|现货|存货)[:：]?\s*(?:只有|仅有|只剩下?|仅剩|还有|还剩|剩下|剩|有|共)?|只剩下?|仅剩|还剩)\s*(\d{1,3}(?:,\d{3})+|\d{1,5})(?!\d|[.,]\d)(?![多余来几+]|\s*[个件只张把支条台套包盒]?\s*(?:以上|左右|上下|出头))\s*(?!款|种|类|个?(?:颜色|尺寸|型号|规格|选项|系列))(?:(套|包|盒)|[个件只张把支条台])?/gu;
+/** The message's stock counts in either language, in order: the count in group 1, its unit (if any) in group 2. */
+const stockCounts = (message: string) => [...message.matchAll(STOCK_COUNT), ...message.matchAll(STOCK_COUNT_ZH)].sort((a, b) => a.index - b.index);
 // "over 30 available" is no count to check.
 const APPROX_BEFORE = /\b(?:over|more\s+than|at\s+least|about|around|up\s+to|under|nearly|almost)\b[^.!?\n]{0,15}$/i;
-// A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item.
-const UNIT_UOMS: Array<[RegExp, string[]]> = [[/^(?:pcs?|pieces?|units?)$/i, ["PC", "UNIT"]], [/^sets?$/i, ["SET"]], [/^(?:pkts?|packets?)$/i, ["PKT"]]];
+// A count in pieces is not one in the product's own unit: "36 pcs available" of a DOZ item. 个 counts any unit, so it is no unit.
+const UNIT_UOMS: Array<[RegExp, string[]]> = [[/^(?:pcs?|pieces?|units?)$/i, ["PC", "UNIT"]], [/^(?:sets?|套)$/i, ["SET"]], [/^(?:pkts?|packets?)$/i, ["PKT"]], [/^(?:包|盒)$/, ["PKT", "PACK", "BOX"]]];
 const unitFits = (unit: string, uom: string) => UNIT_UOMS.some(([words, uoms]) => words.test(unit) && uoms.includes(uom.trim().toUpperCase()));
-// A message's parts: sentence ends, line breaks, and commas, semicolons, dashes, "and" and "or" outside brackets, so "16in Iron Wok
-// (35 available)" keeps its bracket with its product. A comma between digits (2,702) is no break.
-const PART_BREAK = /[.!?](?=\s)|\n|(?:;|(?<!\d),|,(?!\d))(?![^()]*\))|\s[-–—]\s|\b(?:or|and)\b(?![^()]*\))/gi;
-function partAt(message: string, index: number) {
+// Chinese marks read as their ASCII twins, one character each so indexes hold: "Royal Bone China骨瓷圆盘（只剩1个，不够12个）" keeps its bracket.
+const CJK_MARKS: Record<string, string> = { "，": ",", "、": ",", "；": ";", "：": ":", "（": "(", "）": ")" };
+const asciiMarks = (text: string) => text.replace(/[，、；：（）]/g, (mark) => CJK_MARKS[mark]);
+// A message's parts: sentence ends (。！？ before anything: "只剩1个。Royal Bone China Coupe…"), line breaks, and commas, semicolons,
+// dashes, "and" and "or" (和, 或) outside brackets, so "16in Iron Wok (35 available)" keeps its bracket with its product. A comma
+// between digits (2,702) is no break; Chinese marks count (asciiMarks).
+const PART_BREAK = /[.!?](?=\s|\p{Script=Han})|[。！？]|\n|(?:;|(?<!\d),|,(?!\d))(?![^()]*\))|\s[-–—]\s|(?:\b(?:or|and)\b|[和或])(?![^()]*\))/giu;
+/** The message's parts and where each starts, in the message with its Chinese marks read as ASCII. */
+function partsOf(message: string) {
+  const text = asciiMarks(message);
+  const parts: Array<{ part: string; start: number }> = [];
   let start = 0;
-  for (const found of message.matchAll(PART_BREAK)) {
-    if (found.index >= index) return message.slice(start, found.index);
+  for (const found of text.matchAll(PART_BREAK)) {
+    parts.push({ part: text.slice(start, found.index), start });
     start = found.index + found[0].length;
   }
-  return message.slice(start);
+  return { text, parts: [...parts, { part: text.slice(start), start }] };
+}
+// A Chinese clause: after "，" or a comma before a Chinese character ("Ø24cm,每个约$5.41,库存121个").
+const CLAUSE_START = /^(?:，|,(?=\p{Script=Han}))/u;
+/**
+ * The part a count is about: its own, or when its Chinese clause opens the count with at most a connective ("但", "不过", "目前",
+ * "这款") and has no product's words, from the nearest clause before it that has some, past no other count ("Royal Bone China骨瓷圆盘
+ * 24cm,每个约$14.77,但库存只剩1个": r8 F6 reruns, 3 of 8 layouts). "另外骨瓷盘只剩1个" has its own subject.
+ */
+function countPart(message: string, index: number, all: ShownCard[]) {
+  const { text, parts } = partsOf(message);
+  const own = parts.findLastIndex(({ start }) => start <= index);
+  let at = own;
+  const named = (k: number) => all.some((card) => hits(card, nameText(parts[k].part)).size > 0);
+  const lead = text.slice(parts[own].start, index).replace(moneyPattern, "").match(/\p{Script=Han}/gu) ?? [];
+  while (lead.length <= 2 && at > 0 && !named(at) && CLAUSE_START.test(message.slice(parts[at].start - 1)) && !stockCounts(parts[at - 1].part).length) at -= 1;
+  return text.slice(parts[at].start, parts[own].start + parts[own].part.length);
+}
+// Amounts and stock counts are no sizes: "only 1 left" would read as a size of 1.
+const nameText = (text: string) => text.replace(moneyPattern, "").replace(STOCK_COUNT, "").replace(STOCK_COUNT_ZH, "");
+/**
+ * The card words stand for when they fit it and a product with no card alike, which only the card shows the customer: two or more
+ * of its name words, and every size they give is its own ("20in Iron Wok" is no 16in card's). r8 F6: "Royal Bone China骨瓷圆盘" fits
+ * the N0536 card and N2906 alike.
+ */
+function standIn(text: string, cards: ShownCard[]) {
+  const words = nameText(text);
+  const pointed = pointedBy(words, cards);
+  if (pointed.length !== 1) return [];
+  const found = hits(pointed[0], words);
+  const sizes = measures(words);
+  return [...found].filter((hit) => !sizes.has(hit)).length >= 2 && [...sizes].every((size) => found.has(size)) ? pointed : [];
 }
 
 /**
@@ -940,9 +984,12 @@ function partAt(message: string, index: number) {
  */
 export function wrongStockCounts(message: string, cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>) {
   const all = seenCards(seen);
-  return [...message.matchAll(STOCK_COUNT)].flatMap((match) => {
+  return stockCounts(message).flatMap((match) => {
     if (APPROX_BEFORE.test(message.slice(Math.max(0, match.index - 40), match.index))) return [];
-    const pointed = pointedBy(partAt(message, match.index), all);
+    const part = countPart(message, match.index, all);
+    // Words that fit no one product are read as the card they stand for (r8 F6: N2906's "只剩1个" said of the N0536 card).
+    const named = pointedBy(part, all);
+    const pointed = named.length ? named : standIn(part, cards.map(asCard));
     const item = pointed.length === 1 ? seen.get(pointed[0].code) : undefined;
     const count = Number(match[1].replace(/,/g, ""));
     const live = item?.product.available_quantity;
@@ -953,8 +1000,9 @@ export function wrongStockCounts(message: string, cards: readonly Product[], see
   });
 }
 
-// A claim that the count covers the order goes with a wrong count: "plenty for 4", "so tight for 4pcs", "matches your qty".
-const COVERAGE = String.raw`(?:(?:so\s+|which\s+is\s+|that['’]?s\s+)?(?:(?:more\s+than\s+)?enough|plenty|tight|short)\s+for|(?:which\s+|that\s+)?(?:matches|covers?)\s+your|covered)\b`;
+// A claim that the count covers the order goes with a wrong count: "plenty for 4", "so tight for 4pcs", "matches your qty", "not
+// enough for 12" (r8 F6).
+const COVERAGE = String.raw`(?:(?:not\s+|so\s+|which\s+is\s+|that['’]?s\s+)?(?:(?:more\s+than\s+)?enough|plenty|tight|short)\s+for|(?:which\s+|that\s+)?(?:matches|covers?)\s+your|covered)\b`;
 const COVERAGE_PIECE = new RegExp(`^${COVERAGE}`, "i");
 const COVERAGE_AFTER = new RegExp(String.raw`^(?:\s*[,;]|\s+[-–—])?\s*${COVERAGE}[^,;.!?()\n]*`, "i");
 // A bracket's pieces and the separators between them (a comma between digits is none); pieces kept are joined by the last mark.
@@ -987,10 +1035,14 @@ export function withoutWrongStockCounts(message: string, cards: readonly Product
   return text;
 }
 
+// A Chinese count is said as 有现货 or 缺货, with a 够 or 不够 claim made from it: "（骨瓷这款只剩1个，不够12个）" → "（骨瓷这款有现货）".
+const COVERAGE_ZH = /^\s*[，,、；;]?\s*(?:可能|也|都|还)?(?:不够|不足|足够|够)(?:\s*\d+\s*[个件只套张把支条]?)?/u;
+
 /** The message with this one wrong count dropped from its bracket, or said as "in stock" or "out of stock". */
 function withoutStockCount(text: string, { said, index, code }: ReturnType<typeof wrongStockCounts>[number], seen: ReadonlyMap<string, CheckedProduct>) {
   const before = text.slice(0, index);
   const after = text.slice(index + said.length);
+  if (/\p{Script=Han}/u.test(said)) return `${before}${soldOutProduct(seen.get(code)!) ? "缺货" : "有现货"}${after.slice(COVERAGE_ZH.exec(after)?.[0].length ?? 0)}`;
   if (/\([^()]*$/.test(before) && /^[^()]*\)/.test(after)) {
     const open = before.lastIndexOf("(");
     const close = index + said.length + after.indexOf(")");

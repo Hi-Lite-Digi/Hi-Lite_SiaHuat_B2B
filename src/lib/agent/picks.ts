@@ -60,7 +60,7 @@ function unitKey(unit: string, spaced: boolean) {
 }
 
 /** Sizes and part counts written next to a number: 16" / 16 inch, 6-Slots / 6 slot, Ø25cm / 25cm, 5L / 5 litre. */
-function measures(text: string) {
+export function measures(text: string) {
   const found = new Set<string>();
   // "4 or 6 slots" names both sizes (exam 3, c11-stress T7); "GN 2/3" is never a size of 2, nor "2 or 3 in total" of 2in.
   for (const match of text.matchAll(/(?<![\w.])(\d+)\s*or\s*(\d+)(\s*(?:-\s*)?)([a-z]+)/gi)) {

@@ -124,6 +124,33 @@ test("a wrong stock count left after the repair is dropped from its bracket, nev
   assert.equal(reply.message, "A few options in stock: 16in Iron Wok. Which size do you need?");
 });
 
+test("a Chinese count said of the card its words stand for is repaired, and said as 有现货 if it stays (r8 F6 run 6)", async () => {
+  // Four of the 6 Oct "24cm plate" results: N2906 and N0536 are sister plates, and "Royal Bone China骨瓷圆盘" fits both.
+  const plates = [
+    product({ stock_id: "Q1930", name: "Luminarc Everyday Opal Glass Dinner Plate Ø24cm", list_price: 5.41, available_quantity: 121 }),
+    product({ stock_id: "3500-0224", name: "Patra Soup Plate 24cm, Porcelain White", list_price: 14.22, available_quantity: 33 }),
+    product({ stock_id: "N2906", name: "Royal Bone China Verona Deep Plate 24cm", list_price: 14.21, available_quantity: 1 }),
+    product({ stock_id: "N0536", name: "Royal Bone China Chinese Round Coupe Plate 24cm", list_price: 14.77, available_quantity: 74 }),
+  ];
+  const run6 = () => answer({
+    message: "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款只剩1个，不够12个）。您比较倾向玻璃还是瓷器材质？",
+    card_ids: ["Q1930", "3500-0224", "N0536"],
+  });
+  const fixed = "几款直径24cm的餐盘供您参考，都在20新元以内，库存也够12个：Luminarc Opal玻璃餐盘、Patra瓷汤盘和Royal Bone China骨瓷圆盘（骨瓷这款有现货）。您比较倾向玻璃还是瓷器材质？";
+  const asked = request({ event: { type: "text", text: "我要12个直径约24厘米的餐盘，每个不超过20新元。" } });
+  const search = () => toolCall("t1", "search_catalogue", { queries: ["plate"], max_price: 20 });
+  const { client, bodies } = fakeClient([search(), run6(), run6()]);
+  const reply = await runAgentTurn({ request: asked, deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+  assert.match(String(bodies[2].messages.at(-1)!.content), /只剩1个.*for N0536 \(live 74\); 1 matches N2906/);
+  assert.equal(reply.message, fixed);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["Q1930", "3500-0224", "N0536"]);
+  // With no time for a repair, code says it the same way.
+  const late = fakeClient([search(), run6()]);
+  const quick = await runAgentTurn({ request: asked, deps: fakeDeps(plates), client: late.client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  assert.equal(late.bodies.length, 2);
+  assert.equal(quick.message, fixed);
+});
+
 test("an unverified amount that survives the repair is removed", async () => {
   const { client } = fakeClient([
     answer({ message: "That one is $99.", chips: ["Yes, $99 one", "Show others"] }),
