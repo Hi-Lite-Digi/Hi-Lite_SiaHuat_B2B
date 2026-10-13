@@ -1596,6 +1596,14 @@ test("'the most expensive' is a whole-range claim, backed by a search sorted hig
     "The Mika is the cheapest; I can check stock for you.",
     "If you want the cheapest, the Mika is it.",
     "Would you like the Giesser, the most expensive chef knife we list?",
+    // A question that names a product as the dearest or cheapest still claims it (r9 review): only one that ends there or offers an "or" is excused.
+    "Do you want the cheapest chef knife we carry, the Atlantic Chef 8456-16, or something sturdier?",
+    "Want the cheapest one we carry, the Mika?",
+    "Would you like the most expensive chef knife we list, the Giesser 1900S-20-TOL?",
+    "Are you after the priciest blender we stock, the Waring MX1200XTXEE?",
+    "Do you want the cheapest chef knife we stock, the 8456-16?",
+    "Would you like the cheapest one we carry, the Mika?",
+    "Would you prefer our most expensive blender, the Robot Coupe Blixer 30?",
   ]) {
     for (const searches of [[search()], []]) assert.deepEqual(rangeIssues(message, searches), ["style CLAIM"], message);
     assert.deepEqual(rangeIssues(message, backing), [], message);

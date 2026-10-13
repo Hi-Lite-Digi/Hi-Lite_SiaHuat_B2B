@@ -1474,11 +1474,15 @@ test("a price sort returns the type's dearest products first, not the best word 
   assert.ok(!("priceOrder" in unsorted.ctx.searches[0]));
 });
 
-test("a price sort keeps one colour variant each while more rows compete", async () => {
+// r9 review: one colour per product kept the sold-out Black of KF1430 (first by name) and never read the in-stock Blue at the same
+// price, so the first in-stock result was a cheaper knife, called "the most expensive in stock".
+test("a price sort reads every colour of a product, so a sold-out colour doesn't hide an in-stock one", async () => {
   const plain = Array.from({ length: 10 }, (_, index) => knife(`K${index}`, `Plain Knife ${index}cm`, 50 + index));
-  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_low" }, {}, plain);
+  const colours = ["Black", "Blue"].map((colour) => knife(colour === "Black" ? "KF1430BK" : "KF1430B", `CCK Stainless Steel Kow Kong Knife With Plastic Handle (${colour}) xL`, 500));
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_high" }, { KF1430BK: SOLD_OUT }, [...plain, ...colours]);
   assert.equal(body.products.length, 10);
-  assert.equal(body.products.filter((item) => item.stock_id.startsWith("8321T0")).length, 1);
+  assert.deepEqual(body.products.slice(0, 2).map((item) => [item.stock_id, item.stock]), [["KF1430BK", "out of stock"], ["KF1430B", "in stock"]]);
+  assert.ok(neverRising(pricesOf(body)));
 });
 
 test("a live price that changes the order re-sorts the results", async () => {

@@ -659,9 +659,10 @@ const CHEAPEST = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economica
 const PRICIEST = /\b(?:the\s+)?(?:most\s+expensive|priciest|highest[- ]priced|top\s+of\s+(?:the|our)\s+range)\b/i;
 const NEXT_IN_PRICE = /\bnext\s+up\s+in\s+price\b/i;
 // An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest"), a question ("Looking for the
-// cheapest?") or a question about what they want ("Would you like the cheapest one?", "Are you after the priciest, or ...", r9 S3)
-// ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check stock" still ranks.
-const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?|\b(?:do|would)\s+you\s+(?:want|like|prefer|need)\b[^.!?,;]*|\bare\s+you\s+after\b[^.!?,;]*|^(?:want|prefer)\b[^.!?,;]*/gi;
+// cheapest?") or a question about what they want that ends there or offers an "or" ("Would you like the cheapest one?", "Are you
+// after the priciest, or ...", r9 S3) ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check
+// stock" still ranks, and so does "Would you like the cheapest one we carry, the Mika?", which names it (r9 review).
+const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?|(?:\b(?:do|would)\s+you\s+(?:want|like|prefer|need)|\bare\s+you\s+after|^(?:want|prefer))\b[^.!?,;]*(?=\s*(?:\?|,\s*or\b|\bor\b[^.!?,;]*\?))/gi;
 // shortcut: `sorted` holds the turn's whole-category sorts, not their categories, so a price_high search of chef knives also backs
 // "the most expensive blender" in the same reply; upgrade if turns start running sorted searches of two types (r9 S5).
 const ranking = (sentence: string, sorted: ReadonlySet<string>) => {

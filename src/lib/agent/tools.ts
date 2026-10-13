@@ -202,7 +202,7 @@ const BRAND_SHARE = 4;
  * an item is skipped, only items naming at least as many query words may take its place, so category filler never outranks a
  * real match; the rest fill in after.
  */
-function varied(items: Product[], limit: number, queries: string[], phrases: string[][], share = BRAND_SHARE) {
+function varied(items: Product[], limit: number, queries: string[], phrases: string[][]) {
   const words = [...new Set(phrases.flat())];
   const hits = (item: Product) => words.filter((word) => sizeText(item.name).includes(word)).length;
   // Whole words only: short brands (AG, IR, AKI) sit inside "bag", "stir" and "baking".
@@ -217,7 +217,7 @@ function varied(items: Product[], limit: number, queries: string[], phrases: str
     const count = perBrand.get(brand) ?? 0;
     const itemHits = hits(item);
     if (itemHits < floor) continue;
-    if (keys.has(variantKey(item)) || (brand && !named(brand) && count >= share)) {
+    if (keys.has(variantKey(item)) || (brand && !named(brand) && count >= BRAND_SHARE)) {
       floor = Math.max(floor, itemHits);
       continue;
     }
@@ -349,8 +349,9 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     byRank(() => true); // 5. the rest of the query hits
   }
   const shared = Math.floor(READS_PER_ROUND / Math.max(1, ctx.roundSearches ?? 1));
-  // In price order: one colour variant each and no brand share, which would put cheaper rows of other brands above the 5th dearest.
-  const pick = (items: Product[], count: number) => (sorted ? varied(items, count, input.queries, [], Infinity) : varied(items, count, input.queries, phrases));
+  // In price order, every row: a brand share put cheaper brands above the 5th dearest, and one colour each kept a sold-out Black
+  // and never read its in-stock Blue at the same price, so a cheaper knife was "the most expensive in stock" (r9 review, KF1430).
+  const pick = (items: Product[], count: number) => (sorted ? items.slice(0, count) : varied(items, count, input.queries, phrases));
   const top = pick(merged, Math.max(MIN_RESULTS_PER_SEARCH, Math.min(RESULTS_PER_SEARCH, shared)));
   const topIds = new Set(top.map((item) => item.stock_id));
   // Only a category read in full, with every product in it listed (or rejected), backs "that's all". A brand the customer ruled
