@@ -105,6 +105,13 @@ test("product facts flag verification and earlier display", () => {
   assert.equal(fact.shown_before, true);
 });
 
+test("product facts say whether the card shows a photo", () => {
+  const fact = (image_url?: string) => productFact({ product: product({ stock_id: "A", image_url }), verified: true }).photo_on_card;
+  assert.equal(fact("https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg"), true);
+  assert.equal(fact("https://store.siahuat.com/placeholder-image-square.jpg"), false);
+  assert.equal(fact(), false);
+});
+
 test("product facts carry the dimensions and the whole description", () => {
   const description = `Heavy duty   stainless steel.\n\nDishwasher safe. ${"x".repeat(470)} The whisk attachment whips cream.`;
   const fact = productFact({ product: product({ stock_id: "A", dimensions: "W38xD55xH170cm", description }), verified: true });

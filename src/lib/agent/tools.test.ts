@@ -66,6 +66,16 @@ test("a failed live check leaves that one result unverified, with no price or st
   assert.deepEqual([remembered?.in_stock, remembered?.available_quantity], [null, null]);
 });
 
+test("a search card keeps its catalogue photo through the live check, checked or not", async () => {
+  const image_url = "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg";
+  const knife = product({ stock_id: "1900S-20-TOL", name: "Giesser Premiumcut Chef's No. 1 Knife 20cm", image_url });
+  for (const live of [{}, { "1900S-20-TOL": "fail" }] as Record<string, LiveOverride>[]) {
+    const ctx = context(fakeDeps([knife], live));
+    await runTool("search_catalogue", { queries: ["chef knife"] }, ctx);
+    assert.equal(ctx.seen.get("1900S-20-TOL")!.product.image_url, image_url, JSON.stringify(live));
+  }
+});
+
 test("keepBest never turns a live-checked product back into an unchecked one", async () => {
   const torch = product({ stock_id: "T7", name: "TORCH 7", list_price: 12 });
   const seen = new Map<string, CheckedProduct>([["T7", { product: { ...torch, list_price: 12.5 }, verified: true }]]);

@@ -853,6 +853,20 @@ test("a card shown earlier can be attached again without a tool call", async () 
   assert.ok(lookups.calls.includes("code:970S") && lookups.calls.includes("live:970S"), lookups.calls.join(" "));
 });
 
+test("a reply's cards carry their photos, for a search result and for an earlier card looked up by code", async () => {
+  const pictured = () => fakeDeps([{ ...blowtorch, image_url: "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg" }, safico]);
+  const searched = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: pictured(), client: searched.client, model: "claude-sonnet-5" });
+  assert.match(reply.cards[0].image_url ?? "", /image-proxy/);
+  const again = fakeClient([answer({ message: "Here it is again - the photo is on its card.", card_ids: ["970S"] })]);
+  const earlier = await runAgentTurn({ request: askedAgain("got photo?"), deps: pictured(), client: again.client, model: "claude-sonnet-5" });
+  assert.equal(again.bodies.length, 1);
+  assert.match(earlier.cards[0].image_url ?? "", /image-proxy/);
+});
+
 test("a reply still asking which type of a range is sent without cards (r7: pushing furniture)", async () => {
   const { client } = fakeClient([answer({ message: "We carry folding tables and Q-posts. Here are a few. Which type do you need?", card_ids: ["970S"], chips: ["Folding tables", "Q-posts"] })]);
   const reply = await runAgentTurn({ request: askedAgain("how about furniture"), deps: deps(), client, model: "claude-sonnet-5" });

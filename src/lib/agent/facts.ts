@@ -12,6 +12,7 @@ import {
 } from "@/lib/catalogue";
 import { lookupCatalogueImage, type CatalogueImageLookup } from "@/lib/catalogue-image-library";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
+import { cardPhoto } from "./contract";
 
 export type CatalogueProduct = Product & { source_url: string };
 
@@ -231,5 +232,7 @@ export function productFact({ product, verified, details }: CheckedProduct, show
     price_and_stock_verified_live: verified,
     shown_before: shownBefore,
     link: product.source_url ?? null,
+    // The chat's card shows this photo: Claire can point to it for "got photo?", never describe it (r9).
+    photo_on_card: cardPhoto(product) !== null,
   };
 }

@@ -48,7 +48,7 @@ export type ChatSnapshot = { sessionId: string; items: ChatItem[]; enquiry: Agen
 type Store = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 // A card keeps what the chat, the history note and the PDF show; descriptions would only fill the storage.
-const slimCard = ({ stock_id, name, status, list_price, uom_id, source_url, stock_status }: Product): Product => ({ stock_id, name, status, list_price, uom_id, source_url, stock_status });
+const slimCard = ({ stock_id, name, status, list_price, uom_id, source_url, image_url, stock_status }: Product): Product => ({ stock_id, name, status, list_price, uom_id, source_url, image_url, stock_status });
 
 /** Saves the chat, or clears the saved copy once there's nothing to bring back (a new chat). Never throws. */
 export function saveChat(store: Store | null, chat: ChatSnapshot, now: number) {

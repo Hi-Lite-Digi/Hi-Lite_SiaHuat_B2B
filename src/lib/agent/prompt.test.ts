@@ -120,8 +120,10 @@ test("Claire reads the store's details and category the way the catalogue means 
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /Atlantic Chef|Giesser|Kikumori/);
 });
 
-test("Claire knows product cards have no photos, and what to do when a store page has none", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). If they say the page opens but has no photo, say that store page has no photo, describe the product from the tool facts and offer Sia Huat sales for photos (show_contact true). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
+test("Claire knows product cards show a photo when the catalogue has one, and what to do when a store page has none (client, 13 Oct)", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Product cards show the product's photo when the catalogue has one (photo_on_card true), with its name, code, price, stock and link. 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one: when photo_on_card is true (for a card from an earlier reply, get_product it first: the [cards shown] note doesn't say), say the photo is on its card (attach the card if it isn't in your last reply) and that its store link has more photos; when it is false, give the store link. If they say the page opens but has no photo, say that store page has no photo, describe the product from the tool facts and offer Sia Huat sales for photos (show_contact true). You can't see the card photos: never describe what a photo shows. Tapping a card chooses it."));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("asks to see X (show its card, which carries its photo when photo_on_card is true, with its store link; or say there's no photo if we don't carry X)"));
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /text only|no photos/);
 });
 
 test("Claire's wording on links, pushback, searches, threats, orders she can't see and a website they can't use (exam 4, P5)", () => {
