@@ -8,6 +8,7 @@ import {
   findProductForStockCheck,
   searchCatalogueByCategory,
   searchCatalogueDirect,
+  type PriceSort,
 } from "@/lib/catalogue";
 import { lookupCatalogueImage, type CatalogueImageLookup } from "@/lib/catalogue-image-library";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
@@ -20,7 +21,7 @@ export type CategoryResult = { products: Product[]; total: number; exists: boole
 /** Everything the agent may learn about products. Injected so tests run offline. */
 export type FactDeps = {
   searchDirect(query: string, limit: number): Promise<Product[]>;
-  searchCategory(words: string, limit: number, maxPrice?: number | null): Promise<CategoryResult>;
+  searchCategory(words: string, limit: number, maxPrice?: number | null, sort?: PriceSort | null): Promise<CategoryResult>;
   findByCode(stockId: string): Promise<CatalogueProduct | null>;
   findBySourceUrl(url: string): Promise<CatalogueProduct | null>;
   findAlternatives(stockId: string, minQty: number, exclude: ReadonlySet<string>): Promise<Product[]>;
@@ -95,7 +96,7 @@ const searchSlot = searchSlots(SEARCH_CONCURRENCY);
 export function defaultFactDeps(): FactDeps {
   return {
     searchDirect: (query, limit) => searchSlot(() => searchCatalogueDirect(query, limit)),
-    searchCategory: (words, limit, maxPrice) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice)),
+    searchCategory: (words, limit, maxPrice, sort) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice, sort)),
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
     // Its broad fallback runs search_products too. The agent ranks the pool itself, so it needs every candidate, not the 30 with
@@ -129,7 +130,7 @@ export function turnDeps(deps: FactDeps): FactDeps {
   return {
     ...deps,
     searchDirect: (query, limit) => turnSearch(() => deps.searchDirect(query, limit)),
-    searchCategory: (words, limit, maxPrice) => turnSearch(() => deps.searchCategory(words, limit, maxPrice)),
+    searchCategory: (words, limit, maxPrice, sort) => turnSearch(() => deps.searchCategory(words, limit, maxPrice, sort)),
     findAlternatives: (stockId, minQty, exclude) => turnSearch(() => deps.findAlternatives(stockId, minQty, exclude)),
     findByCode: (code) => once(codes, code, () => deps.findByCode(code)),
     fetchLive: (url, ms) => once(pages, url, () => deps.fetchLive(url, ms)),

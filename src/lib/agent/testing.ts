@@ -41,14 +41,19 @@ export function fakeDeps(
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
       return catalogue.filter((item) => words.every((word) => item.name.toLowerCase().includes(word)));
     },
-    async searchCategory(query, limit, maxPrice) {
-      calls.push(`category:${query}`);
+    async searchCategory(query, limit, maxPrice, sort) {
+      calls.push(`category:${query}${sort ? `:${sort}` : ""}`);
       // As catalogue.ts searchCatalogueByCategory reads it.
-      const words = query.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+      const split = (text: string) => text.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+      const words = split(query);
       const inField = (field: string | null | undefined) => words.every((word) => (field ?? "").toLowerCase().includes(word));
       const all = catalogue.filter((item) => inField(item.category) || inField(item.third_category) || inField(item.subcategory));
-      const priced = maxPrice == null ? all : all.filter((item) => item.list_price <= maxPrice);
-      return { products: priced.slice(0, limit), total: priced.length, exists: all.length > 0 };
+      // A price sort reads the leaf when the words name one exactly (here, a row's own leaf), priced rows only, in price order.
+      const leaf = sort && catalogue.some((item) => split(item.third_category ?? "").join(" ") === words.join(" ")) ? catalogue.filter((item) => inField(item.third_category)) : null;
+      const scope = !sort ? all : (leaf ?? all).filter((item) => item.list_price > 0)
+        .sort((a, b) => (sort === "price_high" ? b.list_price - a.list_price : a.list_price - b.list_price) || a.name.localeCompare(b.name));
+      const priced = maxPrice == null ? scope : scope.filter((item) => item.list_price <= maxPrice);
+      return { products: priced.slice(0, limit), total: priced.length, exists: (leaf ?? all).length > 0 };
     },
     async findByCode(stockId) {
       calls.push(`code:${stockId}`);

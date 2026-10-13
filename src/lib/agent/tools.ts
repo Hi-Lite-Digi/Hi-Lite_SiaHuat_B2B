@@ -2,6 +2,7 @@
 import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import type { PriceSort } from "@/lib/catalogue";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, soldByDozen, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
@@ -13,9 +14,10 @@ import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
 export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null };
 /**
  * One search_catalogue call: what backs a reply's "that's our range", "nothing cheaper" or "we don't have it". A find_alternatives
- * run is recorded too (alternativesFor, with no queries): it backs "no close substitute".
+ * run is recorded too (alternativesFor, with no queries): it backs "no close substitute". priceOrder: the search put a whole category
+ * in this price order (no exclusions): it backs "the cheapest" or "the most expensive".
  */
-export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean; alternativesFor?: string };
+export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean; alternativesFor?: string; priceOrder?: PriceSort };
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -73,13 +75,14 @@ export type TurnContext = {
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others.",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others. With sort and a category, the catalogue puts the whole category in price order and the top of that order comes back, highest (price_high) or lowest (price_low) price first, each still checked live; whole_category_sorted true means that order covered every product in the category (a price_high sort with max_price is not), so the first product of the type asked for is the most expensive (or cheapest) we list.",
     input_schema: {
       type: "object",
       properties: {
         queries: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3, description: "1-3 short search phrases" },
-        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets', or a range or section name from SIA HUAT'S CATALOGUE RANGES ('Furniture & Banquet Equipment', 'Chef & Crew Wear'). Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first. If category_found is false, use a name from categories." },
+        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets', or a range or section name from SIA HUAT'S CATALOGUE RANGES ('Furniture & Banquet Equipment', 'Chef & Crew Wear'). Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first, unless sort is set. If category_found is false, use a name from categories." },
         max_price: { type: "number", description: "Optional budget ceiling per unit, SGD ex GST" },
+        sort: { type: "string", enum: ["price_high", "price_low"], description: "Optional: list the category by price instead of by the customer's words, across the whole category: price_high for the best, top-end, premium or most expensive of a type, price_low for the cheapest. Needs category: the type's own name from SIA HUAT'S CATALOGUE RANGES, e.g. 'Chef knives', 'Stock pots'. Leave it out otherwise; for 'cheaper than' a product, keep max_price (no sort)." },
         exclude_ids: { type: "array", items: { type: "string" }, description: "Item codes the customer rejected" },
         exclude_brands: { type: "array", items: { type: "string" }, description: "Brands the customer ruled out, or every brand of a country they don't want (details 'Country of Brand Origin')" },
       },
@@ -139,6 +142,7 @@ const searchInput = z.object({
   ),
   category: z.string().trim().min(1).max(80).nullish(),
   max_price: z.number().positive().nullish(),
+  sort: z.enum(["price_high", "price_low"]).nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),
   exclude_brands: z.array(z.string().trim().min(1).max(60)).max(20).nullish(),
 });
@@ -198,7 +202,7 @@ const BRAND_SHARE = 4;
  * an item is skipped, only items naming at least as many query words may take its place, so category filler never outranks a
  * real match; the rest fill in after.
  */
-function varied(items: Product[], limit: number, queries: string[], phrases: string[][]) {
+function varied(items: Product[], limit: number, queries: string[], phrases: string[][], share = BRAND_SHARE) {
   const words = [...new Set(phrases.flat())];
   const hits = (item: Product) => words.filter((word) => sizeText(item.name).includes(word)).length;
   // Whole words only: short brands (AG, IR, AKI) sit inside "bag", "stir" and "baking".
@@ -213,7 +217,7 @@ function varied(items: Product[], limit: number, queries: string[], phrases: str
     const count = perBrand.get(brand) ?? 0;
     const itemHits = hits(item);
     if (itemHits < floor) continue;
-    if (keys.has(variantKey(item)) || (brand && !named(brand) && count >= BRAND_SHARE)) {
+    if (keys.has(variantKey(item)) || (brand && !named(brand) && count >= share)) {
       floor = Math.max(floor, itemHits);
       continue;
     }
@@ -279,7 +283,7 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   // One slow or failed search must not sink the others: each is retried once and the ones that succeed are used.
   const [settled, [categoryOutcome]] = await Promise.all([
     Promise.allSettled(input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, QUERY_ROWS)))),
-    Promise.allSettled(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS, input.max_price))] : []),
+    Promise.allSettled(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS, input.max_price, input.sort))] : []),
   ]);
   const outcomes = [...settled, ...(categoryOutcome ? [categoryOutcome] : [])];
   if (outcomes.every((result) => result.status === "rejected")) {
@@ -312,7 +316,11 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     && [item.category, item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
   const phrases = input.queries.map((query) => sizeText(query).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
   const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
-  if (!category) {
+  const sort = input.sort ?? null;
+  // A price sort keeps the catalogue's price order over the whole category: the customer's words don't rank it (client, 13 Oct).
+  const sorted = sort !== null && scope.exists;
+  if (sorted) scope.products.forEach(add);
+  else if (!category) {
     // A row naming every word of a query first: "rice dispenser" beside "rice bin" had its one exact row 9th (exam 4, s03-B idx 1).
     byRank(literal);
     byRank(() => true);
@@ -341,7 +349,9 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     byRank(() => true); // 5. the rest of the query hits
   }
   const shared = Math.floor(READS_PER_ROUND / Math.max(1, ctx.roundSearches ?? 1));
-  const top = varied(merged, Math.max(MIN_RESULTS_PER_SEARCH, Math.min(RESULTS_PER_SEARCH, shared)), input.queries, phrases);
+  // In price order: one colour variant each and no brand share, which would put cheaper rows of other brands above the 5th dearest.
+  const pick = (items: Product[], count: number) => (sorted ? varied(items, count, input.queries, [], Infinity) : varied(items, count, input.queries, phrases));
+  const top = pick(merged, Math.max(MIN_RESULTS_PER_SEARCH, Math.min(RESULTS_PER_SEARCH, shared)));
   const topIds = new Set(top.map((item) => item.stock_id));
   // Only a category read in full, with every product in it listed (or rejected), backs "that's all". A brand the customer ruled
   // out still exists, so exclude_brands doesn't count as covered: "that's all" would be false.
@@ -368,9 +378,13 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   // A removed listing doesn't keep its place: the next rows are read once in place of the removed ones (r8 Batch 1 review: 3 of 5
   // reads of "grey cut resistant glove" were removed listings, and live gloves ranked below them were never shown).
   const removedCount = first.filter((item) => item.gone).length;
-  const next = removedCount ? varied(merged.filter((item) => !topIds.has(item.stock_id)), removedCount, input.queries, phrases) : [];
+  const next = removedCount ? pick(merged.filter((item) => !topIds.has(item.stock_id)), removedCount) : [];
   const [more, moreDetails] = await read(next);
   const checked = [...first, ...more];
+  // A live price can change the order: results go back in price order at their live prices (unchecked ones at the catalogue's).
+  // shortcut: rows past the ones read keep their catalogue order, so a live price that jumped above them goes unseen; the 6 Oct
+  // refresh keeps the two close. Upgrade if live and catalogue prices drift (re-run catalogue:refresh).
+  if (sort) checked.sort((a, b) => (sort === "price_high" ? b.product.list_price - a.product.list_price : a.product.list_price - b.product.list_price));
   const details = new Map([...firstDetails, ...moreDetails]);
   for (const item of checked) if (item.gone) ctx.gone.add(item.product.stock_id);
   // A search that returned its full row limit may have more matches than it could return.
@@ -379,7 +393,10 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   const removed = [...queryLists.flat(), ...scope.products].some((item) => ctx.gone.has(item.stock_id));
   // Recorded once its results are ready, not before its live checks (the slow part): a search the deadline cut while they ran backed
   // "that's all" and "we don't carry" in an answer that was told it didn't finish (r6 review).
-  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
+  // Only a sort over every product of the category backs "the most expensive": a product or brand the customer ruled out may be
+  // dearer, and so may one above a budget (r9 S2); the cheapest within a ceiling is still the cheapest.
+  const wholeSorted = sorted && !input.exclude_ids?.length && !input.exclude_brands?.length && !(sort === "price_high" && input.max_price);
+  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete, ...(wholeSorted ? { priceOrder: sort! } : {}) });
   const affordable = checked.filter((item) => !item.gone && (!input.max_price || item.product.list_price <= input.max_price));
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
@@ -387,6 +404,7 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     // With no products returned it would contradict the no-match note.
     more_available: moreAvailable && (affordable.length > 0 || removed),
     complete,
+    ...(sort ? { whole_category_sorted: wholeSorted } : {}),
     // exam 3, c01-A T9-T11: from a top 10 of two brands Claude said all our chef knives were those two.
     ...(scope.exists ? { brands: brandNames(merged) } : {}),
     ...(category ? { category_found: scope.exists } : {}),

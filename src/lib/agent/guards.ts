@@ -653,11 +653,22 @@ const RANKING = new RegExp([
   // A bare count: "We have two: the Giesser 28cm ... and a smaller ... one" (r4 s09-B idx 1, replayed); not "We have 2 left".
   String.raw`${COUNTED}(?=\s*(?::|[-–—]\s|[.!?]?$))${NEXT_STEP}`,
 ].join("|"), "i");
-const PRICE_RANK = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b|\bnext\s+up\s+in\s+price\b/i;
-// An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest") or a question ("Looking for the
-// cheapest?") ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check stock" still ranks.
-const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?/gi;
-const ranking = (sentence: string) => RANKING.test(sentence) || PRICE_RANK.test(sentence.replace(OFFER, " "));
+// Price-order words, backed per direction by a search that put a whole category in that order (SearchRecord.priceOrder) or by a
+// complete one. "The most expensive" was unguarded while the prompt already ruled it out (client, 13 Oct).
+const CHEAPEST = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b/i;
+const PRICIEST = /\b(?:the\s+)?(?:most\s+expensive|priciest|highest[- ]priced|top\s+of\s+(?:the|our)\s+range)\b/i;
+const NEXT_IN_PRICE = /\bnext\s+up\s+in\s+price\b/i;
+// An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest"), a question ("Looking for the
+// cheapest?") or a question about what they want ("Would you like the cheapest one?", "Are you after the priciest, or ...", r9 S3)
+// ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check stock" still ranks.
+const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?|\b(?:do|would)\s+you\s+(?:want|like|prefer|need)\b[^.!?,;]*|\bare\s+you\s+after\b[^.!?,;]*|^(?:want|prefer)\b[^.!?,;]*/gi;
+// shortcut: `sorted` holds the turn's whole-category sorts, not their categories, so a price_high search of chef knives also backs
+// "the most expensive blender" in the same reply; upgrade if turns start running sorted searches of two types (r9 S5).
+const ranking = (sentence: string, sorted: ReadonlySet<string>) => {
+  const words = sentence.replace(OFFER, " ");
+  return RANKING.test(sentence) || (CHEAPEST.test(words) && !sorted.has("price_low")) || (PRICIEST.test(words) && !sorted.has("price_high"))
+    || (NEXT_IN_PRICE.test(words) && !sorted.size);
+};
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product. 'spec' is a
@@ -873,6 +884,7 @@ function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>
  */
 function unbackedClaims(message: string, searches: SearchRecord[], seen: ReadonlyMap<string, CheckedProduct>) {
   const complete = searches.some((search) => search.complete);
+  const sorted = new Set(searches.flatMap((search) => (search.priceOrder ? [search.priceOrder] : [])));
   const budgetBacked = searches.some((search) => search.maxPrice !== null && search.complete);
   const queries = new Set(searches.flatMap((search) => search.queries.map((query) => query.trim().toLowerCase())));
   const absenceBacked = queries.size >= 2 && searches.some((search) => search.categoryFound);
@@ -921,7 +933,7 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     const range = denied ? "rangeDenied" as const
       : BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
       : (COMPLETE.test(sentence) || rangeSummary(sentence)) && aboutRange ? (complete ? null : "complete" as const)
-      : !complete && ranking(sentence) && !SCOPED.test(sentence) && !AMONG_SHOWN.test(sentence) && aboutRange ? "ranking" as const
+      : !complete && ranking(sentence, sorted) && !SCOPED.test(sentence) && !AMONG_SHOWN.test(sentence) && aboutRange ? "ranking" as const
       : absence ? (found.length ? "disproved" as const : (absent && !scoped ? absenceBacked : !SUBSTITUTE_ABSENT.test(sentence) || substituteBacked) ? null : "absence" as const)
       : null;
     // An unbacked stock claim is removed if it survives the repair, so it outranks the kinds that are only reworded.

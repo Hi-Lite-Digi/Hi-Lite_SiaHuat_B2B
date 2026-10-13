@@ -1579,7 +1579,54 @@ test("a ranking of the range is a style issue that is never removed, so a failed
   assert.equal(removeClaims(message, [], stockSeen), message);
 });
 
-const originSeen = (...items: Array<[Parameters<typeof product>[0], string | null]>) => new Map<string, CheckedProduct>(items.map(([overrides, origin]) => [
+test("'the most expensive' is a whole-range claim, backed by a search sorted highest first over a whole category (client, 13 Oct)", () => {
+  for (const message of [
+    "The Giesser 1900S-30-RD is the most expensive chef knife we list.",
+    "The Blixer 30 is our priciest blender.",
+    "That's the highest-priced one we carry.",
+    "It's the top of the range.",
+  ]) {
+    for (const searches of [[search()], [search({ priceOrder: "price_low" })], []]) assert.deepEqual(rangeIssues(message, searches), ["style CLAIM"], message);
+    assert.deepEqual(rangeIssues(message, [search({ priceOrder: "price_high" })]), [], message);
+    assert.deepEqual(rangeIssues(message, backing), [], message);
+  }
+  // A question or offer clause excuses only itself (r9 skeptic S3).
+  for (const message of [
+    "The Mika is the cheapest; do you want it?",
+    "The Mika is the cheapest; I can check stock for you.",
+    "If you want the cheapest, the Mika is it.",
+    "Would you like the Giesser, the most expensive chef knife we list?",
+  ]) {
+    for (const searches of [[search()], []]) assert.deepEqual(rangeIssues(message, searches), ["style CLAIM"], message);
+    assert.deepEqual(rangeIssues(message, backing), [], message);
+  }
+});
+
+test("'the cheapest' is backed by a price_low sort, not a price_high one", () => {
+  assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search({ priceOrder: "price_low" })]), []);
+  assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search({ priceOrder: "price_high" })]), ["style CLAIM"]);
+});
+
+test("offers, questions about what they want, and scoped or among-shown price words need no search", () => {
+  for (const message of [
+    "Want me to look for the most expensive one?",
+    "Of the ones I found, the Giesser is the most expensive.",
+    "Between these two, the Waring is the most expensive.",
+    "There may be pricier ones too.",
+    // U2's one question after the recommendation must not cost a repair round (r9 skeptic S3).
+    "Do you want the cheapest one, or a mid-range one?",
+    "Would you like the cheapest one?",
+    "Are you after the cheapest, or something sturdier?",
+    "Would you like the most expensive one?",
+    "Want the most expensive one?",
+    "Is price the main thing, or do you want the cheapest?",
+    "Prefer the cheapest or the sturdiest?",
+  ]) {
+    assert.deepEqual(rangeIssues(message), [], message);
+  }
+});
+
+const originSeen =(...items: Array<[Parameters<typeof product>[0], string | null]>) => new Map<string, CheckedProduct>(items.map(([overrides, origin]) => [
   overrides.stock_id, { product: product(overrides), verified: true, details: origin ? { "Country of Brand Origin": origin } : null },
 ]));
 const disproved = (message: string, seen: Map<string, CheckedProduct>) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, seen, allowed, undefined, { searches: backing })

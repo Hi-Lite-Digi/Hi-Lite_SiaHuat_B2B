@@ -5,7 +5,7 @@ import type { Product } from "@/lib/chat-contract";
 import { QTY_NOTICE } from "./enquiry";
 import { turnDeps, type CheckedProduct } from "./facts";
 import { agentTools, runTool, startPickCheck, type ToolOutcome, type TurnContext } from "./tools";
-import { fakeDeps, fakePickCheck, product } from "./testing";
+import { fakeDeps, fakePickCheck, product, type LiveOverride } from "./testing";
 import { pickCheckCache } from "./verify";
 
 const blowtorch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 31.31 });
@@ -1418,4 +1418,94 @@ test("a search whose matches were all removed says so, not that nothing matches"
   const repeat = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches(3), goneTorches("T1", "T2", "T3")), { gone: new Set(["T1", "T2", "T3"]) }))).content) as GoneSearchBody;
   assert.deepEqual(repeat.products, []);
   assert.match(repeat.note ?? "", /removed/);
+});
+
+// Client, 13 Oct: "Show me your most expensive chef knife" gave a $47.25 knife and "There may be pricier ones too", since the
+// category read took 200 rows by stock, then name. Real codes; the Boska dicer shares the subcategory, not the leaf.
+const knife = (stock_id: string, name: string, list_price: number, extra: Partial<Product> = {}) => product({
+  stock_id, name, list_price, category: "Cutting & Carving Tools", subcategory: "Professional western chef and preparation knives", third_category: "Chef knives", ...extra,
+});
+const chefKnives = () => [
+  knife("8321T01", "Atlantic Chef Chef Knife 21cm, Red Handle", 38.44, { brand: "ATLANTIC CHEF", available_quantity: 900 }),
+  knife("8321T02", "Atlantic Chef Chef Knife 21cm, Blue Handle", 38.44, { brand: "ATLANTIC CHEF", available_quantity: 800 }),
+  knife("1900S-30-RD", "Giesser Premiumcut Barbeque No. 1 Meat Knife 30cm, Acrylic Handle, Red Diamond", 381.65, { brand: "GIESSER" }),
+  knife("1900S-20-TOL", "Giesser Premiumcut Chef's No. 1 Knife 20cm, Thuja Rootwood Handle, Tree Of Life", 308.26, { brand: "GIESSER" }),
+  knife("1900S-20-SO", "Giesser Premiumcut Chef's No 1Knife 20cm, Acrylic Handle, Spicy Orange", 278.9, { brand: "GIESSER" }),
+  knife("1925S-WWR16-RD", "Giesser Premiumcut Yobocho No. 1 Knife 16cm With Scalloped Egde, Acrylic Handle, Red Diamond", 242.2, { brand: "GIESSER" }),
+  knife("1925S-WWR16-SO", "Giesser Premiumcut Yobocho No. 1 Knife 16cm With Scalloped Egde, Acrylic Handle, Spicy Orange", 242.2, { brand: "GIESSER" }),
+  knife("8280-30", "Giesser Chef's Knife 30cm With Forged Wide Blade, POM Handle", 204.59, { brand: "GIESSER" }),
+  knife("KF2107B", "Stainless Steel Peking Duck Knife With Blue Plastic Handle 7\"", 0),
+  knife("300000", "Boska Cheese Dicer Blockbuster L43.3xW42.7xH17.8cm, Black", 1681.56, { brand: "BOSKA", third_category: "Cheese knives and cutters" }),
+];
+// The fake store reads every row as in stock unless told otherwise (r9 skeptic S6).
+const SOLD_OUT: LiveOverride = { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 };
+type SortedBody = Omit<SearchBody, "products"> & { products: FactBody[]; whole_category_sorted?: boolean };
+async function sortedSearch(input: Record<string, unknown>, live: Record<string, LiveOverride> = {}, extra: ReturnType<typeof knife>[] = []) {
+  const deps = fakeDeps([...chefKnives(), ...extra], { "1900S-30-RD": SOLD_OUT, ...live });
+  const ctx = context(deps);
+  const body = JSON.parse((await runTool("search_catalogue", input, ctx)).content) as SortedBody;
+  return { body, ctx, deps };
+}
+const pricesOf = (body: SortedBody) => body.products.map((item) => item.price_ex_gst ?? 0);
+const neverRising = (prices: number[]) => prices.every((price, index) => index === 0 || price <= prices[index - 1]);
+
+test("a price sort returns the type's dearest products first, not the best word match or the most stocked (client, 13 Oct)", async () => {
+  const { body, ctx, deps } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_high" });
+  // A 5th and 6th Giesser: no brand share in a price sort.
+  assert.deepEqual(body.products.slice(0, 6).map((item) => item.stock_id), ["1900S-30-RD", "1900S-20-TOL", "1900S-20-SO", "1925S-WWR16-RD", "1925S-WWR16-SO", "8280-30"]);
+  assert.ok(neverRising(pricesOf(body)), pricesOf(body).join(", "));
+  assert.ok(!body.products.some((item) => item.stock_id === "300000"));
+  assert.equal(body.whole_category_sorted, true);
+  assert.equal(ctx.searches[0].priceOrder, "price_high");
+  assert.ok(deps.calls.includes("category:Chef knives:price_high"));
+  const unsorted = await sortedSearch({ queries: ["chef knife"], category: "Chef knives" });
+  assert.match(unsorted.body.products[0].stock_id, /^8321T0/);
+  assert.ok(!("whole_category_sorted" in unsorted.body));
+  assert.ok(!("priceOrder" in unsorted.ctx.searches[0]));
+});
+
+test("a price sort keeps one colour variant each while more rows compete", async () => {
+  const plain = Array.from({ length: 10 }, (_, index) => knife(`K${index}`, `Plain Knife ${index}cm`, 50 + index));
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_low" }, {}, plain);
+  assert.equal(body.products.length, 10);
+  assert.equal(body.products.filter((item) => item.stock_id.startsWith("8321T0")).length, 1);
+});
+
+test("a live price that changes the order re-sorts the results", async () => {
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_high" }, { "1900S-20-SO": { price_ex_gst: 400 } });
+  assert.deepEqual([body.products[0].stock_id, body.products[0].price_ex_gst], ["1900S-20-SO", 400]);
+  assert.ok(neverRising(pricesOf(body)));
+});
+
+test("price_low leaves out unpriced rows, and a budget doesn't stop it backing 'the cheapest'", async () => {
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_low" });
+  assert.ok(!body.products.some((item) => item.stock_id === "KF2107B"));
+  assert.equal(body.products[0].price_ex_gst, 38.44);
+  assert.equal(body.whole_category_sorted, true);
+  const budget = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_low", max_price: 300 });
+  assert.deepEqual([budget.body.whole_category_sorted, budget.ctx.searches[0].priceOrder], [true, "price_low"]);
+});
+
+test("no whole-category order without a category, when it isn't found, with exclusions, or highest first under a budget", async () => {
+  for (const input of [
+    { queries: ["chef knife"], sort: "price_high" },
+    { queries: ["chef knife"], category: "Nonexistent widgets", sort: "price_high" },
+    { queries: ["chef knife"], category: "Chef knives", sort: "price_high", exclude_brands: ["Giesser"] },
+    { queries: ["chef knife"], category: "Chef knives", sort: "price_high", exclude_ids: ["1900S-30-RD"] },
+    // The dearest within a budget is not the dearest we list (r9 skeptic S2).
+    { queries: ["chef knife"], category: "Chef knives", sort: "price_high", max_price: 300 },
+  ]) {
+    const { body, ctx } = await sortedSearch(input);
+    const label = JSON.stringify(input);
+    assert.equal(body.whole_category_sorted, false, label);
+    assert.ok(!("priceOrder" in ctx.searches[0]), label);
+    assert.ok(body.products.length > 0, label);
+    assert.ok(neverRising(pricesOf(body)), label);
+  }
+});
+
+test("the search tool offers a price sort", () => {
+  const schema = agentTools[0].input_schema as { properties: Record<string, { enum?: string[] }> };
+  assert.deepEqual(schema.properties.sort.enum, ["price_high", "price_low"]);
+  assert.match(agentTools[0].description ?? "", /whole_category_sorted true means/);
 });

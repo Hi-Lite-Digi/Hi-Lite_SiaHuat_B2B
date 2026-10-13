@@ -1455,6 +1455,33 @@ test("two adds in one round both land", async () => {
   assert.deepEqual(shared.calls, ["code:970S", "code:BTS-8026D", "live:970S", "live:BTS-8026D"]);
 });
 
+test("a sorted search backs 'the most expensive chef knife we list' with no repair; an unsorted one is reworded (client, 13 Oct)", async () => {
+  // More chef knives than one search shows, so only the price sort can back the claim.
+  const chefKnives = () => fakeDeps([
+    product({ stock_id: "1900S-20-TOL", name: "Giesser Premiumcut Chef's No. 1 Knife 20cm", list_price: 308.26, third_category: "Chef knives" }),
+    ...Array.from({ length: 11 }, (_, index) => product({ stock_id: `CK${index}`, name: `Chef Knife ${16 + index}cm`, list_price: 30 + index, third_category: "Chef knives" })),
+  ]);
+  const claim = "The Giesser Premiumcut 20cm is the most expensive chef knife we list.";
+  const sorted = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["chef knife"], category: "Chef knives", sort: "price_high" }),
+    answer({ message: claim, card_ids: ["1900S-20-TOL"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "Show me your most expensive chef knife" } }), deps: chefKnives(), client: sorted.client, model: "claude-sonnet-5" });
+  assert.equal(sorted.bodies.length, 2);
+  assert.equal(reply.message, claim);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["1900S-20-TOL"]);
+  const unsorted = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["chef knife"], category: "Chef knives" }),
+    answer({ message: claim, card_ids: ["1900S-20-TOL"] }),
+    answer({ message: "Of the ones I found, the Giesser Premiumcut 20cm is the most expensive.", card_ids: ["1900S-20-TOL"] }),
+  ]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: "Show me your most expensive chef knife" } }), deps: chefKnives(), client: unsorted.client, model: "claude-sonnet-5" });
+  assert.equal(unsorted.bodies.length, 3);
+  const repair = JSON.stringify(unsorted.bodies[2].messages.at(-1));
+  assert.ok(repair.includes(CLAIM_ISSUE_PREFIX));
+  assert.ok(repair.includes(claim));
+});
+
 test("an unbacked completeness claim is repaired once, then removed", async () => {
   const claim = answer({ message: "That covers our torch range. Anything else?" });
   const { client, bodies } = fakeClient([toolCall("t1", "search_catalogue", { queries: ["torch"] }), claim, claim]);
