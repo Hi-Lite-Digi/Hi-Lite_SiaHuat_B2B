@@ -393,8 +393,6 @@ export function AgentChat() {
           ? <Button type="submit" aria-label="Send question" disabled={loading} size="icon" className="size-12 shrink-0 rounded-full bg-[#ef6b3b] hover:bg-[#da592d]"><Send className="size-4" /></Button>
           : <Button type="button" aria-label={recording ? "Stop voice recording" : "Record voice note"} disabled={loading || transcribing} onClick={() => void toggleRecording()} size="icon" className="size-12 shrink-0 rounded-full bg-[#176853] hover:bg-[#125441]">{transcribing ? <LoaderCircle className="size-4 animate-spin" /> : recording ? <Square className="size-4 fill-current" /> : <Mic className="size-5" />}</Button>}
       </form>
-      {typed > COUNTER_FROM && <p role={typed > MAX_MESSAGE_CHARS ? "alert" : undefined} className={`mt-1 pr-16 text-right text-[11px] ${typed > MAX_MESSAGE_CHARS ? "font-semibold text-red-600" : "text-[#667a74]"}`}>{typed > MAX_MESSAGE_CHARS ? "Too long to send: please shorten it, or send it in two parts. " : ""}{typed.toLocaleString("en-SG")} / {MAX_MESSAGE_CHARS.toLocaleString("en-SG")}</p>}
-      <p className="mt-1 px-2 text-center text-[11px] text-[#667a74]">Chats are saved to help Sia Huat improve this assistant.</p>
-    </div>
+      {typed > COUNTER_FROM && <p role={typed > MAX_MESSAGE_CHARS ? "alert" : undefined} className={`mt-1 pr-16 text-right text-[11px] ${typed > MAX_MESSAGE_CHARS ? "font-semibold text-red-600" : "text-[#667a74]"}`}>{typed > MAX_MESSAGE_CHARS ? "Too long to send: please shorten it, or send it in two parts. " : ""}{typed.toLocaleString("en-SG")} / {MAX_MESSAGE_CHARS.toLocaleString("en-SG")}</p>}    </div>
   </div>;
 }
