@@ -138,7 +138,7 @@ export function turnDeps(deps: FactDeps): FactDeps {
   };
 }
 
-/** Overwrites price and stock from the live store page. Any failure leaves the product unverified; a removed listing also marks it gone. */
+/** Overwrites price, stock and (when the page shows one) the photo from the live store page. Any failure leaves the product unverified; a removed listing also marks it gone. */
 export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS): Promise<CheckedProduct> {
   const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
   if (!product.source_url) return unverified;
@@ -151,6 +151,8 @@ export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LI
       product: {
         ...product,
         source_url: live.source_url,
+        // The catalogue can hold the placeholder for a page that now shows a photo (r9 C7: the Waring MX1200XTXEE).
+        image_url: cardPhoto(live) ?? product.image_url,
         list_price: live.price_ex_gst,
         in_stock: live.in_stock,
         available_quantity: live.available_quantity,

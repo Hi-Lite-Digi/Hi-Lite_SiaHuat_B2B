@@ -62,6 +62,18 @@ test("a live check overwrites price and stock from the store page", async () => 
   assert.equal(checked.product.available_quantity, 115);
 });
 
+test("a live check takes the store page's photo when it has one, else keeps the catalogue's (r9 C7)", async () => {
+  // The catalogue had the placeholder for the Waring MX1200XTXEE while its store page showed a photo, so Claire said it had none.
+  const placeholder = "https://store.siahuat.com/placeholder-image-square.jpg";
+  const photo = "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/111WR-MX1200XTXEE.jpg";
+  const blender = product({ stock_id: "MX1200XTXEE", image_url: placeholder });
+  const checked = await liveCheck(blender, fakeDeps([blender], { MX1200XTXEE: { image_url: photo } }));
+  assert.equal(checked.product.image_url, photo);
+  assert.equal(productFact(checked).photo_on_card, true);
+  const knife = product({ stock_id: "1900S-20-TOL", image_url: photo });
+  for (const image_url of [null, placeholder]) assert.equal((await liveCheck(knife, fakeDeps([knife], { "1900S-20-TOL": { image_url } }))).product.image_url, photo);
+});
+
 test("a failed or mismatched live check leaves the product unverified", async () => {
   const torch = product({ stock_id: "970S" });
   const failed = await liveCheck(torch, fakeDeps([torch], { "970S": "fail" }));

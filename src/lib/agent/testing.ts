@@ -21,7 +21,7 @@ export function product(overrides: Partial<Product> & { stock_id: string }): Cat
   };
 }
 
-export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id">> | "fail" | "gone" | "timeout" | "timeout-once";
+export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id" | "image_url">> | "fail" | "gone" | "timeout" | "timeout-once";
 /** A read that ran past its limit, as AbortSignal.timeout ends it. */
 const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
