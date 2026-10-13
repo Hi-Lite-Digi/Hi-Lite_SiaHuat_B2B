@@ -320,6 +320,22 @@ test("Claire is given every range the catalogue lists and never denies a whole o
   assert.ok(rule.includes("(a queue stand is a Q-post) is a specific request: search with that type as category."), rule);
 });
 
+test("asked for the best, top or most expensive of a type, Claire sorts by price and recommends the top in-stock one in the same reply (client, 13 Oct)", () => {
+  // "Show me your most expensive chef knife" got one $47.25 knife and "There may be pricier ones too": it took repeated prompts.
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const broad = lines.find((line) => line.startsWith("- Broad request (")) ?? "";
+  assert.ok(broad.endsWith(" A request for the best, the top or the cheapest of a type is not a broad request: see the rule on the best below."), broad);
+  const rule = lines[lines.findIndex((line) => line.startsWith("- A request for a whole range or section")) + 1];
+  assert.ok(rule.startsWith("- The best, top, premium, most expensive or highest-end <type>"), rule);
+  for (const words of [
+    "sort 'price_high'", "In that same reply recommend the first in-stock product", "then at most one question",
+    "only when whole_category_sorted is true", "sort 'price_low'", "'Best' for a stated use or need",
+    // A list round reads only 5 live: the dearest chef knives are mostly out of stock (8280-30 is the 6th).
+    "Say 'the most expensive <type> in stock' only when every dearer product of that type in the results is out of stock (not 'not checked').",
+    "If none of that type in the results is in stock, search once more with the same category and sort and their codes in exclude_ids, and recommend from that.",
+  ]) assert.ok(rule.includes(words), words);
+});
+
 test("shown she was wrong about what we carry, Claire says they're right in one line and, for a whole range, names its sections and asks (owner, 2 Oct)", () => {
   // Shown the store's Furniture & Banquet page, Claire said "Sorry about that" and pushed folding-table cards; called misleading,
   // she only pointed to sales.
