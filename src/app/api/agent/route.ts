@@ -1,6 +1,7 @@
 // src/app/api/agent/route.ts
 import Anthropic from "@anthropic-ai/sdk";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { logChatTurn } from "@/lib/agent/chat-log";
 import { agentRequestSchema } from "@/lib/agent/contract";
 import { defaultFactDeps } from "@/lib/agent/facts";
 import { runAgentTurn, type AgentClient } from "@/lib/agent/loop";
@@ -42,6 +43,8 @@ export async function POST(request: Request) {
   return inSessionOrder(input.data.sessionId, () => withModelUsage(async () => {
     const deadlineMs = Math.max(1, Math.ceil(TURN_BUDGET_MS - (performance.now() - arrived)));
     const reply = await runAgentTurn({ request: input.data, deps: defaultFactDeps(), client, model, deadlineMs });
+    // Saved after the reply is sent, and on the live site only, so local tests don't fill the table.
+    if (process.env.VERCEL_ENV === "production") after(() => logChatTurn(input.data, reply));
     return NextResponse.json(reply, { headers: { "x-chat-provider": reply.provider, "x-chat-model": model } });
   }));
 }
