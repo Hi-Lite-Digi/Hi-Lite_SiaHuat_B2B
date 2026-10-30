@@ -25,6 +25,7 @@
     "catalogue:nouns": "tsx scripts/generate-catalogue-nouns.ts",
     "catalogue:ranges": "tsx scripts/generate-catalogue-ranges.ts",
     "catalogue:refresh": "tsx scripts/refresh-catalogue.ts",
+    "sales:import": "tsx scripts/import-sales.ts",
     "chats:export": "tsx scripts/export-chats.ts",
     "qa:claude": "tsx scripts/qa-claude.ts"
   },
