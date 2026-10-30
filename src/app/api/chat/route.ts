@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { chatRequestSchema, type ChatReply, type ChatRequest, type Product } from "@/lib/chat-contract";
+import { chatRequestSchema, publicProduct, type ChatReply, type ChatRequest, type Product } from "@/lib/chat-contract";
 import { claudeModel, composeClaudeReply, inspectImageWithClaude } from "@/lib/claude-client";
 import { withModelUsage } from "@/lib/model-usage";
 import { selectFreshCatalogueProduct } from "@/lib/fresh-product-selection";
@@ -102,7 +102,7 @@ function chineseSuggestion(suggestion: string) {
   return translations[suggestion] ?? suggestion;
 }
 
-function customerReply<T extends { message: string; suggestions?: string[]; products?: Product[]; selectedProduct?: Product | null }>(reply: T, input: Pick<ChatRequest, "message" | "history">): T {
+function customerReply<T extends { message: string; suggestions?: string[]; products?: Product[]; selectedProduct?: Product | null; refreshedProduct?: Product | null }>(reply: T, input: Pick<ChatRequest, "message" | "history">): T {
   const useChinese = prefersChinese(input);
   const operationalFailure = /^(?:load failed|fetch (?:is )?aborted|failed to fetch|network(?: request)? failed|aborterror|timeout(?:error)?|internal server error)\.?$/i.test(reply.message.trim());
   const rememberedRequest = catalogueMessageWithContext(
@@ -120,6 +120,10 @@ function customerReply<T extends { message: string; suggestions?: string[]; prod
   return {
     ...reply,
     message: useChinese ? chineseCustomerMessage({ ...reply, message: safeMessage }) : normalizeClaireMessage(safeMessage),
+    // The client's sales fields never reach a browser (r10).
+    ...(reply.products ? { products: reply.products.map(publicProduct) } : {}),
+    ...(reply.selectedProduct ? { selectedProduct: publicProduct(reply.selectedProduct) } : {}),
+    ...(reply.refreshedProduct ? { refreshedProduct: publicProduct(reply.refreshedProduct) } : {}),
     ...(reply.suggestions
       ? { suggestions: reply.suggestions
           .filter((suggestion) => !/\bsku\b/i.test(suggestion))

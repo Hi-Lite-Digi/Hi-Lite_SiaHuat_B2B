@@ -1579,7 +1579,99 @@ test("a ranking of the range is a style issue that is never removed, so a failed
   assert.equal(removeClaims(message, [], stockSeen), message);
 });
 
-const originSeen = (...items: Array<[Parameters<typeof product>[0], string | null]>) => new Map<string, CheckedProduct>(items.map(([overrides, origin]) => [
+test("'the most expensive' is a whole-range claim, backed by a search sorted highest first over a whole category (client, 13 Oct)", () => {
+  for (const message of [
+    "The Giesser 1900S-30-RD is the most expensive chef knife we list.",
+    "The Blixer 30 is our priciest blender.",
+    "That's the highest-priced one we carry.",
+    "It's the top of the range.",
+  ]) {
+    for (const searches of [[search()], [search({ priceOrder: "price_low" })], []]) assert.deepEqual(rangeIssues(message, searches), ["style CLAIM"], message);
+    assert.deepEqual(rangeIssues(message, [search({ priceOrder: "price_high" })]), [], message);
+    assert.deepEqual(rangeIssues(message, backing), [], message);
+  }
+  // A question or offer clause excuses only itself (r9 skeptic S3).
+  for (const message of [
+    "The Mika is the cheapest; do you want it?",
+    "The Mika is the cheapest; I can check stock for you.",
+    "If you want the cheapest, the Mika is it.",
+    "Would you like the Giesser, the most expensive chef knife we list?",
+    // A question that names a product as the dearest or cheapest still claims it (r9 review): only one that ends there or offers an "or" is excused.
+    "Do you want the cheapest chef knife we carry, the Atlantic Chef 8456-16, or something sturdier?",
+    "Want the cheapest one we carry, the Mika?",
+    "Would you like the most expensive chef knife we list, the Giesser 1900S-20-TOL?",
+    "Are you after the priciest blender we stock, the Waring MX1200XTXEE?",
+    "Do you want the cheapest chef knife we stock, the 8456-16?",
+    "Would you like the cheapest one we carry, the Mika?",
+    "Would you prefer our most expensive blender, the Robot Coupe Blixer 30?",
+  ]) {
+    for (const searches of [[search()], []]) assert.deepEqual(rangeIssues(message, searches), ["style CLAIM"], message);
+    assert.deepEqual(rangeIssues(message, backing), [], message);
+  }
+});
+
+// Made-up rows for the sales flags: no real product's sales flags in this public repo. The Waring has none.
+const salesSeen = new Map<string, CheckedProduct>([
+  product({ stock_id: "BX-100", name: "Brandx BX-100 Bar Blender 2L", best_seller: true, popularity: 100 }),
+  product({ stock_id: "BX-200", name: "Brandx BX-200 Bar Blender 1.5L", popularity: 50 }),
+  product({ stock_id: "PX-9", name: "Acme PX-9 Immersion Blender", popularity: 90 }),
+  product({ stock_id: "MX1000XTXEE", name: "Waring Commercial Hi-Power Blender With 64 Oz. Bpa-Free Copolyester Container" }),
+].map((item) => [item.stock_id, { product: item, verified: true }]));
+const bestSellerClaims = (message: string, card_ids: string[]) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, salesSeen, allowed)
+  .style.filter((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)).length;
+
+test("'one of our best-sellers' only about a product whose facts say so (r10)", () => {
+  for (const [message, cards] of [
+    ["The Waring MX1000XTXEE is our best-seller.", ["MX1000XTXEE"]],
+    ["Both the Brandx and the Waring are best-selling blenders.", ["BX-100", "MX1000XTXEE"]],
+    ["Both the Brandx and the Waring are best-selling blenders.", []],
+    ["These are our top sellers.", ["MX1000XTXEE"]],
+    ["这款 MX1000XTXEE 是我们最畅销的", ["MX1000XTXEE"]],
+    // A 'popular' product isn't a best-seller: in Chinese only the superlative is guarded (r10 skeptic A10).
+    ["这款 PX-9 是我们最畅销的", ["PX-9"]],
+    // A plural claim over the cards sent needs every card flagged, not one: the broad rule sends mixed sets (r10 review).
+    ["Here are three of our best-sellers.", ["BX-100", "BX-200", "PX-9"]],
+    ["All three are best-sellers.", ["BX-100", "BX-200", "PX-9"]],
+    ["These are our best-selling blenders: pick by size.", ["BX-100", "BX-200", "PX-9"]],
+    ["These are our best-sellers.", []],
+  ] as const) assert.equal(bestSellerClaims(message, [...cards]), 1, message);
+  for (const [message, cards] of [
+    ["The Brandx BX-100 is one of our best-sellers.", ["BX-100"]],
+    ["These are our best-sellers.", ["BX-100"]],
+    ["Want to see our best-sellers?", []],
+    ["It's a popular choice for bars.", ["MX1000XTXEE"]],
+    // Each clause is judged on the reply's own cards first (r10 skeptic A9): the Brandx BX-200 was seen, not sent.
+    ["The Brandx BX-100 is one of our best-sellers; the Waring suits bars.", ["BX-100", "MX1000XTXEE"]],
+    ["The Brandx is one of our best-sellers.", ["BX-100"]],
+    ["这款 PX-9 很畅销", ["PX-9"]],
+  ] as const) assert.equal(bestSellerClaims(message, [...cards]), 0, message);
+});
+
+test("'the cheapest' is backed by a price_low sort, not a price_high one", () => {
+  assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search({ priceOrder: "price_low" })]), []);
+  assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search({ priceOrder: "price_high" })]), ["style CLAIM"]);
+});
+
+test("offers, questions about what they want, and scoped or among-shown price words need no search", () => {
+  for (const message of [
+    "Want me to look for the most expensive one?",
+    "Of the ones I found, the Giesser is the most expensive.",
+    "Between these two, the Waring is the most expensive.",
+    "There may be pricier ones too.",
+    // U2's one question after the recommendation must not cost a repair round (r9 skeptic S3).
+    "Do you want the cheapest one, or a mid-range one?",
+    "Would you like the cheapest one?",
+    "Are you after the cheapest, or something sturdier?",
+    "Would you like the most expensive one?",
+    "Want the most expensive one?",
+    "Is price the main thing, or do you want the cheapest?",
+    "Prefer the cheapest or the sturdiest?",
+  ]) {
+    assert.deepEqual(rangeIssues(message), [], message);
+  }
+});
+
+const originSeen =(...items: Array<[Parameters<typeof product>[0], string | null]>) => new Map<string, CheckedProduct>(items.map(([overrides, origin]) => [
   overrides.stock_id, { product: product(overrides), verified: true, details: origin ? { "Country of Brand Origin": origin } : null },
 ]));
 const disproved = (message: string, seen: Map<string, CheckedProduct>) => reviewAnswer({ message, card_ids: [], chips: [], show_contact: false }, seen, allowed, undefined, { searches: backing })

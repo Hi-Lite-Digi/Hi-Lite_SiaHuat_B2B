@@ -86,7 +86,9 @@ test("Claire only states product facts the tools gave for that product, and work
 
 test("Claire's wording on rankings, stock per item code, origin, series, earlier cards and cheaper asks (exam 4, P4-F5)", () => {
   const lineWith = (start: string) => CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith(start)) ?? "";
-  assert.ok(lineWith("- 'The cheapest', 'the biggest', 'the only'").endsWith(" Price-order words ('the cheapest', 'the most budget', 'next up in price') and summaries of the range by brand, origin or material are whole-range claims too. Stock is per item code: one colour or size being out of stock says nothing about its brand or its other colours; name an out-of-stock product by its item code."));
+  // client, 13 Oct: "the most expensive" is a price order, backed by a search sorted that way over a whole category.
+  assert.ok(lineWith("- 'The cheapest', 'the biggest', 'the only'").includes("use them only with complete true, or, for a price order ('the cheapest', 'the most expensive'), a search sorted that way that returned whole_category_sorted true; otherwise say"));
+  assert.ok(lineWith("- 'The cheapest', 'the biggest', 'the only'").endsWith(" Price-order words ('the cheapest', 'the most expensive', 'the most budget', 'next up in price') and summaries of the range by brand, origin or material are whole-range claims too. Stock is per item code: one colour or size being out of stock says nothing about its brand or its other colours; name an out-of-stock product by its item code."));
   assert.ok(lineWith("- details are the store's own fields.").endsWith(" A customer asking for <country> knives or <country>-made items wants brands from there: search the product type and check 'Country of Brand Origin' in each result's details; never say we have no <country> brand when a tool result this turn shows one."));
   assert.ok(lineWith("- Extras and matches:").endsWith(" To find matching pieces, search the series by its brand and series name."));
   assert.ok(lineWith("- Cards:").includes("Describe stock only as each product's stock field and available_quantity say, for that item code; give the current figure and don't guess why it differs from an earlier one; 'not checked' never means out of stock."));
@@ -118,8 +120,10 @@ test("Claire reads the store's details and category the way the catalogue means 
   assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /Atlantic Chef|Giesser|Kikumori/);
 });
 
-test("Claire knows product cards have no photos, and what to do when a store page has none", () => {
-  assert.ok(CLAIRE_AGENT_PROMPT.includes("Product cards show text only (name, code, price, stock, link) — no photos. If the customer wants to see a product, give its store link (the page has photos). If they say the page opens but has no photo, say that store page has no photo, describe the product from the tool facts and offer Sia Huat sales for photos (show_contact true). 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one. Tapping a card chooses it."));
+test("Claire knows product cards show a photo when the catalogue has one, and what to do when a store page has none (client, 13 Oct)", () => {
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("- Product cards show the product's photo when the catalogue has one (photo_on_card true), with its name, code, price, stock and link. 'Got photo?' / 'can see picture?' means the customer wants to see a photo, not that they sent one: when photo_on_card is true (for a card from an earlier reply, get_product it first: the [cards shown] note doesn't say), say the photo is on its card (attach the card if it isn't in your last reply) and that its store link has more photos; when it is false, only the card lacks a photo: give the store link and never say the store page has no photo. If they say the page opens but has no photo, say that store page has no photo, describe the product from the tool facts and offer Sia Huat sales for photos (show_contact true). You can't see the card photos: never describe what a photo shows. Tapping a card chooses it."));
+  assert.ok(CLAIRE_AGENT_PROMPT.includes("asks to see X (show its card, which carries its photo when photo_on_card is true, with its store link; or say there's no photo if we don't carry X)"));
+  assert.doesNotMatch(CLAIRE_AGENT_PROMPT, /text only|no photos/);
 });
 
 test("Claire's wording on links, pushback, searches, threats, orders she can't see and a website they can't use (exam 4, P5)", () => {
@@ -316,6 +320,62 @@ test("Claire is given every range the catalogue lists and never denies a whole o
   assert.ok(rule.includes("never say we don't carry it, even when a search with the customer's words misses it"), rule);
   assert.ok(rule.includes("Say in one line what it covers, naming a few types from the list, and ask which type they need (up to 3 type names as chips); show products once they choose."), rule);
   assert.ok(rule.includes("(a queue stand is a Q-post) is a specific request: search with that type as category."), rule);
+});
+
+test("a broad request gets 2-3 best-sellers and one salesperson's question in the first reply (client, 30 Oct)", () => {
+  // "The customer must be very specific to arrive at what he wants, whereas the existing salespeople ask the right questions and
+  // direct them to some suggestions immediately." A broad ask got a question only.
+  const broad = CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith("- Broad request (")) ?? "";
+  for (const words of [
+    "suggest before you ask, as a salesperson would",
+    // "blender" read as Kitchen blenders alone found 9 of 10 out of stock and showed one $3,224 machine (r10 replay V4).
+    "In this same reply call search_catalogue with their words and the type's name from SIA HUAT'S CATALOGUE RANGES as category (when their word fits several types, as a blender is a bar, kitchen or hand blender, its plural instead, 'blenders', so all of them are searched), and show 2-3 products of that type as cards",
+    "best-sellers first (sales_rank 'best-seller', then 'popular')",
+    "a lower-priced one among them when the results have one",
+    "the one short question a salesperson would ask next, about one thing: for a restaurant, a home or a gift; the size; or the budget",
+    // With no type there is no category to search: 2-3 cards would be guesses (r10 skeptic A11c).
+    "A request that names no product type ('stuff for my new cafe') still gets the one question first.",
+  ]) assert.ok(broad.includes(words), words);
+  assert.ok(broad.endsWith(" A request for the best of a type, or for its most expensive or cheapest, follows the rule on the best below."), broad);
+  assert.doesNotMatch(broad, /before listing/);
+});
+
+test("the best of a type is the best fit, preferring a best-seller; only the most expensive or cheapest in those words sorts by price (client 13 Oct, owner 30 Oct)", () => {
+  // client, 13 Oct: "Show me your most expensive chef knife" got one $47.25 knife and "There may be pricier ones too". Owner, 30 Oct,
+  // on round 9 sorting 'the best' by price: "i think it should be suggested meaningfully".
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const rule = lines[lines.findIndex((line) => line.startsWith("- A request for a whole range or section")) + 1];
+  assert.ok(rule.startsWith("- The best or top <type>"), rule);
+  for (const words of [
+    "never simply the dearest", "Search the type as category with no sort", "preferring a best-seller (sales_rank)",
+    "With no use given, recommend the type's in-stock best-seller",
+    // No best-seller in the type: no made-up one (r10 skeptic A11b).
+    "(if none has sales_rank 'best-seller', the in-stock one whose facts suit the most uses, without calling it a best-seller)",
+    "'Premium', 'top-end' or 'high-end' asks for quality",
+    // Round 9's PRICIEST guard flags 'top of the range' (r10 skeptic A11b).
+    "recommend the same way from the dearer products in the results, without calling it the most expensive or the top of the range.",
+    "Only when they ask for the most expensive, priciest or highest-priced <type> in those words",
+    "sort 'price_high'", "only when whole_category_sorted is true", "sort 'price_low'",
+    // Round 9's intent: the most expensive gets its recommendation in the same reply, not a follow-up question (r10 review).
+    "search with sort 'price_high' and, in that same reply, recommend the first in-stock product in the results that is that type",
+    // A list round reads only 5 live: the dearest chef knives are mostly out of stock (8280-30 is the 6th).
+    "Say 'the most expensive <type> in stock' only when every dearer product of that type in the results is out of stock (not 'not checked').",
+    "If none of that type in the results is in stock, search once more with the same category and sort and their codes in exclude_ids, and recommend from that.",
+  ]) assert.ok(rule.includes(words), words);
+  assert.doesNotMatch(rule, /The best, top, premium, most expensive/);
+});
+
+test("sales_rank is said in words, never numbers (client data, 30 Oct)", () => {
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const rule = lines[lines.findIndex((line) => line.startsWith("- The best or top <type>")) + 1];
+  assert.ok(rule.startsWith("- sales_rank comes from Sia Huat's own sales this year"), rule);
+  for (const words of [
+    "never give sales figures, a rank number, how many we sell or which customers buy it",
+    // Most products with sales data get null too, so null can't mean "no sales data" (r10 review).
+    "null means it isn't marked as a top seller of its type or there is no sales data: never call it a poor seller, and don't say whether we have sales data on it.",
+    // The flag marks the top few of a type, not the top one, and a comparison would be made up (r10 skeptic A11a).
+    "Say 'one of our best-sellers', never 'our best-seller' or 'the best-selling <type>' as if it were the only one, and never compare how two products sell.",
+  ]) assert.ok(rule.includes(words), words);
 });
 
 test("shown she was wrong about what we carry, Claire says they're right in one line and, for a whole range, names its sections and asks (owner, 2 Oct)", () => {

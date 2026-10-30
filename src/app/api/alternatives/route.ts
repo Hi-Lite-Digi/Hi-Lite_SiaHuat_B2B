@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { findAvailableCatalogueAlternatives } from "@/lib/catalogue";
+import { publicProduct } from "@/lib/chat-contract";
 import { fetchSiaHuatProduct } from "@/lib/siahuat-product";
 
 export const runtime = "nodejs";
@@ -53,7 +54,7 @@ export async function POST(request: Request) {
       .flatMap((result) => result.status === "fulfilled" && result.value ? [result.value] : [])
       .sort((left, right) => Number(right.available_quantity ?? 0) - Number(left.available_quantity ?? 0))
       .slice(0, 3);
-    return Response.json({ products, minimumQuantity });
+    return Response.json({ products: products.map(publicProduct), minimumQuantity });
   } catch (error) {
     console.error("Catalogue alternative lookup failed", error);
     return Response.json({ error: "Alternative products could not be checked right now." }, { status: 502 });

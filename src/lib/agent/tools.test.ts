@@ -5,7 +5,7 @@ import type { Product } from "@/lib/chat-contract";
 import { QTY_NOTICE } from "./enquiry";
 import { turnDeps, type CheckedProduct } from "./facts";
 import { agentTools, runTool, startPickCheck, type ToolOutcome, type TurnContext } from "./tools";
-import { fakeDeps, fakePickCheck, product } from "./testing";
+import { fakeDeps, fakePickCheck, product, type LiveOverride } from "./testing";
 import { pickCheckCache } from "./verify";
 
 const blowtorch = product({ stock_id: "970S", name: "KITCHEN BLOW TORCH 970S", list_price: 31.31 });
@@ -64,6 +64,16 @@ test("a failed live check leaves that one result unverified, with no price or st
   assert.ok(body.products.filter((item) => item.stock_id !== "T3").every((item) => item.price_and_stock_verified_live));
   const remembered = ctx.seen.get("T3")?.product;
   assert.deepEqual([remembered?.in_stock, remembered?.available_quantity], [null, null]);
+});
+
+test("a search card keeps its catalogue photo through the live check, checked or not", async () => {
+  const image_url = "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg";
+  const knife = product({ stock_id: "1900S-20-TOL", name: "Giesser Premiumcut Chef's No. 1 Knife 20cm", image_url });
+  for (const live of [{}, { "1900S-20-TOL": "fail" }] as Record<string, LiveOverride>[]) {
+    const ctx = context(fakeDeps([knife], live));
+    await runTool("search_catalogue", { queries: ["chef knife"] }, ctx);
+    assert.equal(ctx.seen.get("1900S-20-TOL")!.product.image_url, image_url, JSON.stringify(live));
+  }
 });
 
 test("keepBest never turns a live-checked product back into an unchecked one", async () => {
@@ -711,6 +721,18 @@ test("unit words don't make products the same kind", async () => {
     product({ stock_id: "HAND", name: "HAND MIXER 450W" }),
   ];
   assert.deepEqual(await altIds(fakeDeps(catalogue), "WM", 1), ["HAND"]);
+});
+
+test("find_alternatives puts a better seller first among same-kind products at a similar price, and a far price last (r10)", async () => {
+  // Invented brands and codes on the rows with sales fields: no real product's sales rank in a public repo.
+  const leaf = { third_category: "Water goblets & multi-purpose glasses" };
+  const catalogue = [
+    product({ stock_id: "H5802", name: "Luminarc Raindrop Water Goblet", brand: "Luminarc", list_price: 12.75, ...leaf }),
+    product({ stock_id: "T-WG340", name: "Brandy Water Goblet 340ml", brand: "Brandy", list_price: 13.2, popularity: 20, ...leaf }),
+    product({ stock_id: "T-WG330", name: "Brandx Water Goblet 330ml", brand: "Brandx", list_price: 12.1, popularity: 90, ...leaf }),
+    product({ stock_id: "T-CWG", name: "Brandz Crystal Water Goblet", brand: "Brandz", list_price: 28.35, popularity: 100, ...leaf }),
+  ];
+  assert.deepEqual(await altIds(fakeDeps(catalogue), "H5802", 1), ["T-WG330", "T-WG340", "T-CWG"]);
 });
 
 test("a product with no leaf category gets same-series alternatives by name (exam 3, c05-persona T12)", async () => {
@@ -1418,4 +1440,169 @@ test("a search whose matches were all removed says so, not that nothing matches"
   const repeat = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context(fakeDeps(torches(3), goneTorches("T1", "T2", "T3")), { gone: new Set(["T1", "T2", "T3"]) }))).content) as GoneSearchBody;
   assert.deepEqual(repeat.products, []);
   assert.match(repeat.note ?? "", /removed/);
+});
+
+// Client, 13 Oct: "Show me your most expensive chef knife" gave a $47.25 knife and "There may be pricier ones too", since the
+// category read took 200 rows by stock, then name. Real codes; the Boska dicer shares the subcategory, not the leaf.
+const knife = (stock_id: string, name: string, list_price: number, extra: Partial<Product> = {}) => product({
+  stock_id, name, list_price, category: "Cutting & Carving Tools", subcategory: "Professional western chef and preparation knives", third_category: "Chef knives", ...extra,
+});
+const chefKnives = () => [
+  knife("8321T01", "Atlantic Chef Chef Knife 21cm, Red Handle", 38.44, { brand: "ATLANTIC CHEF", available_quantity: 900 }),
+  knife("8321T02", "Atlantic Chef Chef Knife 21cm, Blue Handle", 38.44, { brand: "ATLANTIC CHEF", available_quantity: 800 }),
+  knife("1900S-30-RD", "Giesser Premiumcut Barbeque No. 1 Meat Knife 30cm, Acrylic Handle, Red Diamond", 381.65, { brand: "GIESSER" }),
+  knife("1900S-20-TOL", "Giesser Premiumcut Chef's No. 1 Knife 20cm, Thuja Rootwood Handle, Tree Of Life", 308.26, { brand: "GIESSER" }),
+  knife("1900S-20-SO", "Giesser Premiumcut Chef's No 1Knife 20cm, Acrylic Handle, Spicy Orange", 278.9, { brand: "GIESSER" }),
+  knife("1925S-WWR16-RD", "Giesser Premiumcut Yobocho No. 1 Knife 16cm With Scalloped Egde, Acrylic Handle, Red Diamond", 242.2, { brand: "GIESSER" }),
+  knife("1925S-WWR16-SO", "Giesser Premiumcut Yobocho No. 1 Knife 16cm With Scalloped Egde, Acrylic Handle, Spicy Orange", 242.2, { brand: "GIESSER" }),
+  knife("8280-30", "Giesser Chef's Knife 30cm With Forged Wide Blade, POM Handle", 204.59, { brand: "GIESSER" }),
+  knife("KF2107B", "Stainless Steel Peking Duck Knife With Blue Plastic Handle 7\"", 0),
+  knife("300000", "Boska Cheese Dicer Blockbuster L43.3xW42.7xH17.8cm, Black", 1681.56, { brand: "BOSKA", third_category: "Cheese knives and cutters" }),
+];
+// The fake store reads every row as in stock unless told otherwise (r9 skeptic S6).
+const SOLD_OUT: LiveOverride = { stock_status: "out_of_stock", in_stock: false, available_quantity: 0 };
+type SortedBody = Omit<SearchBody, "products"> & { products: FactBody[]; whole_category_sorted?: boolean };
+async function sortedSearch(input: Record<string, unknown>, live: Record<string, LiveOverride> = {}, extra: ReturnType<typeof knife>[] = []) {
+  const deps = fakeDeps([...chefKnives(), ...extra], { "1900S-30-RD": SOLD_OUT, ...live });
+  const ctx = context(deps);
+  const body = JSON.parse((await runTool("search_catalogue", input, ctx)).content) as SortedBody;
+  return { body, ctx, deps };
+}
+const pricesOf = (body: SortedBody) => body.products.map((item) => item.price_ex_gst ?? 0);
+const neverRising = (prices: number[]) => prices.every((price, index) => index === 0 || price <= prices[index - 1]);
+
+test("a price sort returns the type's dearest products first, not the best word match or the most stocked (client, 13 Oct)", async () => {
+  const { body, ctx, deps } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_high" });
+  // A 5th and 6th Giesser: no brand share in a price sort.
+  assert.deepEqual(body.products.slice(0, 6).map((item) => item.stock_id), ["1900S-30-RD", "1900S-20-TOL", "1900S-20-SO", "1925S-WWR16-RD", "1925S-WWR16-SO", "8280-30"]);
+  assert.ok(neverRising(pricesOf(body)), pricesOf(body).join(", "));
+  assert.ok(!body.products.some((item) => item.stock_id === "300000"));
+  assert.equal(body.whole_category_sorted, true);
+  assert.equal(ctx.searches[0].priceOrder, "price_high");
+  assert.ok(deps.calls.includes("category:Chef knives:price_high"));
+  const unsorted = await sortedSearch({ queries: ["chef knife"], category: "Chef knives" });
+  assert.match(unsorted.body.products[0].stock_id, /^8321T0/);
+  assert.ok(!("whole_category_sorted" in unsorted.body));
+  assert.ok(!("priceOrder" in unsorted.ctx.searches[0]));
+});
+
+// r9 review: one colour per product kept the sold-out Black of KF1430 (first by name) and never read the in-stock Blue at the same
+// price, so the first in-stock result was a cheaper knife, called "the most expensive in stock".
+test("a price sort reads every colour of a product, so a sold-out colour doesn't hide an in-stock one", async () => {
+  const plain = Array.from({ length: 10 }, (_, index) => knife(`K${index}`, `Plain Knife ${index}cm`, 50 + index));
+  const colours = ["Black", "Blue"].map((colour) => knife(colour === "Black" ? "KF1430BK" : "KF1430B", `CCK Stainless Steel Kow Kong Knife With Plastic Handle (${colour}) xL`, 500));
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_high" }, { KF1430BK: SOLD_OUT }, [...plain, ...colours]);
+  assert.equal(body.products.length, 10);
+  assert.deepEqual(body.products.slice(0, 2).map((item) => [item.stock_id, item.stock]), [["KF1430BK", "out of stock"], ["KF1430B", "in stock"]]);
+  assert.ok(neverRising(pricesOf(body)));
+});
+
+test("a live price that changes the order re-sorts the results", async () => {
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_high" }, { "1900S-20-SO": { price_ex_gst: 400 } });
+  assert.deepEqual([body.products[0].stock_id, body.products[0].price_ex_gst], ["1900S-20-SO", 400]);
+  assert.ok(neverRising(pricesOf(body)));
+});
+
+test("price_low leaves out unpriced rows, and a budget doesn't stop it backing 'the cheapest'", async () => {
+  const { body } = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_low" });
+  assert.ok(!body.products.some((item) => item.stock_id === "KF2107B"));
+  assert.equal(body.products[0].price_ex_gst, 38.44);
+  assert.equal(body.whole_category_sorted, true);
+  const budget = await sortedSearch({ queries: ["chef knife"], category: "Chef knives", sort: "price_low", max_price: 300 });
+  assert.deepEqual([budget.body.whole_category_sorted, budget.ctx.searches[0].priceOrder], [true, "price_low"]);
+});
+
+test("no whole-category order without a category, when it isn't found, with exclusions, or highest first under a budget", async () => {
+  for (const input of [
+    { queries: ["chef knife"], sort: "price_high" },
+    { queries: ["chef knife"], category: "Nonexistent widgets", sort: "price_high" },
+    { queries: ["chef knife"], category: "Chef knives", sort: "price_high", exclude_brands: ["Giesser"] },
+    { queries: ["chef knife"], category: "Chef knives", sort: "price_high", exclude_ids: ["1900S-30-RD"] },
+    // The dearest within a budget is not the dearest we list (r9 skeptic S2).
+    { queries: ["chef knife"], category: "Chef knives", sort: "price_high", max_price: 300 },
+  ]) {
+    const { body, ctx } = await sortedSearch(input);
+    const label = JSON.stringify(input);
+    assert.equal(body.whole_category_sorted, false, label);
+    assert.ok(!("priceOrder" in ctx.searches[0]), label);
+    assert.ok(body.products.length > 0, label);
+    assert.ok(neverRising(pricesOf(body)), label);
+  }
+});
+
+test("the search tool offers a price sort for an explicit price order only, and names sales_rank (owner, 30 Oct)", () => {
+  const schema = agentTools[0].input_schema as { properties: Record<string, { enum?: string[]; description?: string }> };
+  assert.deepEqual(schema.properties.sort.enum, ["price_high", "price_low"]);
+  assert.match(agentTools[0].description ?? "", /whole_category_sorted true means/);
+  // "the best" is the best fit, not the dearest (owner, 30 Oct: "suggested meaningfully").
+  assert.match(schema.properties.sort.description ?? "", /Not for 'the best', 'premium' or 'top-end'/);
+  assert.doesNotMatch(schema.properties.sort.description ?? "", /price_high for the best/);
+  assert.match(agentTools[0].description ?? "", /sales_rank/);
+});
+
+// r10: the salespeople's names (sales_name) and the best-seller flags. A row with best_seller or popularity has a made-up code and
+// name: the sales data is the client's and this repo is public.
+const gn = (stock_id: string, name: string, extra: Partial<Product> = {}) => product({
+  stock_id, name, category: "Food Preparation Equipment", subcategory: "Gastronorm/steam pans", third_category: "European GN pans", ...extra,
+});
+
+test("a stale store name is found and ranked by its sales name (tester, 13 Oct: G11102)", async () => {
+  const half = gn("G11202", "201 S/S GN PAN 1/2 SIZE, 40mm DEEP, THICKNESS 0.6mm, STEELCRAFT by SAFICO");
+  const stale = gn("G11102", "STAINLESS STEEL GN PAN", { sales_name: "201 S/S GN PAN 1/1 SIZE, 40mm DEEP, THICKNESS 0.6mm, STEELCRAFT by SAFICO" });
+  const deeper = gn("G11103", "201 S/S GN PAN 1/1 SIZE, 65mm DEEP, THICKNESS 0.6mm, STEELCRAFT by SAFICO");
+  const deps = fakeDeps([half, stale, deeper]);
+  assert.equal(idsOf(await searchBody({ queries: ["gn pan 1/1 40mm"] }, deps))[0], "G11102");
+  // The database scores the 1/2 and the 1/1 40mm pans alike and may list the 1/2 first: "1/1" must still count as a word.
+  deps.searchDirect = async () => [half, stale, deeper];
+  for (const input of [{ queries: ["gn pan 1/1 40mm"] }, { queries: ["gn pan 1/1 40mm"], category: "European GN pans" }]) {
+    const ids = idsOf(await searchBody(input, deps));
+    assert.equal(ids[0], "G11102", JSON.stringify(input));
+    assert.ok(ids.indexOf("G11103") > ids.indexOf("G11202"), JSON.stringify(input));
+  }
+});
+
+test("a broad request lists the type's best-sellers first: its own leaves only, never an accessory 'for' it (r10)", async () => {
+  const adaptors = "Adaptor bars and holders for GN and steam pans";
+  const deps = fakeDeps([
+    ...[2, 3, 4].map((part) => gn(`T-MEL${part}`, `MELAMINE GN PAN 1/${part}`)),
+    gn("T-MEL40", "MELAMINE GN PAN 1/1 40mm"),
+    gn("T-GN65", "ACME GN PAN 1/1 65mm", { best_seller: true, popularity: 100 }),
+    gn("T-GN20", "ACME GN PAN 1/1 20mm", { best_seller: true, popularity: 90 }),
+    gn("T-AB1", "ACME 18-8 STAINLESS STEEL ADAPTOR BAR FOR GN PANS", { best_seller: true, popularity: 100, third_category: adaptors }),
+    gn("T-AB2", "GN PAN ADAPTOR BAR", { best_seller: true, popularity: 100, third_category: adaptors }),
+    product({ stock_id: "T-CK1", name: "ACME CHEF KNIFE 21cm", best_seller: true, popularity: 100, third_category: "Chef knives" }),
+  ]);
+  const ids = idsOf(await searchBody({ queries: ["gn pan"], category: "GN pans" }, deps));
+  assert.deepEqual(ids.slice(0, 2), ["T-GN65", "T-GN20"]);
+  assert.ok(!ids.includes("T-CK1"));
+  // A size is a specific request: its exact size leads, not the best-seller.
+  assert.equal(idsOf(await searchBody({ queries: ["gn pan 40mm"], category: "GN pans" }, deps))[0], "T-MEL40");
+});
+
+test("plural words match singular names (r10: 'wine glasses', 'chef knives', 'steak knives')", async () => {
+  const glass = (stock_id: string, name: string, extra: Partial<Product> = {}) => product({ stock_id, name, subcategory: "Stemware", third_category: "Wine glasses", ...extra });
+  const shortNames = [glass("T-WG2", "Brandx Riesling Wine Glass 300ml"), glass("T-WG3", "Brandx Bordeaux Wine Glass 600ml")];
+  const glasses = fakeDeps([...shortNames, glass("T-WG1", "ACME WHITE WINE GLASS Ø8xH20cm, 400ml", { best_seller: true, popularity: 100 })]);
+  // As the database: short names score first.
+  glasses.searchDirect = async () => shortNames;
+  assert.equal(idsOf(await searchBody({ queries: ["wine glasses"], category: "Wine glasses" }, glasses))[0], "T-WG1");
+  const plainKnives = [knife("T-CK2", "Chef Knife 20cm", 30), knife("T-CK3", "Chef Knife 25cm", 35)];
+  const chef = fakeDeps([...plainKnives, knife("T-CK1", "ACME CHEF KNIFE 21cm, BLACK HANDLE", 40, { best_seller: true, popularity: 100 })]);
+  chef.searchDirect = async () => plainKnives;
+  assert.equal(idsOf(await searchBody({ queries: ["chef knives"], category: "Chef knives" }, chef))[0], "T-CK1");
+  // "knife" is not inside "KNIVES": both sides read it as "knife".
+  const plate = product({ stock_id: "T-SP1", name: "STEAK PLATE 30cm" });
+  const set = product({ stock_id: "T-SK6", name: "STEAK KNIVES SET OF 6" });
+  const steak = fakeDeps([plate, set]);
+  steak.searchDirect = async () => [plate, set];
+  for (const query of ["steak knife", "steak knives"]) assert.equal(idsOf(await searchBody({ queries: [query] }, steak))[0], "T-SK6", query);
+});
+
+test("a size comes from the sales name only when the store name gives none (r10: the two names disagree on some rows)", async () => {
+  const lid = (stock_id: string, name: string, extra: Partial<Product> = {}) => product({ stock_id, name, third_category: "Bamboo steamers", ...extra });
+  const other = lid("T-LID6", "BAMBOO STEAMER LID Ø30xH6cm");
+  const deps = fakeDeps([other, lid("T-LID5", "BAMBOO STEAMER LID Ø20xH5cm", { sales_name: "BAMBOO STEAMER LID Ø20xH4cm" })]);
+  deps.searchDirect = async () => [other];
+  // Its card says 5cm, so it isn't put first as the customer's exact 4cm.
+  assert.notEqual(idsOf(await searchBody({ queries: ["steamer lid 4cm"], category: "Bamboo steamers" }, deps))[0], "T-LID5");
 });

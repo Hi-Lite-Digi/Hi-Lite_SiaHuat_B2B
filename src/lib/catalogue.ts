@@ -2,6 +2,7 @@ import "server-only";
 import { z } from "zod";
 import { productSchema, type Product } from "@/lib/chat-contract";
 import { metricDimensionConstraintsMatch } from "@/lib/catalogue-dimensions";
+import { catalogueRanges } from "@/lib/catalogue-ranges";
 import { matchesProductRequirements, requirementLookupQuery } from "@/lib/product-requirements";
 import {
   catalogueLookupOverride,
@@ -37,6 +38,9 @@ const productSelect = [
   "subcategory",
   "third_category",
   "last_scraped_at",
+  "popularity",
+  "best_seller",
+  "sales_name",
 ].join(",");
 
 const productUseCases = [
@@ -571,6 +575,8 @@ export async function findAvailableCatalogueAlternatives(
       status: "in.(Active,New)",
       stock_status: "eq.in_stock",
       available_quantity: `gte.${minimumQuantity}`,
+      // 29 leaves have more than 80 in stock: read the better sellers, not whatever rows come first (r10).
+      order: "popularity.desc.nullslast,available_quantity.desc.nullslast",
       limit: "80",
     });
     const response = await fetch(`${url}/rest/v1/products?${query}`, {
@@ -655,23 +661,33 @@ export async function searchCatalogueDirect(query: string, limit = 10) {
     .filter((product) => product.status === "Active" || product.status === "New");
 }
 
+export type PriceSort = "price_high" | "price_low";
+// PostgREST filter syntax reserves , . : ( ) and *, so only letters, digits and hyphens are kept. "/" and apostrophes split
+// words too ("Gastronorm/steam pans" and "Children's dinnerware" matched nothing).
+const categoryTerms = (words: string) => words.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+/** The catalogue's leaf type names ("Chef knives"), as SIA HUAT'S CATALOGUE RANGES gives them to Claude, in categoryTerms' words. */
+const CATALOGUE_TYPES = new Set(catalogueRanges.flatMap(([, sections]) => sections.flatMap(([, types]) => types)).map((type) => categoryTerms(type).join(" ")));
+
 /**
  * Products in a catalogue category ("kitchen tongs", "GN pan trolleys", "Furniture & Banquet Equipment"): every word must
- * appear in the same field, the top-level category, third_category or subcategory. Most stocked first, then by name; a budget
- * is applied before the limit. `total` counts every match; `exists` says whether the category has
- * products at any price. Used by the agent.
+ * appear in the same field, the top-level category, third_category or subcategory. Better sellers first, then the most stocked,
+ * then by name; with a sort, by price across the whole category (its leaf type when the words name one exactly), priced rows
+ * only. A budget is applied before the limit. `total` counts every match; `exists` says whether the category has products at
+ * any price. Used by the agent.
  */
-export async function searchCatalogueByCategory(words: string, limit = 200, maxPrice?: number | null) {
-  // PostgREST filter syntax reserves , . : ( ) and *, so only letters, digits and hyphens are kept. "/" and apostrophes split
-  // words too ("Gastronorm/steam pans" and "Children's dinnerware" matched nothing), and the top-level range is searched
-  // ("Furniture & Banquet Equipment" found nothing and "furniture" only wax fuel, owner 2 Oct).
-  const terms = words.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+export async function searchCatalogueByCategory(words: string, limit = 200, maxPrice?: number | null, sort?: PriceSort | null) {
+  // The top-level range is searched too ("Furniture & Banquet Equipment" found nothing and "furniture" only wax fuel, owner 2 Oct).
+  const terms = categoryTerms(words);
   if (!terms.length) return { products: [], total: 0, exists: false };
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("DATABASE_NOT_CONFIGURED");
   const allIn = (field: string) => `and(${terms.map((term) => `${field}.ilike.*${term}*`).join(",")})`;
-  const filter = { status: "in.(Active,New)", or: `(${allIn("category")},${allIn("third_category")},${allIn("subcategory")})` };
+  // A price sort reads the leaf type the words name exactly: "chef knives" also matches the subcategory "Professional western chef
+  // and preparation knives" (725 rows, a $1,681 cheese dicer first) where the leaf "Chef knives" has 150 (client, 13 Oct). Only an
+  // exact name: types repeating a range's words ("Accessories for Cookware") would cut "Cookware" to 389 of its 1,511 rows (r9 S1).
+  const leaf = Boolean(sort) && CATALOGUE_TYPES.has(terms.join(" "));
+  const filter = { status: "in.(Active,New)", or: leaf ? `(${allIn("third_category")})` : `(${allIn("category")},${allIn("third_category")},${allIn("subcategory")})` };
   const counted = async (query: URLSearchParams) => {
     const response = await fetch(`${url}/rest/v1/products?${query}`, {
       headers: { apikey: key, authorization: `Bearer ${key}`, Prefer: "count=exact" },
@@ -684,8 +700,11 @@ export async function searchCatalogueByCategory(words: string, limit = 200, maxP
     const count = Number(response.headers.get("content-range")?.split("/")[1]);
     return { rows, total: Number.isFinite(count) ? count : rows.length };
   };
-  const query = new URLSearchParams({ select: productSelect, ...filter, order: "available_quantity.desc.nullslast,name.asc", limit: String(limit) });
+  // A price sort orders the whole category in the database, so the top of the range is read whatever its stock; $0 rows have no price.
+  const order = sort ? `list_price.${sort === "price_high" ? "desc" : "asc"},name.asc` : "popularity.desc.nullslast,available_quantity.desc.nullslast,name.asc";
+  const query = new URLSearchParams({ select: productSelect, ...filter, order, limit: String(limit) });
   if (maxPrice != null) query.set("list_price", `lte.${maxPrice}`);
+  if (sort) query.append("list_price", "gt.0");
   const found = await counted(query);
   // Nothing within the budget can still be a real category: count it once without the price.
   const exists = found.total > 0 || (maxPrice != null && (await counted(new URLSearchParams({ select: "stock_id", ...filter, limit: "1" }))).total > 0);

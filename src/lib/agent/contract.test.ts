@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SALES_CONTACT } from "./contact";
-import { CHIP_PREFIX, HISTORY_ENTRY_CHARS, MAX_MESSAGE_CHARS, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, agentRequestSchema, cardsNote, cardsToPick, historyFor, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote, type ChatBubble } from "./contract";
+import { CHIP_PREFIX, HISTORY_ENTRY_CHARS, MAX_MESSAGE_CHARS, NO_CAPTION, PHOTO_PREFIX, TAP_PREFIX, agentReplySchema, agentRequestSchema, cardPhoto, cardsNote, cardsToPick, historyFor, nextEnquiry, parseCardsNote, tappedCode, withoutCardsNote, type ChatBubble } from "./contract";
 import { product } from "./testing";
 
 test("a card tap is a product choice, never text", () => {
@@ -127,6 +127,15 @@ test("'Tap a product' shows only while a card isn't on the enquiry yet", () => {
   assert.equal(cardsToPick([ut09l], [{ code: "UT09L" }]), false);
   assert.equal(cardsToPick([ut09l, other], [{ code: "ut09l" }]), true);
   assert.equal(cardsToPick([], []), false);
+});
+
+test("a card's photo is the store's own image, never its placeholder", () => {
+  const photo = "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg";
+  assert.equal(cardPhoto({ image_url: photo }), photo);
+  // 1,824 products carry the store's "no image" placeholder (13 Oct).
+  for (const image_url of ["https://store.siahuat.com/placeholder-image-square.jpg", null, undefined, photo.replace("https:", "http:"), "https://evil.example/image-proxy/x.jpg"]) {
+    assert.equal(cardPhoto({ image_url }), null, String(image_url));
+  }
 });
 
 test("a card tap's history entry gives its item code", () => {

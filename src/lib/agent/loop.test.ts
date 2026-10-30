@@ -853,6 +853,42 @@ test("a card shown earlier can be attached again without a tool call", async () 
   assert.ok(lookups.calls.includes("code:970S") && lookups.calls.includes("live:970S"), lookups.calls.join(" "));
 });
 
+test("a reply's cards carry their photos, for a search result and for an earlier card looked up by code", async () => {
+  const pictured = () => fakeDeps([{ ...blowtorch, image_url: "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg" }, safico]);
+  const searched = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["970S"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: pictured(), client: searched.client, model: "claude-sonnet-5" });
+  assert.match(reply.cards[0].image_url ?? "", /image-proxy/);
+  const again = fakeClient([answer({ message: "Here it is again - the photo is on its card.", card_ids: ["970S"] })]);
+  const earlier = await runAgentTurn({ request: askedAgain("got photo?"), deps: pictured(), client: again.client, model: "claude-sonnet-5" });
+  assert.equal(again.bodies.length, 1);
+  assert.match(earlier.cards[0].image_url ?? "", /image-proxy/);
+});
+
+test("a reply's cards carry no sales fields, from Claude or the backup reply (r10)", async () => {
+  // A made-up row: no real product's sales flags in this public repo.
+  const ranked = product({
+    stock_id: "T-BT1", name: "ACME KITCHEN BLOW TORCH", popularity: 90, best_seller: true, sales_name: "ACME BLOW TORCH T-BT1",
+    image_url: "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/T-BT1.jpg",
+  });
+  const salesFree = (cards: { [field: string]: unknown }[]) => cards.every((card) => !["popularity", "best_seller", "sales_name"].some((field) => field in card));
+  const searched = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["T-BT1"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: fakeDeps([ranked]), client: searched.client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["T-BT1"]);
+  assert.ok(salesFree(reply.cards));
+  assert.match(reply.cards[0].image_url ?? "", /image-proxy/);
+  const failed = fakeClient([new Error("boom")]);
+  const backup = await runAgentTurn({ request: request({}), deps: fakeDeps([ranked]), client: failed.client, model: "claude-sonnet-5" });
+  assert.equal(backup.provider, "fallback");
+  assert.deepEqual(backup.cards.map((card) => card.stock_id), ["T-BT1"]);
+  assert.ok(salesFree(backup.cards));
+});
+
 test("a reply still asking which type of a range is sent without cards (r7: pushing furniture)", async () => {
   const { client } = fakeClient([answer({ message: "We carry folding tables and Q-posts. Here are a few. Which type do you need?", card_ids: ["970S"], chips: ["Folding tables", "Q-posts"] })]);
   const reply = await runAgentTurn({ request: askedAgain("how about furniture"), deps: deps(), client, model: "claude-sonnet-5" });
@@ -1453,6 +1489,33 @@ test("two adds in one round both land", async () => {
   assert.deepEqual(reply.enquiry.lines.map((line) => [line.code, line.quantity]), [["970S", 2], ["BTS-8026D", 3]]);
   // Both lookups start together before the first add, and the adds reuse them.
   assert.deepEqual(shared.calls, ["code:970S", "code:BTS-8026D", "live:970S", "live:BTS-8026D"]);
+});
+
+test("a sorted search backs 'the most expensive chef knife we list' with no repair; an unsorted one is reworded (client, 13 Oct)", async () => {
+  // More chef knives than one search shows, so only the price sort can back the claim.
+  const chefKnives = () => fakeDeps([
+    product({ stock_id: "1900S-20-TOL", name: "Giesser Premiumcut Chef's No. 1 Knife 20cm", list_price: 308.26, third_category: "Chef knives" }),
+    ...Array.from({ length: 11 }, (_, index) => product({ stock_id: `CK${index}`, name: `Chef Knife ${16 + index}cm`, list_price: 30 + index, third_category: "Chef knives" })),
+  ]);
+  const claim = "The Giesser Premiumcut 20cm is the most expensive chef knife we list.";
+  const sorted = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["chef knife"], category: "Chef knives", sort: "price_high" }),
+    answer({ message: claim, card_ids: ["1900S-20-TOL"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "Show me your most expensive chef knife" } }), deps: chefKnives(), client: sorted.client, model: "claude-sonnet-5" });
+  assert.equal(sorted.bodies.length, 2);
+  assert.equal(reply.message, claim);
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["1900S-20-TOL"]);
+  const unsorted = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["chef knife"], category: "Chef knives" }),
+    answer({ message: claim, card_ids: ["1900S-20-TOL"] }),
+    answer({ message: "Of the ones I found, the Giesser Premiumcut 20cm is the most expensive.", card_ids: ["1900S-20-TOL"] }),
+  ]);
+  await runAgentTurn({ request: request({ event: { type: "text", text: "Show me your most expensive chef knife" } }), deps: chefKnives(), client: unsorted.client, model: "claude-sonnet-5" });
+  assert.equal(unsorted.bodies.length, 3);
+  const repair = JSON.stringify(unsorted.bodies[2].messages.at(-1));
+  assert.ok(repair.includes(CLAIM_ISSUE_PREFIX));
+  assert.ok(repair.includes(claim));
 });
 
 test("an unbacked completeness claim is repaired once, then removed", async () => {

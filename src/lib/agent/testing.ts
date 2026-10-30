@@ -21,7 +21,7 @@ export function product(overrides: Partial<Product> & { stock_id: string }): Cat
   };
 }
 
-export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id">> | "fail" | "gone" | "timeout" | "timeout-once";
+export type LiveOverride = Partial<Pick<ScrapedSiaHuatProduct, "price_ex_gst" | "in_stock" | "available_quantity" | "stock_status" | "stock_id" | "image_url" | "name">> | "fail" | "gone" | "timeout" | "timeout-once";
 /** A read that ran past its limit, as AbortSignal.timeout ends it. */
 const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
 
@@ -39,16 +39,23 @@ export function fakeDeps(
     async searchDirect(query) {
       calls.push(`search:${query}`);
       const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-      return catalogue.filter((item) => words.every((word) => item.name.toLowerCase().includes(word)));
+      // As the database reads it: the store's name or the salespeople's (r10).
+      return catalogue.filter((item) => words.every((word) => `${item.name} ${item.sales_name ?? ""}`.toLowerCase().includes(word)));
     },
-    async searchCategory(query, limit, maxPrice) {
-      calls.push(`category:${query}`);
+    async searchCategory(query, limit, maxPrice, sort) {
+      calls.push(`category:${query}${sort ? `:${sort}` : ""}`);
       // As catalogue.ts searchCatalogueByCategory reads it.
-      const words = query.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+      const split = (text: string) => text.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
+      const words = split(query);
       const inField = (field: string | null | undefined) => words.every((word) => (field ?? "").toLowerCase().includes(word));
       const all = catalogue.filter((item) => inField(item.category) || inField(item.third_category) || inField(item.subcategory));
-      const priced = maxPrice == null ? all : all.filter((item) => item.list_price <= maxPrice);
-      return { products: priced.slice(0, limit), total: priced.length, exists: all.length > 0 };
+      // A price sort reads the leaf when the words name one exactly (here, a row's own leaf), priced rows only, in price order.
+      const leaf = sort && catalogue.some((item) => split(item.third_category ?? "").join(" ") === words.join(" ")) ? catalogue.filter((item) => inField(item.third_category)) : null;
+      // As catalogue.ts: better sellers first; fixtures without popularity keep their order.
+      const scope = !sort ? all.sort((a, b) => (b.popularity ?? -1) - (a.popularity ?? -1)) : (leaf ?? all).filter((item) => item.list_price > 0)
+        .sort((a, b) => (sort === "price_high" ? b.list_price - a.list_price : a.list_price - b.list_price) || a.name.localeCompare(b.name));
+      const priced = maxPrice == null ? scope : scope.filter((item) => item.list_price <= maxPrice);
+      return { products: priced.slice(0, limit), total: priced.length, exists: (leaf ?? all).length > 0 };
     },
     async findByCode(stockId) {
       calls.push(`code:${stockId}`);

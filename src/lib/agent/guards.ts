@@ -391,6 +391,13 @@ function pointedBy(text: string, cards: ShownCard[]) {
   const typed = cards.filter((card) => codePattern(card.code).test(words));
   return typed.length ? typed : pointedCards(words, cards);
 }
+/** The cards a claim names: pointedBy's, or when a shared word ties them ("both the Brandx and the Waring are best-selling blenders"), each one with a word of its own. */
+function claimedBy(text: string, cards: ShownCard[]) {
+  const pointed = pointedBy(text, cards);
+  if (pointed.length) return pointed;
+  const found = cards.map((card) => hits(card, text));
+  return cards.filter((_, at) => [...found[at]].some((hit) => found.every((other, k) => k === at || !other.has(hit))));
+}
 
 export const ENQUIRY_CLAIM_PREFIX = "The enquiry didn't change";
 // A leading "Got it: 2" claims a change; "Got it, 4 pax" or "OK, 2 options" only echoes the customer's numbers. An apology before it
@@ -653,11 +660,26 @@ const RANKING = new RegExp([
   // A bare count: "We have two: the Giesser 28cm ... and a smaller ... one" (r4 s09-B idx 1, replayed); not "We have 2 left".
   String.raw`${COUNTED}(?=\s*(?::|[-–—]\s|[.!?]?$))${NEXT_STEP}`,
 ].join("|"), "i");
-const PRICE_RANK = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b|\bnext\s+up\s+in\s+price\b/i;
-// An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest") or a question ("Looking for the
-// cheapest?") ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check stock" still ranks.
-const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?/gi;
-const ranking = (sentence: string) => RANKING.test(sentence) || PRICE_RANK.test(sentence.replace(OFFER, " "));
+// Price-order words, backed per direction by a search that put a whole category in that order (SearchRecord.priceOrder) or by a
+// complete one. "The most expensive" was unguarded while the prompt already ruled it out (client, 13 Oct).
+const CHEAPEST = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b/i;
+const PRICIEST = /\b(?:the\s+)?(?:most\s+expensive|priciest|highest[- ]priced|top\s+of\s+(?:the|our)\s+range)\b/i;
+const NEXT_IN_PRICE = /\bnext\s+up\s+in\s+price\b/i;
+// "Our best-seller" comes from the client's sales (sales_rank), never a guess (r10). "Popular" alone is a softer word and isn't checked,
+// nor is a bare 畅销 or 热销 ("sells well"): only the Chinese superlatives are (r10 skeptic A10).
+const BEST_SELLER_CLAIM = /\bbest[- ]?sell(?:er|ers|ing)\b|\btop[- ]sell(?:er|ers|ing)\b|\bmost[- ]popular\b|\b(?:sells|sold)\s+the\s+most\b|最畅销|最热销|最受欢迎|销量最|卖得最好/i;
+// An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest"), a question ("Looking for the
+// cheapest?") or a question about what they want that ends there or offers an "or" ("Would you like the cheapest one?", "Are you
+// after the priciest, or ...", r9 S3) ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check
+// stock" still ranks, and so does "Would you like the cheapest one we carry, the Mika?", which names it (r9 review).
+const OFFER = /\b(?:want\s+me\s+to|shall\s+I|should\s+I|would\s+you\s+like\s+me\s+to|I\s+can|I\s+could)\s+(?:\w+\s+){0,2}?(?:check|look|search|find)\b[^.!?,;]*|\blooking\s+for\b[^.!?,;]*\?|(?:\b(?:do|would)\s+you\s+(?:want|like|prefer|need)|\bare\s+you\s+after|^(?:want|prefer))\b[^.!?,;]*(?=\s*(?:\?|,\s*or\b|\bor\b[^.!?,;]*\?))/gi;
+// shortcut: `sorted` holds the turn's whole-category sorts, not their categories, so a price_high search of chef knives also backs
+// "the most expensive blender" in the same reply; upgrade if turns start running sorted searches of two types (r9 S5).
+const ranking = (sentence: string, sorted: ReadonlySet<string>) => {
+  const words = sentence.replace(OFFER, " ");
+  return RANKING.test(sentence) || (CHEAPEST.test(words) && !sorted.has("price_low")) || (PRICIEST.test(words) && !sorted.has("price_high"))
+    || (NEXT_IN_PRICE.test(words) && !sorted.size);
+};
 // "No other sizes showed up, but there may be more" says the list may not be complete.
 const OPEN_ENDED = /\b(?:may|might|could)\s+be\s+(?:more|others)\b/i;
 // "I don't have a spec on that", "couldn't find the photo" or "haven't seen this issue before" is not about a product. 'spec' is a
@@ -873,6 +895,7 @@ function disprovedBy(sentence: string, seen: ReadonlyMap<string, CheckedProduct>
  */
 function unbackedClaims(message: string, searches: SearchRecord[], seen: ReadonlyMap<string, CheckedProduct>) {
   const complete = searches.some((search) => search.complete);
+  const sorted = new Set(searches.flatMap((search) => (search.priceOrder ? [search.priceOrder] : [])));
   const budgetBacked = searches.some((search) => search.maxPrice !== null && search.complete);
   const queries = new Set(searches.flatMap((search) => search.queries.map((query) => query.trim().toLowerCase())));
   const absenceBacked = queries.size >= 2 && searches.some((search) => search.categoryFound);
@@ -921,7 +944,7 @@ function unbackedClaims(message: string, searches: SearchRecord[], seen: Readonl
     const range = denied ? "rangeDenied" as const
       : BUDGET.test(sentence) ? (budgetBacked ? null : "budget" as const)
       : (COMPLETE.test(sentence) || rangeSummary(sentence)) && aboutRange ? (complete ? null : "complete" as const)
-      : !complete && ranking(sentence) && !SCOPED.test(sentence) && !AMONG_SHOWN.test(sentence) && aboutRange ? "ranking" as const
+      : !complete && ranking(sentence, sorted) && !SCOPED.test(sentence) && !AMONG_SHOWN.test(sentence) && aboutRange ? "ranking" as const
       : absence ? (found.length ? "disproved" as const : (absent && !scoped ? absenceBacked : !SUBSTITUTE_ABSENT.test(sentence) || substituteBacked) ? null : "absence" as const)
       : null;
     // An unbacked stock claim is removed if it survives the repair, so it outranks the kinds that are only reworded.
@@ -1319,6 +1342,18 @@ export function reviewAnswer(
       style.push(`${ABSENCE_ISSUE_PREFIX}: "${sentence}". ${named} came up in this turn's results: if it is what the customer asked for, name it with its stock; if not, keep your sentence.`);
     } else if (kind === "ranking") style.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES.complete}`);
     else safety.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES[kind]}`);
+  }
+  // "One of our best-sellers" only of a product whose facts say so (r10). Each clause is judged on the reply's cards it names, else on
+  // the products seen this turn it names, else on the cards it sends ("these are our best-sellers"): "the Brandx is one of our
+  // best-sellers; the Waring suits bars" names both in one sentence, and "the Brandx" fits every Brandx seen (r10 skeptic A9).
+  for (const clause of said.flatMap((sentence) => sentence.split(/;|\s+but\s+|,\s*while\s+/i)).filter((part) => BEST_SELLER_CLAIM.test(part.replace(OFFER, " ")))) {
+    const sent = claimedBy(clause, cards.map(asCard));
+    const named = sent.length ? sent : claimedBy(clause, seenCards(seen));
+    // A plural claim over the cards sent ("here are three of our best-sellers") needs every card flagged (r10 review).
+    const plural = /\b(?:these|they|both|all|here\s+are|(?:two|three)\s+of\s+our)\b/i.test(clause);
+    const sentBacked = cards.some((item) => item.best_seller) && (!plural || cards.every((item) => item.best_seller));
+    if (named.length ? named.every((card) => seen.get(card.code)?.product.best_seller) : sentBacked) continue;
+    style.push(`${CLAIM_ISSUE_PREFIX} isn't backed by the products' facts: "${clause.trim()}". Call a product one of our best-sellers only when its sales_rank is 'best-seller'; otherwise leave the word out.`);
   }
   style.push(...stockIssues(answer.message, cards));
   // Every product a clause names was checked live by the time the answer went out (the card re-check read it after the answer was

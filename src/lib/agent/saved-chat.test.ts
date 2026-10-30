@@ -20,7 +20,7 @@ function store(limit = Infinity) {
 
 const NOW = Date.UTC(2026, 9, 3, 13, 30);
 const greeting: ChatItem = { id: 1, role: "assistant", text: "Hi, I'm Claire from Sia Huat", time: "9:26 pm" };
-const plate = product({ stock_id: "4008-3", name: "Melamine Round Rim Plate Ø20.3xH1.9cm, Blue", list_price: 3.3, uom_id: "PC", description: "x".repeat(1_500), source_url: "https://store.siahuat.com/product/12051143860" });
+const plate = product({ stock_id: "4008-3", name: "Melamine Round Rim Plate Ø20.3xH1.9cm, Blue", list_price: 3.3, uom_id: "PC", description: "x".repeat(1_500), source_url: "https://store.siahuat.com/product/12051143860", image_url: "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/4008-3.jpg" });
 const enquiry = {
   lines: [{ item: plate.name, code: "4008-3", pricePerItem: 3.3, quantity: 25, total: 82.5, uom: "PC", sourceUrl: plate.source_url }],
   totals: { lineCount: 1, quantitiesByUom: [{ uom: "PC", quantity: 25 }], grandTotal: 82.5 },
@@ -46,11 +46,11 @@ test("a refresh brings back the messages, the enquiry, the shown cards and the c
   assert.equal(saved.draft, "");
 });
 
-test("a saved card keeps what the chat, the history note and the PDF show, not its description", () => {
+test("a saved card keeps what the chat, the history note and the PDF show, its photo too, not its description", () => {
   const tab = store();
   saveChat(tab, chat(answered), NOW);
   const card = readSavedChat(tab, NOW)!.items[2].cards![0];
-  assert.deepEqual(card, { stock_id: "4008-3", name: plate.name, status: plate.status, list_price: 3.3, uom_id: "PC", source_url: plate.source_url, stock_status: "in_stock" });
+  assert.deepEqual(card, { stock_id: "4008-3", name: plate.name, status: plate.status, list_price: 3.3, uom_id: "PC", source_url: plate.source_url, image_url: plate.image_url, stock_status: "in_stock" });
   assert.ok(tab.data.get(SAVED_CHAT_KEY)!.length < 2_000);
 });
 

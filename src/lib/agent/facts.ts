@@ -8,9 +8,11 @@ import {
   findProductForStockCheck,
   searchCatalogueByCategory,
   searchCatalogueDirect,
+  type PriceSort,
 } from "@/lib/catalogue";
 import { lookupCatalogueImage, type CatalogueImageLookup } from "@/lib/catalogue-image-library";
 import { fetchSiaHuatProduct, type ScrapedSiaHuatProduct } from "@/lib/siahuat-product";
+import { cardPhoto } from "./contract";
 
 export type CatalogueProduct = Product & { source_url: string };
 
@@ -20,7 +22,7 @@ export type CategoryResult = { products: Product[]; total: number; exists: boole
 /** Everything the agent may learn about products. Injected so tests run offline. */
 export type FactDeps = {
   searchDirect(query: string, limit: number): Promise<Product[]>;
-  searchCategory(words: string, limit: number, maxPrice?: number | null): Promise<CategoryResult>;
+  searchCategory(words: string, limit: number, maxPrice?: number | null, sort?: PriceSort | null): Promise<CategoryResult>;
   findByCode(stockId: string): Promise<CatalogueProduct | null>;
   findBySourceUrl(url: string): Promise<CatalogueProduct | null>;
   findAlternatives(stockId: string, minQty: number, exclude: ReadonlySet<string>): Promise<Product[]>;
@@ -95,7 +97,7 @@ const searchSlot = searchSlots(SEARCH_CONCURRENCY);
 export function defaultFactDeps(): FactDeps {
   return {
     searchDirect: (query, limit) => searchSlot(() => searchCatalogueDirect(query, limit)),
-    searchCategory: (words, limit, maxPrice) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice)),
+    searchCategory: (words, limit, maxPrice, sort) => searchSlot(() => searchCatalogueByCategory(words, limit, maxPrice, sort)),
     findByCode: findProductForStockCheck,
     findBySourceUrl: findCatalogueProductBySourceUrl,
     // Its broad fallback runs search_products too. The agent ranks the pool itself, so it needs every candidate, not the 30 with
@@ -129,14 +131,14 @@ export function turnDeps(deps: FactDeps): FactDeps {
   return {
     ...deps,
     searchDirect: (query, limit) => turnSearch(() => deps.searchDirect(query, limit)),
-    searchCategory: (words, limit, maxPrice) => turnSearch(() => deps.searchCategory(words, limit, maxPrice)),
+    searchCategory: (words, limit, maxPrice, sort) => turnSearch(() => deps.searchCategory(words, limit, maxPrice, sort)),
     findAlternatives: (stockId, minQty, exclude) => turnSearch(() => deps.findAlternatives(stockId, minQty, exclude)),
     findByCode: (code) => once(codes, code, () => deps.findByCode(code)),
     fetchLive: (url, ms) => once(pages, url, () => deps.fetchLive(url, ms)),
   };
 }
 
-/** Overwrites price and stock from the live store page. Any failure leaves the product unverified; a removed listing also marks it gone. */
+/** Overwrites price, stock and (when the page shows one) the photo from the live store page. Any failure leaves the product unverified; a removed listing also marks it gone. */
 export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LIVE_CHECK_TIMEOUT_MS): Promise<CheckedProduct> {
   const unverified: CheckedProduct = { product: { ...product, stock_status: "unknown", in_stock: null, available_quantity: null }, verified: false };
   if (!product.source_url) return unverified;
@@ -149,6 +151,10 @@ export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LI
       product: {
         ...product,
         source_url: live.source_url,
+        // The store page's name: 3% of catalogue names are stale ("STAINLESS STEEL GN PAN" for G11102), and a card should say what it is (r10).
+        name: live.name || product.name,
+        // The catalogue can hold the placeholder for a page that now shows a photo (r9 C7: the Waring MX1200XTXEE).
+        image_url: cardPhoto(live) ?? product.image_url,
         list_price: live.price_ex_gst,
         in_stock: live.in_stock,
         available_quantity: live.available_quantity,
@@ -230,5 +236,10 @@ export function productFact({ product, verified, details }: CheckedProduct, show
     price_and_stock_verified_live: verified,
     shown_before: shownBefore,
     link: product.source_url ?? null,
+    // The chat's card shows this photo: Claire can point to it for "got photo?", never describe it (r9).
+    photo_on_card: cardPhoto(product) !== null,
+    // From Sia Huat's sales this year, in words only (r10): best-seller is the top few of its type, popular its top fifth. Never a
+    // number: the sales data is the client's.
+    sales_rank: product.best_seller ? "best-seller" : (product.popularity ?? 0) >= 90 ? "popular" : null,
   };
 }

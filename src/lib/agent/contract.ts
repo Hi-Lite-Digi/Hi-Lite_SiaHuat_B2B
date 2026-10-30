@@ -77,6 +77,11 @@ export function nextEnquiry(current: AgentReply["enquiry"], reply: AgentReply["e
 /** True when a card isn't on the enquiry yet, so "Tap a product to choose it" still means something. */
 export const cardsToPick = (cards: Product[], lines: { code: string }[]) => cards.some((card) => !lines.some((line) => line.code.toLowerCase() === card.stock_id.toLowerCase()));
 
+// The store's own photos only: 1,824 products carry its "no image" placeholder (placeholder-image-square.jpg), which is no photo.
+const STORE_PHOTO = /^https:\/\/store\.siahuat\.com\/image-proxy\//;
+/** The card's photo URL, or null when the catalogue has none (also the check on a card restored from the tab's storage). */
+export const cardPhoto = (card: Pick<Product, "image_url">) => (card.image_url && STORE_PHOTO.test(card.image_url) ? card.image_url : null);
+
 /** How the browser marks a card tap, a chip tap and a photo (with its caption, or NO_CAPTION) in the chat history. */
 export const TAP_PREFIX = "[tap]";
 export const CHIP_PREFIX = "[chip]";

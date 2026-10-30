@@ -62,6 +62,29 @@ test("a live check overwrites price and stock from the store page", async () => 
   assert.equal(checked.product.available_quantity, 115);
 });
 
+test("a live check takes the store page's photo when it has one, else keeps the catalogue's (r9 C7)", async () => {
+  // The catalogue had the placeholder for the Waring MX1200XTXEE while its store page showed a photo, so Claire said it had none.
+  const placeholder = "https://store.siahuat.com/placeholder-image-square.jpg";
+  const photo = "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/111WR-MX1200XTXEE.jpg";
+  const blender = product({ stock_id: "MX1200XTXEE", image_url: placeholder });
+  const checked = await liveCheck(blender, fakeDeps([blender], { MX1200XTXEE: { image_url: photo } }));
+  assert.equal(checked.product.image_url, photo);
+  assert.equal(productFact(checked).photo_on_card, true);
+  const knife = product({ stock_id: "1900S-20-TOL", image_url: photo });
+  for (const image_url of [null, placeholder]) assert.equal((await liveCheck(knife, fakeDeps([knife], { "1900S-20-TOL": { image_url } }))).product.image_url, photo);
+});
+
+test("a live check takes the store page's name (r10: G11102's catalogue name was 'STAINLESS STEEL GN PAN')", async () => {
+  const live = "Steelcraft by Safico 201 Stainless Steel GN Pan 1/1 Size, 40mm Deep, Thickness 0.6mm";
+  const pan = product({ stock_id: "G11102", name: "STAINLESS STEEL GN PAN" });
+  assert.equal((await liveCheck(pan, fakeDeps([pan], { G11102: { name: live } }))).product.name, live);
+  assert.equal((await liveCheck(pan, fakeDeps([pan], { G11102: "fail" }))).product.name, "STAINLESS STEEL GN PAN");
+  // A made-up row: no real product's sales flags in this public repo.
+  const ranked = product({ stock_id: "T-GN65", name: "ACME GN PAN", best_seller: true, popularity: 90, sales_name: "ACME GN PAN 1/1 65mm" });
+  const checked = (await liveCheck(ranked, fakeDeps([ranked]))).product;
+  assert.deepEqual([checked.best_seller, checked.popularity, checked.sales_name], [true, 90, "ACME GN PAN 1/1 65mm"]);
+});
+
 test("a failed or mismatched live check leaves the product unverified", async () => {
   const torch = product({ stock_id: "970S" });
   const failed = await liveCheck(torch, fakeDeps([torch], { "970S": "fail" }));
@@ -103,6 +126,22 @@ test("product facts flag verification and earlier display", () => {
   const fact = productFact({ product: product({ stock_id: "A" }), verified: true }, true);
   assert.equal(fact.price_and_stock_verified_live, true);
   assert.equal(fact.shown_before, true);
+});
+
+test("product facts say whether the card shows a photo", () => {
+  const fact = (image_url?: string) => productFact({ product: product({ stock_id: "A", image_url }), verified: true }).photo_on_card;
+  assert.equal(fact("https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/110GS-1900S-20-TOL.jpg"), true);
+  assert.equal(fact("https://store.siahuat.com/placeholder-image-square.jpg"), false);
+  assert.equal(fact(), false);
+});
+
+test("product facts say how a product sells in words, never numbers (r10)", () => {
+  const fact = (overrides: Parameters<typeof product>[0]) => productFact({ product: product(overrides), verified: true });
+  assert.equal(fact({ stock_id: "A", best_seller: true, popularity: 100 }).sales_rank, "best-seller");
+  assert.equal(fact({ stock_id: "A", popularity: 90 }).sales_rank, "popular");
+  for (const overrides of [{ popularity: 80 }, { popularity: 0 }, {}]) assert.equal(fact({ stock_id: "A", ...overrides }).sales_rank, null, JSON.stringify(overrides));
+  const ranked = fact({ stock_id: "A", best_seller: true, popularity: 100, sales_name: "ACME THING 1L" });
+  for (const field of ["popularity", "best_seller", "sales_name"]) assert.ok(!(field in ranked), field);
 });
 
 test("product facts carry the dimensions and the whole description", () => {

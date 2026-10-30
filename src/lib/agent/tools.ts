@@ -2,6 +2,7 @@
 import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import type { PriceSort } from "@/lib/catalogue";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, soldByDozen, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
@@ -13,9 +14,10 @@ import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
 export type EnquiryChange = { action: "add" | "set" | "remove" | "clear"; code: string | null };
 /**
  * One search_catalogue call: what backs a reply's "that's our range", "nothing cheaper" or "we don't have it". A find_alternatives
- * run is recorded too (alternativesFor, with no queries): it backs "no close substitute".
+ * run is recorded too (alternativesFor, with no queries): it backs "no close substitute". priceOrder: the search put a whole category
+ * in this price order (no exclusions): it backs "the cheapest" or "the most expensive".
  */
-export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean; alternativesFor?: string };
+export type SearchRecord = { queries: string[]; category: string | null; categoryFound: boolean; maxPrice: number | null; complete: boolean; alternativesFor?: string; priceOrder?: PriceSort };
 
 /** Mutable state for one customer turn. */
 export type TurnContext = {
@@ -73,13 +75,14 @@ export type TurnContext = {
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others.",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others. With sort and a category, the catalogue puts the whole category in price order and the top of that order comes back, highest (price_high) or lowest (price_low) price first, each still checked live; whole_category_sorted true means that order covered every product in the category (a price_high sort with max_price is not), so the first product of the type asked for is the most expensive (or cheapest) we list. Each product's sales_rank ('best-seller', 'popular' or null) comes from Sia Huat's own sales; with a category, the type's best-sellers that name the words come first.",
     input_schema: {
       type: "object",
       properties: {
         queries: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3, description: "1-3 short search phrases" },
-        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets', or a range or section name from SIA HUAT'S CATALOGUE RANGES ('Furniture & Banquet Equipment', 'Chef & Crew Wear'). Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. The customer's own words still rank first. If category_found is false, use a name from categories." },
+        category: { type: "string", description: "Optional catalogue category for the product type, e.g. 'kitchen tongs', 'GN pan trolleys', 'blenders', 'step stools', 'table-setting sets', or a range or section name from SIA HUAT'S CATALOGUE RANGES ('Furniture & Banquet Equipment', 'Chef & Crew Wear'). Up to 200 of its products are searched, max_price applied first. complete true means every product in it is listed. Its best-sellers naming the customer's words come first, then the customer's own words rank, unless sort is set. If category_found is false, use a name from categories." },
         max_price: { type: "number", description: "Optional budget ceiling per unit, SGD ex GST" },
+        sort: { type: "string", enum: ["price_high", "price_low"], description: "Optional, only for an explicit price order: price_high when the customer asks for the most expensive, priciest or highest-priced of a type, price_low for the cheapest, across the whole category. Not for 'the best', 'premium' or 'top-end': leave sort out and recommend by fit and sales_rank. Needs category: the type's own name from SIA HUAT'S CATALOGUE RANGES, e.g. 'Chef knives', 'Stock pots'. Leave it out otherwise; for 'cheaper than' a product, keep max_price (no sort)." },
         exclude_ids: { type: "array", items: { type: "string" }, description: "Item codes the customer rejected" },
         exclude_brands: { type: "array", items: { type: "string" }, description: "Brands the customer ruled out, or every brand of a country they don't want (details 'Country of Brand Origin')" },
       },
@@ -139,6 +142,7 @@ const searchInput = z.object({
   ),
   category: z.string().trim().min(1).max(80).nullish(),
   max_price: z.number().positive().nullish(),
+  sort: z.enum(["price_high", "price_low"]).nullish(),
   exclude_ids: z.array(z.string()).max(50).nullish(),
   exclude_brands: z.array(z.string().trim().min(1).max(60)).max(20).nullish(),
 });
@@ -176,14 +180,25 @@ const REMOVED_MATCHES_NOTE = "The top catalogue matches for these words are stor
 // 15 of the 131 removed pages have their code live on a new page: "couldn't confirm", never "not sold". Read as a passing failure, it
 // was looked up again in R03 (r8 tier 3), so the note says a second look gives the same.
 const LISTING_GONE_NOTE = "This item code's store listing has been removed, so it can't be confirmed here right now. Looking it up again this turn gives this same result: don't call get_product for it again. Don't name or describe a product for it, show its card or give its link. Say plainly you couldn't confirm that code on the store just now and set show_contact true so Sia Huat sales can check it; if the customer said what it is, offer to search for it.";
-// Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
+// Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG", and an "es" after ss, sh, ch
+// or x: "glasses" became "glasse", in no name, so a broad "wine glasses" matched no "WINE GLASS" row (r10).
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
-const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
+const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.replace(/(?<=ss|sh|ch|x)es$|s$/, "") : word);
 /** A category's words as the catalogue's category filter reads them. */
 const categoryTerms = (words: string) => words.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
 // "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size. Names say
-// "S/S" where customers say "stainless steel" (exam 4, s01-B idx 0: "S/S ONE-PC LADLE 6.0oz").
-const sizeText = (text: string) => text.toLowerCase().replace(/\bs\/s\b/g, "stainless steel").replace(/(\d)\.0(?!\d)/g, "$1");
+// "S/S" where customers say "stainless steel" (exam 4, s01-B idx 0: "S/S ONE-PC LADLE 6.0oz"). Names and queries alike (r10): "knife"
+// is not inside "KNIVES", so "knives" reads "knife"; a GN fraction is one word, "1of1", since one-character words are dropped and
+// a 1/2 40mm pan matched "gn pan 1/1 40mm" as well as the 1/1 one did ("1/2oz" is a size and stays).
+const sizeText = (text: string) => text.toLowerCase().replace(/\bs\/s\b/g, "stainless steel").replace(/(\d)\.0(?!\d)/g, "$1")
+  .replace(/\bknives\b/g, "knife").replace(/\bshelves\b/g, "shelf").replace(/(?<!\d)(\d)\/(\d)(?![\d\p{L}])/gu, "$1of$2");
+// The salespeople's name counts as much as the store's: 3% of store names are stale ("STAINLESS STEEL GN PAN" for the 1/1 40mm
+// G11102, tester 13 Oct).
+const nameText = (item: Product) => sizeText(item.sales_name ? `${item.name} ${item.sales_name}` : item.name);
+const NAMED_SIZE = /(?<![\d.])\d+(?:\.\d+)?(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)\b/;
+// The salespeople's sizes count only when the store name gives none: the two names give different sizes on some rows, and the card
+// shows the store's (r10).
+const sizeName = (item: Product) => sizeText(item.sales_name && !NAMED_SIZE.test(sizeText(item.name)) ? `${item.name} ${item.sales_name}` : item.name);
 const SIZE_WORD = /^\d+(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)$/;
 // A size word is a whole number: "6oz" is not inside "16oz" or "1/2oz", and "1.5L" gives no "5l" (exam 3: s01-A T0 asked for 6oz,
 // c12-stress for 7cm and 7.5cm). A size after another unit and a slash ("16oz/500ml", '12"/30cm') is still that size.
@@ -200,7 +215,7 @@ const BRAND_SHARE = 4;
  */
 function varied(items: Product[], limit: number, queries: string[], phrases: string[][]) {
   const words = [...new Set(phrases.flat())];
-  const hits = (item: Product) => words.filter((word) => sizeText(item.name).includes(word)).length;
+  const hits = (item: Product) => words.filter((word) => nameText(item).includes(word)).length;
   // Whole words only: short brands (AG, IR, AKI) sit inside "bag", "stir" and "baking".
   const named = (brand: string) => queries.some((query) => codePattern(brand).test(query));
   const first: Product[] = [];
@@ -279,7 +294,7 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   // One slow or failed search must not sink the others: each is retried once and the ones that succeed are used.
   const [settled, [categoryOutcome]] = await Promise.all([
     Promise.allSettled(input.queries.map((query) => retryOnce(() => ctx.deps.searchDirect(query, QUERY_ROWS)))),
-    Promise.allSettled(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS, input.max_price))] : []),
+    Promise.allSettled(category ? [retryOnce(() => ctx.deps.searchCategory(category, CATEGORY_ROWS, input.max_price, input.sort))] : []),
   ]);
   const outcomes = [...settled, ...(categoryOutcome ? [categoryOutcome] : [])];
   if (outcomes.every((result) => result.status === "rejected")) {
@@ -311,19 +326,23 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   const inScope = (item: Product) => scope.exists
     && [item.category, item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
   const phrases = input.queries.map((query) => sizeText(query).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
-  const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
-  if (!category) {
+  const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => nameText(item).includes(word)));
+  const sort = input.sort ?? null;
+  // A price sort keeps the catalogue's price order over the whole category: the customer's words don't rank it (client, 13 Oct).
+  const sorted = sort !== null && scope.exists;
+  if (sorted) scope.products.forEach(add);
+  else if (!category) {
     // A row naming every word of a query first: "rice dispenser" beside "rice bin" had its one exact row 9th (exam 4, s03-B idx 1).
     byRank(literal);
     byRank(() => true);
   } else {
-    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => sizeText(item.name).includes(word))).size;
+    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => nameText(item).includes(word))).size;
     const scopeByHits = [...scope.products].sort((a, b) => nameHits(b) - nameHits(a));
     const sizedPhrases = phrases.filter((words, index) => words.some((word) => SIZE_WORD.test(word) && sizeIn(sizeText(input.queries[index]), word)));
     // Sizes of one unit are choices ("ladle 4oz 6oz 8oz": any will do, exam 4, s01-B idx 0); sizes in different units describe one
     // product ("stock pot 40cm 50l"), so each must match.
     const sizedLiteral = (item: Product) => sizedPhrases.some((words) => {
-      const name = sizeText(item.name);
+      const name = sizeName(item);
       const sizes = words.filter((word) => SIZE_WORD.test(word));
       const choices = new Set(sizes.map((word) => word.replace(/^\d+/, ""))).size === 1;
       return words.every((word) => SIZE_WORD.test(word) || name.includes(word))
@@ -334,14 +353,27 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
       scopeByHits.filter(sizedLiteral).forEach(add);
       byRank(sizedLiteral);
     }
+    // 0b. the type's best-sellers naming every word of a query, before the word-ranked hits: a broad "chef knife" listed short names
+    // and sold-out red handles first, never the store's best-sellers (r10). Only rows of the type's own leaves (the subcategory
+    // "Professional western chef and preparation knives" holds every knife), and only the words before any "for", in the name and
+    // the leaf alike ("Adaptor Bar For GN Pans" and the leaf "Adaptor bars and holders for GN and steam pans" are no GN pans). The
+    // leaf is read in plain lower case: sizeText would turn "Chef knives" into "chef knife", without the term "knives".
+    const leading = (text: string) => sizeText(text).split(/\bfor\b/)[0];
+    const ownLeaf = (item: Product) => (item.third_category ?? "").toLowerCase().split(/\bfor\b/)[0];
+    const bestOfType = (item: Product) => item.best_seller === true && terms.every((term) => ownLeaf(item).includes(term))
+      && phrases.some((words) => words.length > 0 && [item.name, item.sales_name ?? ""].some((text) => words.every((word) => leading(text).includes(word))));
+    scopeByHits.filter(bestOfType).forEach(add);
     byRank(inScope); // 1. query hits inside the category
     scopeByHits.filter(literal).forEach(add); // 2. category rows naming every word of a 2+ word query
     byRank(literal); // 3. other query hits naming every word of a 2+ word query
-    scopeByHits.forEach(add); // 4. the rest of the category, most stocked first
+    scopeByHits.forEach(add); // 4. the rest of the category, better sellers first, then the most stocked
     byRank(() => true); // 5. the rest of the query hits
   }
   const shared = Math.floor(READS_PER_ROUND / Math.max(1, ctx.roundSearches ?? 1));
-  const top = varied(merged, Math.max(MIN_RESULTS_PER_SEARCH, Math.min(RESULTS_PER_SEARCH, shared)), input.queries, phrases);
+  // In price order, every row: a brand share put cheaper brands above the 5th dearest, and one colour each kept a sold-out Black
+  // and never read its in-stock Blue at the same price, so a cheaper knife was "the most expensive in stock" (r9 review, KF1430).
+  const pick = (items: Product[], count: number) => (sorted ? items.slice(0, count) : varied(items, count, input.queries, phrases));
+  const top = pick(merged, Math.max(MIN_RESULTS_PER_SEARCH, Math.min(RESULTS_PER_SEARCH, shared)));
   const topIds = new Set(top.map((item) => item.stock_id));
   // Only a category read in full, with every product in it listed (or rejected), backs "that's all". A brand the customer ruled
   // out still exists, so exclude_brands doesn't count as covered: "that's all" would be false.
@@ -368,9 +400,13 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   // A removed listing doesn't keep its place: the next rows are read once in place of the removed ones (r8 Batch 1 review: 3 of 5
   // reads of "grey cut resistant glove" were removed listings, and live gloves ranked below them were never shown).
   const removedCount = first.filter((item) => item.gone).length;
-  const next = removedCount ? varied(merged.filter((item) => !topIds.has(item.stock_id)), removedCount, input.queries, phrases) : [];
+  const next = removedCount ? pick(merged.filter((item) => !topIds.has(item.stock_id)), removedCount) : [];
   const [more, moreDetails] = await read(next);
   const checked = [...first, ...more];
+  // A live price can change the order: results go back in price order at their live prices (unchecked ones at the catalogue's).
+  // shortcut: rows past the ones read keep their catalogue order, so a live price that jumped above them goes unseen; the 6 Oct
+  // refresh keeps the two close. Upgrade if live and catalogue prices drift (re-run catalogue:refresh).
+  if (sort) checked.sort((a, b) => (sort === "price_high" ? b.product.list_price - a.product.list_price : a.product.list_price - b.product.list_price));
   const details = new Map([...firstDetails, ...moreDetails]);
   for (const item of checked) if (item.gone) ctx.gone.add(item.product.stock_id);
   // A search that returned its full row limit may have more matches than it could return.
@@ -379,7 +415,10 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   const removed = [...queryLists.flat(), ...scope.products].some((item) => ctx.gone.has(item.stock_id));
   // Recorded once its results are ready, not before its live checks (the slow part): a search the deadline cut while they ran backed
   // "that's all" and "we don't carry" in an answer that was told it didn't finish (r6 review).
-  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete });
+  // Only a sort over every product of the category backs "the most expensive": a product or brand the customer ruled out may be
+  // dearer, and so may one above a budget (r9 S2); the cheapest within a ceiling is still the cheapest.
+  const wholeSorted = sorted && !input.exclude_ids?.length && !input.exclude_brands?.length && !(sort === "price_high" && input.max_price);
+  ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete, ...(wholeSorted ? { priceOrder: sort! } : {}) });
   const affordable = checked.filter((item) => !item.gone && (!input.max_price || item.product.list_price <= input.max_price));
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
@@ -387,6 +426,7 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     // With no products returned it would contradict the no-match note.
     more_available: moreAvailable && (affordable.length > 0 || removed),
     complete,
+    ...(sort ? { whole_category_sorted: wholeSorted } : {}),
     // exam 3, c01-A T9-T11: from a top 10 of two brands Claude said all our chef knives were those two.
     ...(scope.exists ? { brands: brandNames(merged) } : {}),
     ...(category ? { category_found: scope.exists } : {}),
@@ -471,10 +511,13 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
     const accessoryOk = ACCESSORY.test(source.name);
     const shared = new Map(candidates.map((item) => [item.stock_id, sharedWords(own, kindWords(item))]));
     // Same leaf, then more kind words, then the nearest price as a proxy for size and grade; stale stock no longer orders it
-    // (exam 3, c07-persona T7: the most stocked mixers crowded out the closest ones).
+    // (exam 3, c07-persona T7: the most stocked mixers crowded out the closest ones). Prices in bands of about a quarter
+    // (log scale), a better seller first within a band (r10), then the exact gap.
+    const band = (item: Product) => Math.round(priceGap(item, source) * 4);
     candidates = candidates
       .filter((item) => shared.get(item.stock_id)! > 0 && (accessoryOk || !ACCESSORY.test(item.name)))
-      .sort((a, b) => sameLeaf(b) - sameLeaf(a) || shared.get(b.stock_id)! - shared.get(a.stock_id)! || priceGap(a, source) - priceGap(b, source));
+      .sort((a, b) => sameLeaf(b) - sameLeaf(a) || shared.get(b.stock_id)! - shared.get(a.stock_id)! || band(a) - band(b)
+        || (b.popularity ?? -1) - (a.popularity ?? -1) || priceGap(a, source) - priceGap(b, source));
   }
   // The source is checked too, so the reply's "X is out of stock" is judged against its live stock (the memo avoids a refetch).
   const checking = candidates.slice(0, 8);

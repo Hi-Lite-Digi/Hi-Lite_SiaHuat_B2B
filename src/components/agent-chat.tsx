@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import { SALES_CONTACT } from "@/lib/agent/contact";
-import { MAX_MESSAGE_CHARS, agentReplySchema, cardsToPick, historyFor, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
+import { MAX_MESSAGE_CHARS, agentReplySchema, cardPhoto, cardsToPick, historyFor, nextEnquiry, type AgentEvent, type AgentReply } from "@/lib/agent/contract";
 import { abortAfter, isNewChatCommand, newChatWarning } from "@/lib/agent/new-chat";
 import { MAX_PHOTO_BYTES, photoAttachment, photoThumbnail } from "@/lib/agent/photo";
 import { readSavedChat, saveChat, type ChatItem } from "@/lib/agent/saved-chat";
@@ -40,6 +40,19 @@ function stockLabel(card: Product) {
   if (card.stock_status === "in_stock") return "Website: in stock";
   if (card.stock_status === "out_of_stock") return "Website: out of stock";
   return "Stock unconfirmed";
+}
+
+/**
+ * A card's photo in a fixed 56px box, so a lazy load never moves the card; no box when the catalogue has none or it fails to load.
+ * Outside the pick button and linked to the store page: a tap to see it bigger picked the product (r9 review).
+ */
+function CardPhoto({ card }: { card: Product }) {
+  const [failed, setFailed] = useState(false);
+  const src = cardPhoto(card);
+  if (!src || failed) return null;
+  // eslint-disable-next-line @next/next/no-img-element
+  const photo = <img src={src} alt="Product photo" width={56} height={56} loading="lazy" decoding="async" onError={() => setFailed(true)} className="size-14 shrink-0 rounded-lg bg-white object-contain" />;
+  return card.source_url ? <a href={card.source_url} target="_blank" rel="noreferrer" aria-label={`More photos of ${card.name} on the store`} className="shrink-0">{photo}</a> : photo;
 }
 
 export function AgentChat() {
@@ -340,14 +353,17 @@ export function AgentChat() {
           {item.text && <p className="whitespace-pre-wrap leading-6 text-[#334b44]">{item.text}</p>}
           {item.cards?.length ? <div className="mt-3 space-y-2">
             {item.cards.map((card, index) => <div key={card.stock_id} className="rounded-xl bg-[#f5f1e8] p-3">
-              <button type="button" data-card-index={index + 1} disabled={loading || card.stock_status === "out_of_stock"} onClick={() => pickCard(card)} className="block w-full text-left disabled:opacity-70">
-                <p className="break-words font-semibold leading-5">{card.name}</p>
-                <p className="mt-1 text-xs text-[#667a74]">code: {card.stock_id}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <p className="text-xs text-[#667a74]">{card.stock_status === "unknown" ? "Price to be confirmed" : `Price: $${Number(card.list_price).toFixed(2)} / ${card.uom_id}`}</p>
-                  <Badge className={card.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}>{stockLabel(card)}</Badge>
-                </div>
-              </button>
+              <div className="flex items-start gap-3">
+                <CardPhoto card={card} />
+                <button type="button" data-card-index={index + 1} disabled={loading || card.stock_status === "out_of_stock"} onClick={() => pickCard(card)} className="block min-w-0 flex-1 text-left disabled:opacity-70">
+                  <p className="break-words font-semibold leading-5">{card.name}</p>
+                  <p className="mt-1 text-xs text-[#667a74]">code: {card.stock_id}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <p className="text-xs text-[#667a74]">{card.stock_status === "unknown" ? "Price to be confirmed" : `Price: $${Number(card.list_price).toFixed(2)} / ${card.uom_id}`}</p>
+                    <Badge className={card.stock_status === "out_of_stock" ? "bg-[#a94732]" : "bg-[#176853]"}>{stockLabel(card)}</Badge>
+                  </div>
+                </button>
+              </div>
               {card.source_url && <a href={card.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-flex max-w-full items-center gap-1 break-all text-[11px] font-semibold text-[#176853]">{card.source_url} <ExternalLink className="size-3 shrink-0" /></a>}
             </div>)}
             {item.pickHint !== false && <p className="text-xs font-medium text-[#176853]">Tap a product to choose it.</p>}
