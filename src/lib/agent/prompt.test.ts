@@ -355,6 +355,8 @@ test("the best of a type is the best fit, preferring a best-seller; only the mos
     "recommend the same way from the dearer products in the results, without calling it the most expensive or the top of the range.",
     "Only when they ask for the most expensive, priciest or highest-priced <type> in those words",
     "sort 'price_high'", "only when whole_category_sorted is true", "sort 'price_low'",
+    // Round 9's intent: the most expensive gets its recommendation in the same reply, not a follow-up question (r10 review).
+    "search with sort 'price_high' and, in that same reply, recommend the first in-stock product in the results that is that type",
     // A list round reads only 5 live: the dearest chef knives are mostly out of stock (8280-30 is the 6th).
     "Say 'the most expensive <type> in stock' only when every dearer product of that type in the results is out of stock (not 'not checked').",
     "If none of that type in the results is in stock, search once more with the same category and sort and their codes in exclude_ids, and recommend from that.",
