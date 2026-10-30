@@ -723,6 +723,18 @@ test("unit words don't make products the same kind", async () => {
   assert.deepEqual(await altIds(fakeDeps(catalogue), "WM", 1), ["HAND"]);
 });
 
+test("find_alternatives puts a better seller first among same-kind products at a similar price, and a far price last (r10)", async () => {
+  // Invented brands and codes on the rows with sales fields: no real product's sales rank in a public repo.
+  const leaf = { third_category: "Water goblets & multi-purpose glasses" };
+  const catalogue = [
+    product({ stock_id: "H5802", name: "Luminarc Raindrop Water Goblet", brand: "Luminarc", list_price: 12.75, ...leaf }),
+    product({ stock_id: "T-WG340", name: "Brandy Water Goblet 340ml", brand: "Brandy", list_price: 13.2, popularity: 20, ...leaf }),
+    product({ stock_id: "T-WG330", name: "Brandx Water Goblet 330ml", brand: "Brandx", list_price: 12.1, popularity: 90, ...leaf }),
+    product({ stock_id: "T-CWG", name: "Brandz Crystal Water Goblet", brand: "Brandz", list_price: 28.35, popularity: 100, ...leaf }),
+  ];
+  assert.deepEqual(await altIds(fakeDeps(catalogue), "H5802", 1), ["T-WG330", "T-WG340", "T-CWG"]);
+});
+
 test("a product with no leaf category gets same-series alternatives by name (exam 3, c05-persona T12)", async () => {
   const patra = (cm: number, price: number, quantity: number) => product({
     stock_id: `3500-00${cm}`, name: `Patra Rim Plate ${cm}cm, Porcelain White`, list_price: price, available_quantity: quantity, category: "Dinnerware",

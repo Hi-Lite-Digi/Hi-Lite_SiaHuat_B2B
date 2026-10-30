@@ -1,22 +1,26 @@
 // src/lib/catalogue.test.ts
 import assert from "node:assert/strict";
 import test from "node:test";
-import { searchCatalogueByCategory } from "./catalogue";
+import type { Product } from "./chat-contract";
+import { findAvailableCatalogueAlternatives, searchCatalogueByCategory } from "./catalogue";
+import { product } from "./agent/testing";
 
-/** The query of the category search's first request, answered with no rows. */
-async function categoryQuery(...args: Parameters<typeof searchCatalogueByCategory>) {
+/** The queries a catalogue read sends: a code lookup is answered with `source`, every other request with no rows. */
+async function sentQueries(read: () => Promise<unknown>, source?: Product) {
   const originalFetch = globalThis.fetch;
   const saved = { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_PUBLISHABLE_KEY };
   process.env.SUPABASE_URL = "https://test.supabase.co";
   process.env.SUPABASE_PUBLISHABLE_KEY = "test-key";
-  const urls: string[] = [];
+  const queries: URLSearchParams[] = [];
   globalThis.fetch = async (url) => {
-    urls.push(String(url));
-    return new Response("[]", { headers: { "content-range": "*/0" } });
+    const query = new URL(String(url)).searchParams;
+    queries.push(query);
+    const rows = source && query.has("stock_id") ? [source] : [];
+    return new Response(JSON.stringify(rows), { headers: { "content-range": `*/${rows.length}` } });
   };
   try {
-    await searchCatalogueByCategory(...args);
-    return new URL(urls[0]).searchParams;
+    await read();
+    return queries;
   } finally {
     globalThis.fetch = originalFetch;
     for (const [name, value] of [["SUPABASE_URL", saved.url], ["SUPABASE_PUBLISHABLE_KEY", saved.key]]) {
@@ -24,6 +28,8 @@ async function categoryQuery(...args: Parameters<typeof searchCatalogueByCategor
     }
   }
 }
+/** The query of the category search's first request. */
+const categoryQuery = async (...args: Parameters<typeof searchCatalogueByCategory>) => (await sentQueries(() => searchCatalogueByCategory(...args)))[0];
 const threeFields = (...terms: string[]) => `(${["category", "third_category", "subcategory"].map((field) => `and(${terms.map((term) => `${field}.ilike.*${term}*`).join(",")})`).join(",")})`;
 
 test("a price sort reads the type's own leaf, dearest first, priced rows only (client, 13 Oct)", async () => {
@@ -43,9 +49,13 @@ test("without a sort the category query puts better sellers first, then the most
   assert.deepEqual(query.getAll("list_price"), []);
 });
 
-test("every catalogue read asks for the sales fields (r10)", async () => {
+test("every catalogue read asks for the sales fields, and the alternatives pool is read better sellers first (r10)", async () => {
   const fields = (await categoryQuery("Chef knives", 200, null)).get("select")?.split(",") ?? [];
   for (const field of ["popularity", "best_seller", "sales_name"]) assert.ok(fields.includes(field), field);
+  // Unordered, a leaf with more than 80 in stock gave whatever 80 rows Postgres read first (r10 skeptic A13).
+  const goblet = product({ stock_id: "H5802", name: "Luminarc Raindrop Water Goblet", subcategory: "Glassware", third_category: "Water goblets & multi-purpose glasses" });
+  const [, ...pool] = await sentQueries(() => findAvailableCatalogueAlternatives("H5802"), goblet);
+  assert.deepEqual(pool.map((query) => query.get("order")), Array(2).fill("popularity.desc.nullslast,available_quantity.desc.nullslast"));
 });
 
 test("a range, section or word that isn't exactly a type name keeps the three-field filter under a sort", async () => {

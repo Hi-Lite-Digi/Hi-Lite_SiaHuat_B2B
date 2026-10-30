@@ -511,10 +511,13 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
     const accessoryOk = ACCESSORY.test(source.name);
     const shared = new Map(candidates.map((item) => [item.stock_id, sharedWords(own, kindWords(item))]));
     // Same leaf, then more kind words, then the nearest price as a proxy for size and grade; stale stock no longer orders it
-    // (exam 3, c07-persona T7: the most stocked mixers crowded out the closest ones).
+    // (exam 3, c07-persona T7: the most stocked mixers crowded out the closest ones). Prices in bands of about a quarter
+    // (log scale), a better seller first within a band (r10), then the exact gap.
+    const band = (item: Product) => Math.round(priceGap(item, source) * 4);
     candidates = candidates
       .filter((item) => shared.get(item.stock_id)! > 0 && (accessoryOk || !ACCESSORY.test(item.name)))
-      .sort((a, b) => sameLeaf(b) - sameLeaf(a) || shared.get(b.stock_id)! - shared.get(a.stock_id)! || priceGap(a, source) - priceGap(b, source));
+      .sort((a, b) => sameLeaf(b) - sameLeaf(a) || shared.get(b.stock_id)! - shared.get(a.stock_id)! || band(a) - band(b)
+        || (b.popularity ?? -1) - (a.popularity ?? -1) || priceGap(a, source) - priceGap(b, source));
   }
   // The source is checked too, so the reply's "X is out of stock" is judged against its live stock (the memo avoids a refetch).
   const checking = candidates.slice(0, 8);

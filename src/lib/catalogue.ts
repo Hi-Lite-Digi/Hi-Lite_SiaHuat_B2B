@@ -575,6 +575,8 @@ export async function findAvailableCatalogueAlternatives(
       status: "in.(Active,New)",
       stock_status: "eq.in_stock",
       available_quantity: `gte.${minimumQuantity}`,
+      // 29 leaves have more than 80 in stock: read the better sellers, not whatever rows come first (r10).
+      order: "popularity.desc.nullslast,available_quantity.desc.nullslast",
       limit: "80",
     });
     const response = await fetch(`${url}/rest/v1/products?${query}`, {
