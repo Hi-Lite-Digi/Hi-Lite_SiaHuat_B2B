@@ -1610,6 +1610,38 @@ test("'the most expensive' is a whole-range claim, backed by a search sorted hig
   }
 });
 
+// Made-up rows for the sales flags: no real product's sales flags in this public repo. The Waring has none.
+const salesSeen = new Map<string, CheckedProduct>([
+  product({ stock_id: "BX-100", name: "Brandx BX-100 Bar Blender 2L", best_seller: true, popularity: 100 }),
+  product({ stock_id: "BX-200", name: "Brandx BX-200 Bar Blender 1.5L", popularity: 50 }),
+  product({ stock_id: "PX-9", name: "Acme PX-9 Immersion Blender", popularity: 90 }),
+  product({ stock_id: "MX1000XTXEE", name: "Waring Commercial Hi-Power Blender With 64 Oz. Bpa-Free Copolyester Container" }),
+].map((item) => [item.stock_id, { product: item, verified: true }]));
+const bestSellerClaims = (message: string, card_ids: string[]) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, salesSeen, allowed)
+  .style.filter((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)).length;
+
+test("'one of our best-sellers' only about a product whose facts say so (r10)", () => {
+  for (const [message, cards] of [
+    ["The Waring MX1000XTXEE is our best-seller.", ["MX1000XTXEE"]],
+    ["Both the Brandx and the Waring are best-selling blenders.", ["BX-100", "MX1000XTXEE"]],
+    ["Both the Brandx and the Waring are best-selling blenders.", []],
+    ["These are our top sellers.", ["MX1000XTXEE"]],
+    ["这款 MX1000XTXEE 是我们最畅销的", ["MX1000XTXEE"]],
+    // A 'popular' product isn't a best-seller: in Chinese only the superlative is guarded (r10 skeptic A10).
+    ["这款 PX-9 是我们最畅销的", ["PX-9"]],
+  ] as const) assert.equal(bestSellerClaims(message, [...cards]), 1, message);
+  for (const [message, cards] of [
+    ["The Brandx BX-100 is one of our best-sellers.", ["BX-100"]],
+    ["These are our best-sellers.", ["BX-100"]],
+    ["Want to see our best-sellers?", []],
+    ["It's a popular choice for bars.", ["MX1000XTXEE"]],
+    // Each clause is judged on the reply's own cards first (r10 skeptic A9): the Brandx BX-200 was seen, not sent.
+    ["The Brandx BX-100 is one of our best-sellers; the Waring suits bars.", ["BX-100", "MX1000XTXEE"]],
+    ["The Brandx is one of our best-sellers.", ["BX-100"]],
+    ["这款 PX-9 很畅销", ["PX-9"]],
+  ] as const) assert.equal(bestSellerClaims(message, [...cards]), 0, message);
+});
+
 test("'the cheapest' is backed by a price_low sort, not a price_high one", () => {
   assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search({ priceOrder: "price_low" })]), []);
   assert.deepEqual(rangeIssues("The Zyliss is the cheapest.", [search({ priceOrder: "price_high" })]), ["style CLAIM"]);

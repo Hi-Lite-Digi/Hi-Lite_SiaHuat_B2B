@@ -238,5 +238,8 @@ export function productFact({ product, verified, details }: CheckedProduct, show
     link: product.source_url ?? null,
     // The chat's card shows this photo: Claire can point to it for "got photo?", never describe it (r9).
     photo_on_card: cardPhoto(product) !== null,
+    // From Sia Huat's sales this year, in words only (r10): best-seller is the top few of its type, popular its top fifth. Never a
+    // number: the sales data is the client's.
+    sales_rank: product.best_seller ? "best-seller" : (product.popularity ?? 0) >= 90 ? "popular" : null,
   };
 }

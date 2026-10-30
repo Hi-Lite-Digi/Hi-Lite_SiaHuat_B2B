@@ -867,6 +867,28 @@ test("a reply's cards carry their photos, for a search result and for an earlier
   assert.match(earlier.cards[0].image_url ?? "", /image-proxy/);
 });
 
+test("a reply's cards carry no sales fields, from Claude or the backup reply (r10)", async () => {
+  // A made-up row: no real product's sales flags in this public repo.
+  const ranked = product({
+    stock_id: "T-BT1", name: "ACME KITCHEN BLOW TORCH", popularity: 90, best_seller: true, sales_name: "ACME BLOW TORCH T-BT1",
+    image_url: "https://store.siahuat.com/image-proxy/ASP/SIAHUAT/NORMAL/Shell/picture/T-BT1.jpg",
+  });
+  const salesFree = (cards: { [field: string]: unknown }[]) => cards.every((card) => !["popularity", "best_seller", "sales_name"].some((field) => field in card));
+  const searched = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen blow torch.", card_ids: ["T-BT1"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: fakeDeps([ranked]), client: searched.client, model: "claude-sonnet-5" });
+  assert.deepEqual(reply.cards.map((card) => card.stock_id), ["T-BT1"]);
+  assert.ok(salesFree(reply.cards));
+  assert.match(reply.cards[0].image_url ?? "", /image-proxy/);
+  const failed = fakeClient([new Error("boom")]);
+  const backup = await runAgentTurn({ request: request({}), deps: fakeDeps([ranked]), client: failed.client, model: "claude-sonnet-5" });
+  assert.equal(backup.provider, "fallback");
+  assert.deepEqual(backup.cards.map((card) => card.stock_id), ["T-BT1"]);
+  assert.ok(salesFree(backup.cards));
+});
+
 test("a reply still asking which type of a range is sent without cards (r7: pushing furniture)", async () => {
   const { client } = fakeClient([answer({ message: "We carry folding tables and Q-posts. Here are a few. Which type do you need?", card_ids: ["970S"], chips: ["Folding tables", "Q-posts"] })]);
   const reply = await runAgentTurn({ request: askedAgain("how about furniture"), deps: deps(), client, model: "claude-sonnet-5" });

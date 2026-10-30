@@ -35,6 +35,10 @@ export const productSchema = z.object({
   sales_name: z.string().nullable().optional(),
 });
 
+/** Fields from the client's sales data (r10): they rank and describe products on the server and never reach a browser. */
+const SALES_FIELDS = new Set(["popularity", "best_seller", "sales_name"]);
+export const publicProduct = (product: Product): Product => Object.fromEntries(Object.entries(product).filter(([field]) => !SALES_FIELDS.has(field))) as Product;
+
 export const historyItemSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string().trim().min(1).max(2_000),

@@ -135,6 +135,15 @@ test("product facts say whether the card shows a photo", () => {
   assert.equal(fact(), false);
 });
 
+test("product facts say how a product sells in words, never numbers (r10)", () => {
+  const fact = (overrides: Parameters<typeof product>[0]) => productFact({ product: product(overrides), verified: true });
+  assert.equal(fact({ stock_id: "A", best_seller: true, popularity: 100 }).sales_rank, "best-seller");
+  assert.equal(fact({ stock_id: "A", popularity: 90 }).sales_rank, "popular");
+  for (const overrides of [{ popularity: 80 }, { popularity: 0 }, {}]) assert.equal(fact({ stock_id: "A", ...overrides }).sales_rank, null, JSON.stringify(overrides));
+  const ranked = fact({ stock_id: "A", best_seller: true, popularity: 100, sales_name: "ACME THING 1L" });
+  for (const field of ["popularity", "best_seller", "sales_name"]) assert.ok(!(field in ranked), field);
+});
+
 test("product facts carry the dimensions and the whole description", () => {
   const description = `Heavy duty   stainless steel.\n\nDishwasher safe. ${"x".repeat(470)} The whisk attachment whips cream.`;
   const fact = productFact({ product: product({ stock_id: "A", dimensions: "W38xD55xH170cm", description }), verified: true });

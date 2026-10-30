@@ -2,6 +2,7 @@
 import "server-only";
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import { publicProduct } from "@/lib/chat-contract";
 import { beginModelCall, recordClaudeUsage, type ClaudeUsage } from "@/lib/model-usage";
 import { prepareVisionPhoto } from "@/lib/product-image-crop";
 import { CHIP_PREFIX, MAX_CARDS, TAP_PREFIX, customerWords, type AgentReply, type AgentRequest } from "./contract";
@@ -709,7 +710,7 @@ export async function runAgentTurn(input: {
     });
     return {
       message: !blank ? cleaned.message : review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE,
-      cards: review.cards,
+      cards: review.cards.map(publicProduct),
       chips: review.chips,
       enquiry: replyEnquiry(ctx),
       showContact: showContact || cleaned.showContact || (blank && !review.cards.length),
@@ -730,7 +731,7 @@ export async function runAgentTurn(input: {
       seen: ctx.seen, changes, thanks: thanksTurn,
       event: request.event.type === "select_product" ? "tap" : request.event.type === "image" ? "photo" : "text",
     });
-    return { ...reply, enquiry };
+    return { ...reply, cards: reply.cards.map(publicProduct), enquiry };
   }
 }
 
