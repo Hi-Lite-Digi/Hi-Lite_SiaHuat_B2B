@@ -1518,10 +1518,14 @@ test("no whole-category order without a category, when it isn't found, with excl
   }
 });
 
-test("the search tool offers a price sort", () => {
-  const schema = agentTools[0].input_schema as { properties: Record<string, { enum?: string[] }> };
+test("the search tool offers a price sort for an explicit price order only, and names sales_rank (owner, 30 Oct)", () => {
+  const schema = agentTools[0].input_schema as { properties: Record<string, { enum?: string[]; description?: string }> };
   assert.deepEqual(schema.properties.sort.enum, ["price_high", "price_low"]);
   assert.match(agentTools[0].description ?? "", /whole_category_sorted true means/);
+  // "the best" is the best fit, not the dearest (owner, 30 Oct: "suggested meaningfully").
+  assert.match(schema.properties.sort.description ?? "", /Not for 'the best', 'premium' or 'top-end'/);
+  assert.doesNotMatch(schema.properties.sort.description ?? "", /price_high for the best/);
+  assert.match(agentTools[0].description ?? "", /sales_rank/);
 });
 
 // r10: the salespeople's names (sales_name) and the best-seller flags. A row with best_seller or popularity has a made-up code and

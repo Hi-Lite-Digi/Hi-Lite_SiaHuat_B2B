@@ -322,19 +322,54 @@ test("Claire is given every range the catalogue lists and never denies a whole o
   assert.ok(rule.includes("(a queue stand is a Q-post) is a specific request: search with that type as category."), rule);
 });
 
-test("asked for the best, top or most expensive of a type, Claire sorts by price and recommends the top in-stock one in the same reply (client, 13 Oct)", () => {
-  // "Show me your most expensive chef knife" got one $47.25 knife and "There may be pricier ones too": it took repeated prompts.
-  const lines = CLAIRE_AGENT_PROMPT.split("\n");
-  const broad = lines.find((line) => line.startsWith("- Broad request (")) ?? "";
-  assert.ok(broad.endsWith(" A request for the best, the top or the cheapest of a type is not a broad request: see the rule on the best below."), broad);
-  const rule = lines[lines.findIndex((line) => line.startsWith("- A request for a whole range or section")) + 1];
-  assert.ok(rule.startsWith("- The best, top, premium, most expensive or highest-end <type>"), rule);
+test("a broad request gets 2-3 best-sellers and one salesperson's question in the first reply (client, 30 Oct)", () => {
+  // "The customer must be very specific to arrive at what he wants, whereas the existing salespeople ask the right questions and
+  // direct them to some suggestions immediately." A broad ask got a question only.
+  const broad = CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith("- Broad request (")) ?? "";
   for (const words of [
-    "sort 'price_high'", "In that same reply recommend the first in-stock product", "then at most one question",
-    "only when whole_category_sorted is true", "sort 'price_low'", "'Best' for a stated use or need",
+    "suggest before you ask, as a salesperson would",
+    "In this same reply call search_catalogue with their words and the type's name from SIA HUAT'S CATALOGUE RANGES as category, and show 2-3 products of that type as cards",
+    "best-sellers first (sales_rank 'best-seller', then 'popular')",
+    "a lower-priced one among them when the results have one",
+    "the one short question a salesperson would ask next, about one thing: for a restaurant, a home or a gift; the size; or the budget",
+    // With no type there is no category to search: 2-3 cards would be guesses (r10 skeptic A11c).
+    "A request that names no product type ('stuff for my new cafe') still gets the one question first.",
+  ]) assert.ok(broad.includes(words), words);
+  assert.ok(broad.endsWith(" A request for the best of a type, or for its most expensive or cheapest, follows the rule on the best below."), broad);
+  assert.doesNotMatch(broad, /before listing/);
+});
+
+test("the best of a type is the best fit, preferring a best-seller; only the most expensive or cheapest in those words sorts by price (client 13 Oct, owner 30 Oct)", () => {
+  // client, 13 Oct: "Show me your most expensive chef knife" got one $47.25 knife and "There may be pricier ones too". Owner, 30 Oct,
+  // on round 9 sorting 'the best' by price: "i think it should be suggested meaningfully".
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const rule = lines[lines.findIndex((line) => line.startsWith("- A request for a whole range or section")) + 1];
+  assert.ok(rule.startsWith("- The best or top <type>"), rule);
+  for (const words of [
+    "never simply the dearest", "Search the type as category with no sort", "preferring a best-seller (sales_rank)",
+    "With no use given, recommend the type's in-stock best-seller",
+    // No best-seller in the type: no made-up one (r10 skeptic A11b).
+    "(if none has sales_rank 'best-seller', the in-stock one whose facts suit the most uses, without calling it a best-seller)",
+    "'Premium', 'top-end' or 'high-end' asks for quality",
+    // Round 9's PRICIEST guard flags 'top of the range' (r10 skeptic A11b).
+    "recommend the same way from the dearer products in the results, without calling it the most expensive or the top of the range.",
+    "Only when they ask for the most expensive, priciest or highest-priced <type> in those words",
+    "sort 'price_high'", "only when whole_category_sorted is true", "sort 'price_low'",
     // A list round reads only 5 live: the dearest chef knives are mostly out of stock (8280-30 is the 6th).
     "Say 'the most expensive <type> in stock' only when every dearer product of that type in the results is out of stock (not 'not checked').",
     "If none of that type in the results is in stock, search once more with the same category and sort and their codes in exclude_ids, and recommend from that.",
+  ]) assert.ok(rule.includes(words), words);
+  assert.doesNotMatch(rule, /The best, top, premium, most expensive/);
+});
+
+test("sales_rank is said in words, never numbers (client data, 30 Oct)", () => {
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const rule = lines[lines.findIndex((line) => line.startsWith("- The best or top <type>")) + 1];
+  assert.ok(rule.startsWith("- sales_rank comes from Sia Huat's own sales this year"), rule);
+  for (const words of [
+    "never give sales figures, a rank number, how many we sell or which customers buy it",
+    // The flag marks the top few of a type, not the top one, and a comparison would be made up (r10 skeptic A11a).
+    "Say 'one of our best-sellers', never 'our best-seller' or 'the best-selling <type>' as if it were the only one, and never compare how two products sell.",
   ]) assert.ok(rule.includes(words), words);
 });
 
