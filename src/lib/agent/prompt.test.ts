@@ -328,7 +328,8 @@ test("a broad request gets 2-3 best-sellers and one salesperson's question in th
   const broad = CLAIRE_AGENT_PROMPT.split("\n").find((line) => line.startsWith("- Broad request (")) ?? "";
   for (const words of [
     "suggest before you ask, as a salesperson would",
-    "In this same reply call search_catalogue with their words and the type's name from SIA HUAT'S CATALOGUE RANGES as category, and show 2-3 products of that type as cards",
+    // "blender" read as Kitchen blenders alone found 9 of 10 out of stock and showed one $3,224 machine (r10 replay V4).
+    "In this same reply call search_catalogue with their words and the type's name from SIA HUAT'S CATALOGUE RANGES as category (when their word fits several types, as a blender is a bar, kitchen or hand blender, its plural instead, 'blenders', so all of them are searched), and show 2-3 products of that type as cards",
     "best-sellers first (sales_rank 'best-seller', then 'popular')",
     "a lower-priced one among them when the results have one",
     "the one short question a salesperson would ask next, about one thing: for a restaurant, a home or a gift; the size; or the budget",
