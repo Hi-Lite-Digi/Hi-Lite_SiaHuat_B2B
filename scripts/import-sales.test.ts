@@ -54,7 +54,7 @@ const rank = (code: string) => {
 test("products are ranked within their type, by percentile in tenths, with the top few flagged", () => {
   assert.deepEqual(plan.ranks.map((item) => item.stock_id), catalogue.map((item) => item.stock_id));
   assert.deepEqual(["W1", "W2", "W3", "W4", "W5", "W6"].map((code) => [rank(code).popularity, rank(code).best_seller]),
-    [[100, true], [90, true], [90, true], [50, false], [40, false], [20, false]]);
+    [[100, true], [70, true], [70, true], [50, false], [40, false], [20, false]]);
   assert.deepEqual(rank("W1").sales_name, "NAME W1");
   assert.deepEqual(rank("W0"), { popularity: 0, best_seller: false, sales_name: "NAME W0" });
   assert.deepEqual(rank("WX"), { popularity: null, best_seller: false, sales_name: null });
@@ -67,6 +67,14 @@ test("products are ranked within their type, by percentile in tenths, with the t
     catalogueRows: 13, ranked: 12, matched: 11, sellers: 10, zeroSales: 1, unmatched: 1,
     byLevel: { third_category: 6, subcategory: 2, none: 2 }, bestSellers: 3, salesRowsNotInCatalogue: 2,
   });
+});
+
+test("ties share the lower percentile, and a best-seller outsells at least half its type (r10 review)", () => {
+  // A low-volume type where five products sold one unit each: before, all six were flagged and ranked 90.
+  const codes = ["S1", "S2", "S3", "S4", "S5", "S6"];
+  const slow = rankSales(codes.map((code) => row(code, "Slow", "Slowpokes")), codes.map((code, at) => sale(code, at ? 1 : 2)));
+  assert.deepEqual(slow.ranks.map((item) => [item.popularity, item.best_seller]),
+    [[100, true], [20, false], [20, false], [20, false], [20, false], [20, false]]);
 });
 
 test("the plan carries no quantity", () => {

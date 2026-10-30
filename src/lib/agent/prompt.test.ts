@@ -368,6 +368,8 @@ test("sales_rank is said in words, never numbers (client data, 30 Oct)", () => {
   assert.ok(rule.startsWith("- sales_rank comes from Sia Huat's own sales this year"), rule);
   for (const words of [
     "never give sales figures, a rank number, how many we sell or which customers buy it",
+    // Most products with sales data get null too, so null can't mean "no sales data" (r10 review).
+    "null means it isn't marked as a top seller of its type or there is no sales data: never call it a poor seller, and don't say whether we have sales data on it.",
     // The flag marks the top few of a type, not the top one, and a comparison would be made up (r10 skeptic A11a).
     "Say 'one of our best-sellers', never 'our best-seller' or 'the best-selling <type>' as if it were the only one, and never compare how two products sell.",
   ]) assert.ok(rule.includes(words), words);

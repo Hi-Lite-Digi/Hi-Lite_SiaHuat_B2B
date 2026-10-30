@@ -1349,7 +1349,10 @@ export function reviewAnswer(
   for (const clause of said.flatMap((sentence) => sentence.split(/;|\s+but\s+|,\s*while\s+/i)).filter((part) => BEST_SELLER_CLAIM.test(part.replace(OFFER, " ")))) {
     const sent = claimedBy(clause, cards.map(asCard));
     const named = sent.length ? sent : claimedBy(clause, seenCards(seen));
-    if (named.length ? named.every((card) => seen.get(card.code)?.product.best_seller) : cards.some((item) => item.best_seller)) continue;
+    // A plural claim over the cards sent ("here are three of our best-sellers") needs every card flagged (r10 review).
+    const plural = /\b(?:these|they|both|all|here\s+are|(?:two|three)\s+of\s+our)\b/i.test(clause);
+    const sentBacked = cards.some((item) => item.best_seller) && (!plural || cards.every((item) => item.best_seller));
+    if (named.length ? named.every((card) => seen.get(card.code)?.product.best_seller) : sentBacked) continue;
     style.push(`${CLAIM_ISSUE_PREFIX} isn't backed by the products' facts: "${clause.trim()}". Call a product one of our best-sellers only when its sales_rank is 'best-seller'; otherwise leave the word out.`);
   }
   style.push(...stockIssues(answer.message, cards));

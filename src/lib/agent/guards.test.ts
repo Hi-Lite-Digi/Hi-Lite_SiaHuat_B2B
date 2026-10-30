@@ -1629,6 +1629,11 @@ test("'one of our best-sellers' only about a product whose facts say so (r10)", 
     ["这款 MX1000XTXEE 是我们最畅销的", ["MX1000XTXEE"]],
     // A 'popular' product isn't a best-seller: in Chinese only the superlative is guarded (r10 skeptic A10).
     ["这款 PX-9 是我们最畅销的", ["PX-9"]],
+    // A plural claim over the cards sent needs every card flagged, not one: the broad rule sends mixed sets (r10 review).
+    ["Here are three of our best-sellers.", ["BX-100", "BX-200", "PX-9"]],
+    ["All three are best-sellers.", ["BX-100", "BX-200", "PX-9"]],
+    ["These are our best-selling blenders: pick by size.", ["BX-100", "BX-200", "PX-9"]],
+    ["These are our best-sellers.", []],
   ] as const) assert.equal(bestSellerClaims(message, [...cards]), 1, message);
   for (const [message, cards] of [
     ["The Brandx BX-100 is one of our best-sellers.", ["BX-100"]],

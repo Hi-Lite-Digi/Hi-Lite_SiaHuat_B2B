@@ -98,13 +98,16 @@ export function rankSales(catalogue: CatalogueRow[], sales: SalesRow[]): SalesPl
     // Too few sellers in its leaf and subcategory to rank: it keeps its sales name for the search.
     if (!group) return unranked;
     const quantities = members.get(group.key)!;
-    const atOrBelow = quantities.filter((qty) => qty <= sale.qty).length;
+    const below = quantities.filter((qty) => qty < sale.qty).length;
+    const above = quantities.filter((qty) => qty > sale.qty).length;
     return {
       ...unranked,
-      // The share of the group's sellers selling as many or fewer, in tenths: coarse, as the publishable key can read it.
-      popularity: Math.ceil((10 * atOrBelow) / quantities.length) * 10,
-      // The top few of the type; ties at the cut are all flagged.
-      best_seller: quantities.length - atOrBelow < Math.min(3, Math.ceil(quantities.length / 5)),
+      // The share of the group's sellers selling fewer, plus itself, in tenths: ties share the lower one. Coarse, as the publishable
+      // key can read it.
+      popularity: Math.ceil((10 * (below + 1)) / quantities.length) * 10,
+      // The top few of the type; ties at the cut are all flagged, but only when they outsell at least half of it, so a slow type's
+      // one-unit sellers aren't all best-sellers (r10 review).
+      best_seller: above < Math.min(3, Math.ceil(quantities.length / 5)) && below * 2 >= quantities.length,
     };
   });
   const ranked = catalogue.filter(rankable);
