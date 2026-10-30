@@ -180,14 +180,25 @@ const REMOVED_MATCHES_NOTE = "The top catalogue matches for these words are stor
 // 15 of the 131 removed pages have their code live on a new page: "couldn't confirm", never "not sold". Read as a passing failure, it
 // was looked up again in R03 (r8 tier 3), so the note says a second look gives the same.
 const LISTING_GONE_NOTE = "This item code's store listing has been removed, so it can't be confirmed here right now. Looking it up again this turn gives this same result: don't call get_product for it again. Don't name or describe a product for it, show its card or give its link. Say plainly you couldn't confirm that code on the store just now and set show_contact true so Sia Huat sales can check it; if the customer said what it is, offer to search for it.";
-// Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG".
+// Words that don't say which product is meant; a plural "s" is dropped so "tongs" also matches "TONG", and an "es" after ss, sh, ch
+// or x: "glasses" became "glasse", in no name, so a broad "wine glasses" matched no "WINE GLASS" row (r10).
 const STOP_WORDS = new Set(["a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "inch"]);
-const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word);
+const stem = (word: string) => (word.length > 3 && word.endsWith("s") ? word.replace(/(?<=ss|sh|ch|x)es$|s$/, "") : word);
 /** A category's words as the catalogue's category filter reads them. */
 const categoryTerms = (words: string) => words.toLowerCase().split(/[\s/'’]+/).map((word) => word.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean);
 // "8.0oz" and "8oz" are one size (exam 3, s01-A T0). A size word is a number joined to its unit; "2 in 1" is not a size. Names say
-// "S/S" where customers say "stainless steel" (exam 4, s01-B idx 0: "S/S ONE-PC LADLE 6.0oz").
-const sizeText = (text: string) => text.toLowerCase().replace(/\bs\/s\b/g, "stainless steel").replace(/(\d)\.0(?!\d)/g, "$1");
+// "S/S" where customers say "stainless steel" (exam 4, s01-B idx 0: "S/S ONE-PC LADLE 6.0oz"). Names and queries alike (r10): "knife"
+// is not inside "KNIVES", so "knives" reads "knife"; a GN fraction is one word, "1of1", since one-character words are dropped and
+// a 1/2 40mm pan matched "gn pan 1/1 40mm" as well as the 1/1 one did ("1/2oz" is a size and stays).
+const sizeText = (text: string) => text.toLowerCase().replace(/\bs\/s\b/g, "stainless steel").replace(/(\d)\.0(?!\d)/g, "$1")
+  .replace(/\bknives\b/g, "knife").replace(/\bshelves\b/g, "shelf").replace(/(?<!\d)(\d)\/(\d)(?![\d\p{L}])/gu, "$1of$2");
+// The salespeople's name counts as much as the store's: 3% of store names are stale ("STAINLESS STEEL GN PAN" for the 1/1 40mm
+// G11102, tester 13 Oct).
+const nameText = (item: Product) => sizeText(item.sales_name ? `${item.name} ${item.sales_name}` : item.name);
+const NAMED_SIZE = /(?<![\d.])\d+(?:\.\d+)?(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)\b/;
+// The salespeople's sizes count only when the store name gives none: the two names give different sizes on some rows, and the card
+// shows the store's (r10).
+const sizeName = (item: Product) => sizeText(item.sales_name && !NAMED_SIZE.test(sizeText(item.name)) ? `${item.name} ${item.sales_name}` : item.name);
 const SIZE_WORD = /^\d+(?:oz|qt|l|ltr|litre|ml|cm|mm|in|inch)$/;
 // A size word is a whole number: "6oz" is not inside "16oz" or "1/2oz", and "1.5L" gives no "5l" (exam 3: s01-A T0 asked for 6oz,
 // c12-stress for 7cm and 7.5cm). A size after another unit and a slash ("16oz/500ml", '12"/30cm') is still that size.
@@ -204,7 +215,7 @@ const BRAND_SHARE = 4;
  */
 function varied(items: Product[], limit: number, queries: string[], phrases: string[][]) {
   const words = [...new Set(phrases.flat())];
-  const hits = (item: Product) => words.filter((word) => sizeText(item.name).includes(word)).length;
+  const hits = (item: Product) => words.filter((word) => nameText(item).includes(word)).length;
   // Whole words only: short brands (AG, IR, AKI) sit inside "bag", "stir" and "baking".
   const named = (brand: string) => queries.some((query) => codePattern(brand).test(query));
   const first: Product[] = [];
@@ -315,7 +326,7 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   const inScope = (item: Product) => scope.exists
     && [item.category, item.third_category, item.subcategory].some((field) => terms.every((term) => (field ?? "").toLowerCase().includes(term)));
   const phrases = input.queries.map((query) => sizeText(query).split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 2 && !STOP_WORDS.has(word)).map(stem));
-  const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => sizeText(item.name).includes(word)));
+  const literal = (item: Product) => phrases.some((words) => words.length >= 2 && words.every((word) => nameText(item).includes(word)));
   const sort = input.sort ?? null;
   // A price sort keeps the catalogue's price order over the whole category: the customer's words don't rank it (client, 13 Oct).
   const sorted = sort !== null && scope.exists;
@@ -325,13 +336,13 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
     byRank(literal);
     byRank(() => true);
   } else {
-    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => sizeText(item.name).includes(word))).size;
+    const nameHits = (item: Product) => new Set(phrases.flat().filter((word) => nameText(item).includes(word))).size;
     const scopeByHits = [...scope.products].sort((a, b) => nameHits(b) - nameHits(a));
     const sizedPhrases = phrases.filter((words, index) => words.some((word) => SIZE_WORD.test(word) && sizeIn(sizeText(input.queries[index]), word)));
     // Sizes of one unit are choices ("ladle 4oz 6oz 8oz": any will do, exam 4, s01-B idx 0); sizes in different units describe one
     // product ("stock pot 40cm 50l"), so each must match.
     const sizedLiteral = (item: Product) => sizedPhrases.some((words) => {
-      const name = sizeText(item.name);
+      const name = sizeName(item);
       const sizes = words.filter((word) => SIZE_WORD.test(word));
       const choices = new Set(sizes.map((word) => word.replace(/^\d+/, ""))).size === 1;
       return words.every((word) => SIZE_WORD.test(word) || name.includes(word))
@@ -342,10 +353,20 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
       scopeByHits.filter(sizedLiteral).forEach(add);
       byRank(sizedLiteral);
     }
+    // 0b. the type's best-sellers naming every word of a query, before the word-ranked hits: a broad "chef knife" listed short names
+    // and sold-out red handles first, never the store's best-sellers (r10). Only rows of the type's own leaves (the subcategory
+    // "Professional western chef and preparation knives" holds every knife), and only the words before any "for", in the name and
+    // the leaf alike ("Adaptor Bar For GN Pans" and the leaf "Adaptor bars and holders for GN and steam pans" are no GN pans). The
+    // leaf is read in plain lower case: sizeText would turn "Chef knives" into "chef knife", without the term "knives".
+    const leading = (text: string) => sizeText(text).split(/\bfor\b/)[0];
+    const ownLeaf = (item: Product) => (item.third_category ?? "").toLowerCase().split(/\bfor\b/)[0];
+    const bestOfType = (item: Product) => item.best_seller === true && terms.every((term) => ownLeaf(item).includes(term))
+      && phrases.some((words) => words.length > 0 && [item.name, item.sales_name ?? ""].some((text) => words.every((word) => leading(text).includes(word))));
+    scopeByHits.filter(bestOfType).forEach(add);
     byRank(inScope); // 1. query hits inside the category
     scopeByHits.filter(literal).forEach(add); // 2. category rows naming every word of a 2+ word query
     byRank(literal); // 3. other query hits naming every word of a 2+ word query
-    scopeByHits.forEach(add); // 4. the rest of the category, most stocked first
+    scopeByHits.forEach(add); // 4. the rest of the category, better sellers first, then the most stocked
     byRank(() => true); // 5. the rest of the query hits
   }
   const shared = Math.floor(READS_PER_ROUND / Math.max(1, ctx.roundSearches ?? 1));

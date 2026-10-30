@@ -74,6 +74,17 @@ test("a live check takes the store page's photo when it has one, else keeps the 
   for (const image_url of [null, placeholder]) assert.equal((await liveCheck(knife, fakeDeps([knife], { "1900S-20-TOL": { image_url } }))).product.image_url, photo);
 });
 
+test("a live check takes the store page's name (r10: G11102's catalogue name was 'STAINLESS STEEL GN PAN')", async () => {
+  const live = "Steelcraft by Safico 201 Stainless Steel GN Pan 1/1 Size, 40mm Deep, Thickness 0.6mm";
+  const pan = product({ stock_id: "G11102", name: "STAINLESS STEEL GN PAN" });
+  assert.equal((await liveCheck(pan, fakeDeps([pan], { G11102: { name: live } }))).product.name, live);
+  assert.equal((await liveCheck(pan, fakeDeps([pan], { G11102: "fail" }))).product.name, "STAINLESS STEEL GN PAN");
+  // A made-up row: no real product's sales flags in this public repo.
+  const ranked = product({ stock_id: "T-GN65", name: "ACME GN PAN", best_seller: true, popularity: 90, sales_name: "ACME GN PAN 1/1 65mm" });
+  const checked = (await liveCheck(ranked, fakeDeps([ranked]))).product;
+  assert.deepEqual([checked.best_seller, checked.popularity, checked.sales_name], [true, 90, "ACME GN PAN 1/1 65mm"]);
+});
+
 test("a failed or mismatched live check leaves the product unverified", async () => {
   const torch = product({ stock_id: "970S" });
   const failed = await liveCheck(torch, fakeDeps([torch], { "970S": "fail" }));

@@ -151,6 +151,8 @@ export async function liveCheck(product: Product, deps: FactDeps, timeoutMs = LI
       product: {
         ...product,
         source_url: live.source_url,
+        // The store page's name: 3% of catalogue names are stale ("STAINLESS STEEL GN PAN" for G11102), and a card should say what it is (r10).
+        name: live.name || product.name,
         // The catalogue can hold the placeholder for a page that now shows a photo (r9 C7: the Waring MX1200XTXEE).
         image_url: cardPhoto(live) ?? product.image_url,
         list_price: live.price_ex_gst,

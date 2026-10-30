@@ -29,6 +29,10 @@ export const productSchema = z.object({
   subcategory: z.string().nullable().optional(),
   third_category: z.string().nullable().optional(),
   last_scraped_at: z.string().nullable().optional(),
+  // From the client's sales (r10): for ranking and facts on the server, never for a browser.
+  popularity: z.number().nullable().optional(),
+  best_seller: z.boolean().nullable().optional(),
+  sales_name: z.string().nullable().optional(),
 });
 
 export const historyItemSchema = z.object({

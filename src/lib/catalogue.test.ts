@@ -36,11 +36,16 @@ test("a price sort reads the type's own leaf, dearest first, priced rows only (c
   assert.equal((await categoryQuery("Chef knives", 200, null, "price_low")).get("order"), "list_price.asc,name.asc");
 });
 
-test("without a sort the category query is as before", async () => {
+test("without a sort the category query puts better sellers first, then the most stocked (r10)", async () => {
   const query = await categoryQuery("Chef knives", 200, null);
   assert.equal(query.get("or"), threeFields("chef", "knives"));
-  assert.equal(query.get("order"), "available_quantity.desc.nullslast,name.asc");
+  assert.equal(query.get("order"), "popularity.desc.nullslast,available_quantity.desc.nullslast,name.asc");
   assert.deepEqual(query.getAll("list_price"), []);
+});
+
+test("every catalogue read asks for the sales fields (r10)", async () => {
+  const fields = (await categoryQuery("Chef knives", 200, null)).get("select")?.split(",") ?? [];
+  for (const field of ["popularity", "best_seller", "sales_name"]) assert.ok(fields.includes(field), field);
 });
 
 test("a range, section or word that isn't exactly a type name keeps the three-field filter under a sort", async () => {

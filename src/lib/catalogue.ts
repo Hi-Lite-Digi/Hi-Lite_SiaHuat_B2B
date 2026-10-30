@@ -38,6 +38,9 @@ const productSelect = [
   "subcategory",
   "third_category",
   "last_scraped_at",
+  "popularity",
+  "best_seller",
+  "sales_name",
 ].join(",");
 
 const productUseCases = [
@@ -665,10 +668,10 @@ const CATALOGUE_TYPES = new Set(catalogueRanges.flatMap(([, sections]) => sectio
 
 /**
  * Products in a catalogue category ("kitchen tongs", "GN pan trolleys", "Furniture & Banquet Equipment"): every word must
- * appear in the same field, the top-level category, third_category or subcategory. Most stocked first, then by name; with a
- * sort, by price across the whole category (its leaf type when the words name one exactly), priced rows only. A budget is
- * applied before the limit. `total` counts every match; `exists` says whether the category has products at any price. Used by
- * the agent.
+ * appear in the same field, the top-level category, third_category or subcategory. Better sellers first, then the most stocked,
+ * then by name; with a sort, by price across the whole category (its leaf type when the words name one exactly), priced rows
+ * only. A budget is applied before the limit. `total` counts every match; `exists` says whether the category has products at
+ * any price. Used by the agent.
  */
 export async function searchCatalogueByCategory(words: string, limit = 200, maxPrice?: number | null, sort?: PriceSort | null) {
   // The top-level range is searched too ("Furniture & Banquet Equipment" found nothing and "furniture" only wax fuel, owner 2 Oct).
@@ -696,7 +699,7 @@ export async function searchCatalogueByCategory(words: string, limit = 200, maxP
     return { rows, total: Number.isFinite(count) ? count : rows.length };
   };
   // A price sort orders the whole category in the database, so the top of the range is read whatever its stock; $0 rows have no price.
-  const order = sort ? `list_price.${sort === "price_high" ? "desc" : "asc"},name.asc` : "available_quantity.desc.nullslast,name.asc";
+  const order = sort ? `list_price.${sort === "price_high" ? "desc" : "asc"},name.asc` : "popularity.desc.nullslast,available_quantity.desc.nullslast,name.asc";
   const query = new URLSearchParams({ select: productSelect, ...filter, order, limit: String(limit) });
   if (maxPrice != null) query.set("list_price", `lte.${maxPrice}`);
   if (sort) query.append("list_price", "gt.0");

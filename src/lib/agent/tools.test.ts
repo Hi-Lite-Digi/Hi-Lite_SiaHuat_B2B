@@ -1523,3 +1523,70 @@ test("the search tool offers a price sort", () => {
   assert.deepEqual(schema.properties.sort.enum, ["price_high", "price_low"]);
   assert.match(agentTools[0].description ?? "", /whole_category_sorted true means/);
 });
+
+// r10: the salespeople's names (sales_name) and the best-seller flags. A row with best_seller or popularity has a made-up code and
+// name: the sales data is the client's and this repo is public.
+const gn = (stock_id: string, name: string, extra: Partial<Product> = {}) => product({
+  stock_id, name, category: "Food Preparation Equipment", subcategory: "Gastronorm/steam pans", third_category: "European GN pans", ...extra,
+});
+
+test("a stale store name is found and ranked by its sales name (tester, 13 Oct: G11102)", async () => {
+  const half = gn("G11202", "201 S/S GN PAN 1/2 SIZE, 40mm DEEP, THICKNESS 0.6mm, STEELCRAFT by SAFICO");
+  const stale = gn("G11102", "STAINLESS STEEL GN PAN", { sales_name: "201 S/S GN PAN 1/1 SIZE, 40mm DEEP, THICKNESS 0.6mm, STEELCRAFT by SAFICO" });
+  const deeper = gn("G11103", "201 S/S GN PAN 1/1 SIZE, 65mm DEEP, THICKNESS 0.6mm, STEELCRAFT by SAFICO");
+  const deps = fakeDeps([half, stale, deeper]);
+  assert.equal(idsOf(await searchBody({ queries: ["gn pan 1/1 40mm"] }, deps))[0], "G11102");
+  // The database scores the 1/2 and the 1/1 40mm pans alike and may list the 1/2 first: "1/1" must still count as a word.
+  deps.searchDirect = async () => [half, stale, deeper];
+  for (const input of [{ queries: ["gn pan 1/1 40mm"] }, { queries: ["gn pan 1/1 40mm"], category: "European GN pans" }]) {
+    const ids = idsOf(await searchBody(input, deps));
+    assert.equal(ids[0], "G11102", JSON.stringify(input));
+    assert.ok(ids.indexOf("G11103") > ids.indexOf("G11202"), JSON.stringify(input));
+  }
+});
+
+test("a broad request lists the type's best-sellers first: its own leaves only, never an accessory 'for' it (r10)", async () => {
+  const adaptors = "Adaptor bars and holders for GN and steam pans";
+  const deps = fakeDeps([
+    ...[2, 3, 4].map((part) => gn(`T-MEL${part}`, `MELAMINE GN PAN 1/${part}`)),
+    gn("T-MEL40", "MELAMINE GN PAN 1/1 40mm"),
+    gn("T-GN65", "ACME GN PAN 1/1 65mm", { best_seller: true, popularity: 100 }),
+    gn("T-GN20", "ACME GN PAN 1/1 20mm", { best_seller: true, popularity: 90 }),
+    gn("T-AB1", "ACME 18-8 STAINLESS STEEL ADAPTOR BAR FOR GN PANS", { best_seller: true, popularity: 100, third_category: adaptors }),
+    gn("T-AB2", "GN PAN ADAPTOR BAR", { best_seller: true, popularity: 100, third_category: adaptors }),
+    product({ stock_id: "T-CK1", name: "ACME CHEF KNIFE 21cm", best_seller: true, popularity: 100, third_category: "Chef knives" }),
+  ]);
+  const ids = idsOf(await searchBody({ queries: ["gn pan"], category: "GN pans" }, deps));
+  assert.deepEqual(ids.slice(0, 2), ["T-GN65", "T-GN20"]);
+  assert.ok(!ids.includes("T-CK1"));
+  // A size is a specific request: its exact size leads, not the best-seller.
+  assert.equal(idsOf(await searchBody({ queries: ["gn pan 40mm"], category: "GN pans" }, deps))[0], "T-MEL40");
+});
+
+test("plural words match singular names (r10: 'wine glasses', 'chef knives', 'steak knives')", async () => {
+  const glass = (stock_id: string, name: string, extra: Partial<Product> = {}) => product({ stock_id, name, subcategory: "Stemware", third_category: "Wine glasses", ...extra });
+  const shortNames = [glass("T-WG2", "Brandx Riesling Wine Glass 300ml"), glass("T-WG3", "Brandx Bordeaux Wine Glass 600ml")];
+  const glasses = fakeDeps([...shortNames, glass("T-WG1", "ACME WHITE WINE GLASS Ø8xH20cm, 400ml", { best_seller: true, popularity: 100 })]);
+  // As the database: short names score first.
+  glasses.searchDirect = async () => shortNames;
+  assert.equal(idsOf(await searchBody({ queries: ["wine glasses"], category: "Wine glasses" }, glasses))[0], "T-WG1");
+  const plainKnives = [knife("T-CK2", "Chef Knife 20cm", 30), knife("T-CK3", "Chef Knife 25cm", 35)];
+  const chef = fakeDeps([...plainKnives, knife("T-CK1", "ACME CHEF KNIFE 21cm, BLACK HANDLE", 40, { best_seller: true, popularity: 100 })]);
+  chef.searchDirect = async () => plainKnives;
+  assert.equal(idsOf(await searchBody({ queries: ["chef knives"], category: "Chef knives" }, chef))[0], "T-CK1");
+  // "knife" is not inside "KNIVES": both sides read it as "knife".
+  const plate = product({ stock_id: "T-SP1", name: "STEAK PLATE 30cm" });
+  const set = product({ stock_id: "T-SK6", name: "STEAK KNIVES SET OF 6" });
+  const steak = fakeDeps([plate, set]);
+  steak.searchDirect = async () => [plate, set];
+  for (const query of ["steak knife", "steak knives"]) assert.equal(idsOf(await searchBody({ queries: [query] }, steak))[0], "T-SK6", query);
+});
+
+test("a size comes from the sales name only when the store name gives none (r10: the two names disagree on some rows)", async () => {
+  const lid = (stock_id: string, name: string, extra: Partial<Product> = {}) => product({ stock_id, name, third_category: "Bamboo steamers", ...extra });
+  const other = lid("T-LID6", "BAMBOO STEAMER LID Ø30xH6cm");
+  const deps = fakeDeps([other, lid("T-LID5", "BAMBOO STEAMER LID Ø20xH5cm", { sales_name: "BAMBOO STEAMER LID Ø20xH4cm" })]);
+  deps.searchDirect = async () => [other];
+  // Its card says 5cm, so it isn't put first as the customer's exact 4cm.
+  assert.notEqual(idsOf(await searchBody({ queries: ["steamer lid 4cm"], category: "Bamboo steamers" }, deps))[0], "T-LID5");
+});
