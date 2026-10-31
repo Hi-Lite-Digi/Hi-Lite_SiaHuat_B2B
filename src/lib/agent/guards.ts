@@ -725,7 +725,8 @@ const FEATURES: Array<[claim: RegExp, fact: RegExp]> = [
   // Not an ice product or a dish or drink ("ice kacang", "ice tea").
   [/\bice\b(?![- ]?(?:cream|buckets?|scoops?|tongs?|bins?|machines?|makers?|crushers?|shavers?|moulds?|molds?|cube\s+trays?|trays?|kach?ang|tea|balls?|picks?|cadd(?:y|ies)))/i, /\bice\b|frozen|crush/i],
   [/\bthin\b(?![- ]crust)|\bfine[- ]rim/i, /\bthin\b|fine[- ]rim/i],
-  [/\blid(?:s|ded)?\b/i, /\blid(?:s|ded)?\b|\bcover|\bcap\b/i],
+  // "6Qt Cap" is a capacity, not a cap (r11 final exam, 07: "with lid" said of it).
+  [/\blid(?:s|ded)?\b/i, /\blid(?:s|ded)?\b|\bcover|\b(?:screw|flip|bottle)[- ]?caps?\b/i],
   [/\bcompact\b/i, /compact/i],
   [/(?<!\bgas\s)\blighter\b(?!\s+(?:mixes|batters?|doughs?|on\s+the\s+(?:budget|wallet)))|\blightweight\b/i, /\blight|weigh/i],
   // "Both use fuel/water underneath" when one chafer's listing says so (r11 candidate4 exam, 03).
@@ -876,7 +877,7 @@ const NEEDS: Array<[asked: RegExp, topic: RegExp]> = [
   [/\bmicrowav(?:e|es|ed|ing|e?able)\b|微波/i, /microwav|微波/i],
   [/\boven[- ]?(?:safe|proof)\b|\b(?:in|into|for)\s+the\s+oven\b|烤箱/i, /\boven|烤箱/i],
   // "Chafing dishes to cover 100 pax" needs no lid.
-  [/\blids?\b|\bwith\s+(?:a\s+)?covers?\b|\bcovered\b|带盖|有盖|盖子/i, /\blid|\bcover|\bcap\b|盖/i],
+  [/\blids?\b|\bwith\s+(?:a\s+)?covers?\b|\bcovered\b|带盖|有盖|盖子/i, /\blid|\bcover|\b(?:screw|flip|bottle)[- ]?caps?\b|盖/i],
 ];
 // "Lids not needed", "洗碗机我们没有" rule a need out right after it; "...so we don't need to hand wash" and "放洗碗机没有问题吧" don't.
 const UNNEEDED_AFTER = /^\s*(?:[\w'’-]+\s+){0,2}?(?:not\s+(?:needed|necessary|required|a\s+must)|optional|unnecessary)\b|^[^\x00-\x7f，。]{0,3}?(?:没有(?!问题)|不用|不需要|不要|不必)/i;

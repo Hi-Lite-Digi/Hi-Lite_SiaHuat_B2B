@@ -1846,6 +1846,10 @@ test("a must-have the customer named that a card's listing doesn't back is said 
   assert.ok(!kitIssues("The Acme Dishmachine Detergent 5L handles heavy soil.", "DT-1", "need detergent for our dishwasher").some((issue) => issue.startsWith(NEED_ISSUE_PREFIX)));
   assert.ok(kitIssues("The Acme Stock Pot 30cm suits soup.", "SP-1", "stock pot with lid for soup").some((issue) => issue.startsWith(NEED_ISSUE_PREFIX)));
   assert.ok(kitIssues("The Acme Stock Pot 30cm comes with a lid.", "SP-1", "stock pot").some((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)));
+  // r11 final exam, 07: "6Qt Cap" is a capacity, so it backs no "with lid".
+  const tub = product({ stock_id: "TB-1", name: "Acme PP Square Food Container, 6Qt Cap, Translucent" });
+  const tubs = new Map<string, CheckedProduct>([[tub.stock_id, { product: tub, verified: true }]]);
+  assert.ok(reviewAnswer({ message: "The Acme PP Square Food Container comes with lid.", card_ids: ["TB-1"], chips: [], show_contact: false }, tubs, allowed).style.some((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)));
   assert.equal(issueCode(`${NEED_ISSUE_PREFIX} "lids", and ...`), "NEED");
 });
 
