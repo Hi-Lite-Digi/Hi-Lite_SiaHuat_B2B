@@ -314,7 +314,7 @@ test("Claire is given every range the catalogue lists and never denies a whole o
   for (const [range] of catalogueRanges) assert.ok(CLAIRE_AGENT_PROMPT.includes(`\n- ${range}: `), range);
   assert.ok(CLAIRE_AGENT_PROMPT.includes(`\n\nSIA HUAT'S CATALOGUE RANGES (range: section (types); ...)\n${renderRanges(catalogueRanges)}\n\nHOW YOU WORK\n`), "range list");
   const lines = CLAIRE_AGENT_PROMPT.split("\n");
-  assert.ok(lines[0].endsWith("Sia Huat supplies kitchen, tableware, bar, buffet and F&B equipment, and the other ranges listed below, to restaurants, cafes, hotels and home cooks in Singapore."), lines[0]);
+  assert.ok(lines[0].endsWith("Sia Huat supplies kitchen, tableware, bar, buffet and F&B equipment, and the other ranges listed below, to restaurants, cafes, hotels and home cooks in Singapore. Most customers are businesses: treat them as one unless they say it's for home."), lines[0]);
   const rule = lines[lines.findIndex((line) => line.startsWith("- Broad request (")) + 1];
   assert.ok(rule.startsWith("- A request for a whole range or section in SIA HUAT'S CATALOGUE RANGES, or in other words for one ('furniture', 'uniforms', 'housekeeping stuff'): "), rule);
   assert.ok(rule.includes("never say we don't carry it, even when a search with the customer's words misses it"), rule);
@@ -332,12 +332,44 @@ test("a broad request gets 2-3 best-sellers and one salesperson's question in th
     "In this same reply call search_catalogue with their words and the type's name from SIA HUAT'S CATALOGUE RANGES as category (when their word fits several types, as a blender is a bar, kitchen or hand blender, its plural instead, 'blenders', so all of them are searched), and show 2-3 products of that type as cards",
     "best-sellers first (sales_rank 'best-seller', then 'popular')",
     "a lower-priced one among them when the results have one",
-    "the one short question a salesperson would ask next, about one thing: for a restaurant, a home or a gift; the size; or the budget",
+    "the one short question a salesperson would ask next, about one thing: when a result has a buying_guide for that type, its first ask that the customer hasn't answered and you haven't asked in this chat, on its own (never joined to its next ask with 'and'), with that ask's chips only",
     // With no type there is no category to search: 2-3 cards would be guesses (r10 skeptic A11c).
     "A request that names no product type ('stuff for my new cafe') still gets the one question first.",
   ]) assert.ok(broad.includes(words), words);
   assert.ok(broad.endsWith(" A request for the best of a type, or for its most expensive or cheapest, follows the rule on the best below."), broad);
   assert.doesNotMatch(broad, /before listing/);
+});
+
+test("round 11: Claire sells like Sia Huat's salespeople: the guide's question, one pick with a reason, memory, one add-on (client 30 Oct)", () => {
+  // Client, 30 Oct: "the existing sales people can ask the right questions and direct them to some suggestions immediately".
+  const lines = CLAIRE_AGENT_PROMPT.split("\n");
+  const broad = lines.find((line) => line.startsWith("- Broad request (")) ?? "";
+  assert.ok(broad.includes("otherwise the one thing that most splits the products you showed (what it's for, the size or the budget), and home or business only when the products differ for it (up to 3 chips). If their words already answer it, ask nothing and recommend as in the rule on their answer below."), broad);
+  // r11 draft exam: "GN pan 1/1 40mm" got the GN guide's hot-or-cold question; the candidate exam asked "solid or perforated?" instead.
+  assert.ok(broad.includes("Specific request (it names the size, model or code): show up to 3 suitable products as cards, the one that matches their words first, with a one-line reason each drawn from the tool facts; ask no question, and end with 'Want the <short name>?'."), broad);
+  for (const rule of [
+    // r11 draft exam: a Cambro lid was recommended for soup containers; "48 tough wine glasses ... dishwasher" got two options.
+    "- Their answer to your question (a chip or their own words), or a first message that already gives what the question would ask: recommend one in-stock product (the item itself, not a lid, part or accessory for it) whose facts fit what they said, with a one-line reason that ties their answer to its facts, and at most one other (cheaper, or sturdier or bigger) with its reason;",
+    "- What the customer has told you in this chat about their business, cuisine, volume, size, dishwasher, power (gas, electric, 3-phase) or budget holds for the whole chat: use it to choose, and never ask it again.",
+    "- buying_guide is Sia Huat's sales know-how for a type: ask is what to ask (with its chips), fit what to look for, watch what to check before recommending. It is never a fact about a product: say a product has a feature only when its own facts say so.",
+  ]) assert.ok(lines.some((line) => line.startsWith(rule)), rule);
+  // r11 draft exam fact check: "also fine for dishwashers", "good for drinks and ice", "runs on fuel" came from guides, not the facts.
+  const guideRule = lines.find((line) => line.startsWith("- buying_guide is")) ?? "";
+  // r11 candidate exam: "explicitly dishwasher safe in its data".
+  assert.ok(guideRule.endsWith(" A reason you give for a product comes from its own name, description or details: a guide line ('tempered glass for busy service') tells you which product to pick, never what to say about one whose facts don't say it ('fine for dishwashers', 'good for ice', 'runs on fuel'). To the customer, a product's facts are its listing, never its 'data'."), guideRule);
+  // r11 candidate exam: "a new cocktail bar" was asked "busy bar, cafe or restaurant, or home?"; the plates and rice-cooker questions
+  // were asked twice; "home or commercial, and mostly dough or cakes?" joined a guide's two asks; a Chinese chat got English chips.
+  assert.ok(lines.some((line) => line.includes("and never one you have asked before or one their earlier messages answer ('for my new cocktail bar' says bar, not cafe or home).")));
+  // r11 candidate2 exam: "48 tough wine glasses ... dishwasher" got "For a cafe, two options: ... or ...".
+  assert.ok(lines.some((line) => line.includes("end with 'Want the <short name>?' about your pick: never hand the choice back ('two options: ... or ...').")));
+  // Only narrowing questions: "How many?" still comes back when a customer skips it.
+  assert.ok(lines.some((line) => line.endsWith("use it to choose, and never ask it again. Never repeat a narrowing question (what it's for, the size, power or budget) you asked earlier about this item, even one they skipped: recommend from what you know and end with 'Want the <short name>?'.")));
+  // r11 candidate2 exam: "Want the Safico Pro?" and "How many Safico Pro rice cookers do you need?" answered 大概50人 and 好.
+  assert.ok(lines.includes("- Reply in the customer's language (English or Chinese), chips included: in a Chinese chat, translate a buying_guide's chips and the phrases this prompt quotes in English ('Want the <short name>?', 'How many?'), with no number characters in chips (一, 两, 三)."));
+  const closers = lines.find((line) => line.startsWith("- Don't restate the enquiry")) ?? "";
+  // r11 draft exam: "Need a cutting board or sharpening stone to go with them?" with one chip for the first.
+  assert.ok(closers.includes("Right after update_enquiry adds an item and its result has goes_with, end instead with one short offer naming a single goes_with type the enquiry doesn't have yet ('Need glass racks to go with them?'), chips ['Show glass racks', 'No thanks']"), closers);
+  assert.ok(closers.includes("make each offer once a chat and none after the customer has turned one down, and show those products only when they ask."), closers);
 });
 
 test("the best of a type is the best fit, preferring a best-seller; only the most expensive or cheapest in those words sorts by price (client 13 Oct, owner 30 Oct)", () => {
