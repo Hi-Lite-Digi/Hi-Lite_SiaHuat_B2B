@@ -196,15 +196,24 @@ test("a set shown twice with the card added for the words that name it loses its
 });
 
 test("a reply that steers from the named product to the card it shows keeps its own cards (r8 review)", async () => {
-  for (const message of [
-    "Royal Bone China Verona深盘只剩1个，不够12个，推荐这款（库存74个）。",
-    "The Royal Bone China Verona Deep Plate has only 1 left, so I'd go with this one instead (74 in stock).",
+  // Each reply in its customer's language: an English reply to Chinese is repaired (round 11).
+  for (const [text, message] of [
+    ["我要12个直径约24厘米的骨瓷盘", "Royal Bone China Verona深盘只剩1个，不够12个，推荐这款（库存74个）。"],
+    ["I need 12 bone china plates about 24cm across", "The Royal Bone China Verona Deep Plate has only 1 left, so I'd go with this one instead (74 in stock)."],
   ]) {
     const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: ["N0536"] }), answer({ message, card_ids: ["N0536"] })]);
-    const reply = await runAgentTurn({ request: platesAsked({ event: { type: "text", text: "我要12个直径约24厘米的骨瓷盘" } }), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+    const reply = await runAgentTurn({ request: platesAsked({ event: { type: "text", text } }), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
     assert.deepEqual(reply.cards.map((card) => card.stock_id), ["N0536"], message);
     assert.equal(bodies.length, 2, message);
   }
+});
+
+test("an English closer a repair keeps in a Chinese chat is sent in Chinese (r11 final exam, 11 T2)", async () => {
+  const message = "推荐这款，库存充足。Want the Verona?";
+  const { client, bodies } = fakeClient([plateSearch(), answer({ message, card_ids: ["N0536"] }), answer({ message, card_ids: ["N0536"] })]);
+  const reply = await runAgentTurn({ request: platesAsked({ event: { type: "text", text: "我要12个骨瓷盘" } }), deps: fakeDeps(plates), client, model: "claude-sonnet-5" });
+  assert.equal(bodies.length, 3);
+  assert.equal(reply.message, "推荐这款，库存充足。要这款Verona吗？");
 });
 
 test("a card whose link the customer says doesn't open is never added for the words that name it (r8 F6)", async () => {
@@ -279,6 +288,26 @@ test("a style-only problem with little time left is tidied and sent without a re
   assert.equal(bodies.length, 1);
   assert.equal(reply.provider, "anthropic");
   assert.equal(reply.message, "Got it. Which size do you need?");
+});
+
+test("a question dropped for a claim its product's facts don't back takes its chips with it (r11 review)", async () => {
+  const { client } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen torch. Our best-selling torch is the 970S, want it?", card_ids: ["970S"], chips: ["Kitchen torch", "Gas burner"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5", deadlineMs: 9_000, fallbackReserveMs: 5_000 });
+  assert.equal(reply.message, "This one is a handheld kitchen torch.");
+  assert.deepEqual(reply.chips, []);
+});
+
+test("chips with no question in the message answer nothing and are dropped (r11 candidate4 exam, 06)", async () => {
+  const { client } = fakeClient([
+    toolCall("t1", "search_catalogue", { queries: ["blow torch"] }),
+    answer({ message: "This one is a handheld kitchen torch.", card_ids: ["970S"], chips: ["Hot food", "Buffet display"] }),
+  ]);
+  const reply = await runAgentTurn({ request: request({}), deps: deps(), client, model: "claude-sonnet-5" });
+  assert.equal(reply.message, "This one is a handheld kitchen torch.");
+  assert.deepEqual(reply.chips, []);
 });
 
 test("a problem code can fix, with little time left, is fixed in code and sent without a repair call", async () => {
@@ -1227,9 +1256,9 @@ test("a reply about what is already on the enquiry is sent without a nudge", asy
 });
 
 test("a doubly escaped character reaches the customer as the character (r4 c11-A idx 1)", async () => {
-  const { client } = fakeClient([answer({ message: "Got it, not conveyor \\u2014 both are pop-up toasters.", chips: ["Pop-up \\u2014 smaller"] })]);
+  const { client } = fakeClient([answer({ message: "Got it, not conveyor \\u2014 both are pop-up toasters. Which size?", chips: ["Pop-up \\u2014 smaller"] })]);
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "not conveyor" } }), deps: deps(), client, model: "claude-sonnet-5" });
-  assert.equal(reply.message, "Got it, not conveyor — both are pop-up toasters.");
+  assert.equal(reply.message, "Got it, not conveyor — both are pop-up toasters. Which size?");
   assert.deepEqual(reply.chips, ["Pop-up — smaller"]);
   const emoji = fakeClient([answer({ message: "Happy cooking \\ud83d\\ude0a" })]);
   const smiled = await runAgentTurn({ request: request({ event: { type: "text", text: "ok la" } }), deps: deps(), client: emoji.client, model: "claude-sonnet-5" });
@@ -1237,9 +1266,9 @@ test("a doubly escaped character reaches the customer as the character (r4 c11-A
 });
 
 test("a doubly escaped quote reaches the customer as an inch mark or a quote, not a backslash (live, 1 Oct: 'Ø5\\\" up to Ø21\\\"')", async () => {
-  const { client } = fakeClient([answer({ message: "We carry sizes from Ø5\\\" up to Ø21\\\" - the \\\"Hokkien Deluxe\\\" range.", chips: ["The \\\"Deluxe\\\" range"] })]);
+  const { client } = fakeClient([answer({ message: "We carry sizes from Ø5\\\" up to Ø21\\\" - the \\\"Hokkien Deluxe\\\" range. Which size?", chips: ["The \\\"Deluxe\\\" range"] })]);
   const reply = await runAgentTurn({ request: request({ event: { type: "text", text: "bamboo steamer" } }), deps: deps(), client, model: "claude-sonnet-5" });
-  assert.equal(reply.message, "We carry sizes from Ø5″ up to Ø21″ - the 'Hokkien Deluxe' range.");
+  assert.equal(reply.message, "We carry sizes from Ø5″ up to Ø21″ - the 'Hokkien Deluxe' range. Which size?");
   assert.deepEqual(reply.chips, ["The 'Deluxe' range"]);
 });
 

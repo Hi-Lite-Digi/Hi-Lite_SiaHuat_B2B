@@ -6,6 +6,7 @@ import type { PriceSort } from "@/lib/catalogue";
 import type { ImageAttachment, Product } from "@/lib/chat-contract";
 import type { EnquiryReceiptLine } from "@/lib/conversation-export";
 import { QTY_NOTICE, applyEnquiryAction, enquiryTotals, quantityStated, soldByDozen, totalsWithGst, typedQuantities, unitStated, withGstCents } from "./enquiry";
+import { guideOf, guidesFor, type BuyingGuide } from "./buying-guides";
 import { houseCode, liveCheck, productFact, retryOnce, storeDetails, storeProductUrl, withTimeout, type CategoryResult, type CheckedProduct, type FactDeps } from "./facts";
 import { codePattern, same } from "./picks";
 import { decidePick, type PickCheckCache, type PickProposal } from "./verify";
@@ -70,12 +71,14 @@ export type TurnContext = {
   roundSearches?: number;
   /** Item codes (exact) whose store listing came back gone this turn: never a card, link or fact (r8 R01). */
   gone: Set<string>;
+  /** The buying guides sent to Claude this turn: each once, at most three (round 11). */
+  guidesSent?: Set<BuyingGuide>;
 };
 
 export const agentTools: Anthropic.Tool[] = [
   {
     name: "search_catalogue",
-    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others. With sort and a category, the catalogue puts the whole category in price order and the top of that order comes back, highest (price_high) or lowest (price_low) price first, each still checked live; whole_category_sorted true means that order covered every product in the category (a price_high sort with max_price is not), so the first product of the type asked for is the most expensive (or cheapest) we list. Each product's sales_rank ('best-seller', 'popular' or null) comes from Sia Huat's own sales; with a category, the type's best-sellers that name the words come first.",
+    description: "Search Sia Huat's catalogue. Pass 1-3 short queries in the customer's own words (e.g. 'blow torch', 'kitchen torch'); never rename their item into a category label. Returns up to 10 products; each one's price and stock are checked live on the store (price_and_stock_verified_live). total_found counts the matches; more_available true means there are more matches than the list shows. complete true means every product in the category is listed; only then may you say that is all. With a category, brands lists brands among the rows this search read (there may be others): don't say we only carry some brands when brands lists others. With sort and a category, the catalogue puts the whole category in price order and the top of that order comes back, highest (price_high) or lowest (price_low) price first, each still checked live; whole_category_sorted true means that order covered every product in the category (a price_high sort with max_price is not), so the first product of the type asked for is the most expensive (or cheapest) we list. Each product's sales_rank ('best-seller', 'popular' or null) comes from Sia Huat's own sales; with a category, the type's best-sellers that name the words come first. buying_guide, when present, is Sia Huat's sales know-how for a type in the results: ask (with chips) is what to ask, fit what to look for, watch what to check, goes_with what usually goes with it. It is never a fact about a product.",
     input_schema: {
       type: "object",
       properties: {
@@ -91,7 +94,7 @@ export const agentTools: Anthropic.Tool[] = [
   },
   {
     name: "get_product",
-    description: "Look up one product by its item code, or by a store.siahuat.com/product/<id> link the customer pasted. Price and stock are checked live. A search result already carries the same live-checked facts: don't call get_product for an item a search returned in this turn with price_and_stock_verified_live true.",
+    description: "Look up one product by its item code, or by a store.siahuat.com/product/<id> link the customer pasted. Price and stock are checked live. A search result already carries the same live-checked facts: don't call get_product for an item a search returned in this turn with price_and_stock_verified_live true. May carry buying_guide (see search_catalogue).",
     input_schema: {
       type: "object",
       properties: {
@@ -102,7 +105,7 @@ export const agentTools: Anthropic.Tool[] = [
   },
   {
     name: "find_alternatives",
-    description: "Find up to 3 in-stock products (live-checked, at least min_qty) closest to an item: same kind first, then the nearest price; other sizes of the same series included. They are similar, not the same: check the feature the customer needs in each one's facts.",
+    description: "Find up to 3 in-stock products (live-checked, at least min_qty) closest to an item: same kind first, then the nearest price; other sizes of the same series included. They are similar, not the same: check the feature the customer needs in each one's facts. May carry buying_guide (see search_catalogue).",
     input_schema: {
       type: "object",
       properties: {
@@ -119,7 +122,7 @@ export const agentTools: Anthropic.Tool[] = [
   },
   {
     name: "update_enquiry",
-    description: "Add, set, remove or clear lines on the customer's enquiry. 'add' increases an existing line; 'set' replaces its quantity. quantity must be a number the customer typed for this item. unit 'carton' or 'packet' converts using the product's own pack size. stock_id must be a product the customer picked. A separate check reads the chat to confirm the pick (or that they asked to remove the line) and the number they typed for this item. For a swap, send the add of the new item and the remove of the old one in the same response.",
+    description: "Add, set, remove or clear lines on the customer's enquiry. 'add' increases an existing line; 'set' replaces its quantity. quantity must be a number the customer typed for this item. unit 'carton' or 'packet' converts using the product's own pack size. stock_id must be a product the customer picked. A separate check reads the chat to confirm the pick (or that they asked to remove the line) and the number they typed for this item. For a swap, send the add of the new item and the remove of the old one in the same response. After an add, goes_with lists product types that usually go with that item.",
     input_schema: {
       type: "object",
       properties: {
@@ -420,8 +423,10 @@ async function searchCatalogueTool(asked: z.infer<typeof searchInput>, ctx: Turn
   const wholeSorted = sorted && !input.exclude_ids?.length && !input.exclude_brands?.length && !(sort === "price_high" && input.max_price);
   ctx.searches.push({ queries: input.queries, category: category ?? null, categoryFound: scope.exists, maxPrice: input.max_price ?? null, complete, ...(wholeSorted ? { priceOrder: sort! } : {}) });
   const affordable = checked.filter((item) => !item.gone && (!input.max_price || item.product.list_price <= input.max_price));
+  const guides = listRound ? [] : guidesFor(affordable.map((item) => item.product), ctx.guidesSent ??= new Set());
   return ok({
     products: affordable.map((item) => remember(ctx, withDetails(item, details))),
+    ...(guides.length ? { buying_guide: guides } : {}),
     total_found: totalFound,
     // With no products returned it would contradict the no-match note.
     more_available: moreAvailable && (affordable.length > 0 || removed),
@@ -448,7 +453,8 @@ async function getProductTool(input: z.infer<typeof productInput>, ctx: TurnCont
     ctx.gone.add(found.stock_id);
     return fail("LISTING_GONE", { stock_id: found.stock_id, note: LISTING_GONE_NOTE });
   }
-  return ok({ product: remember(ctx, withDetails(checked, details)) });
+  const guides = guidesFor([checked.product], ctx.guidesSent ??= new Set());
+  return ok({ product: remember(ctx, withDetails(checked, details)), ...(guides.length ? { buying_guide: guides } : {}) });
 }
 
 // Name words that say nothing about what a product is: materials, colours, warranty and spec text many products share, and
@@ -538,7 +544,8 @@ async function alternativesTool(input: z.infer<typeof alternativesInput>, ctx: T
   if (!available.length) {
     return ok({ ...sourceFact, products: [], note: unchecked ? ALTERNATIVES_UNCHECKED : NO_CLOSE_ALTERNATIVE });
   }
-  return ok({ ...sourceFact, products: available.map((item) => remember(ctx, withDetails(item, details))) });
+  const guides = guidesFor(available.map((item) => item.product), ctx.guidesSent ??= new Set());
+  return ok({ ...sourceFact, products: available.map((item) => remember(ctx, withDetails(item, details))), ...(guides.length ? { buying_guide: guides } : {}) });
 }
 
 const NO_PHOTO_MATCH = { kind: "none", products: [], note: "No catalogue photo match. Describe what you see and search by product type." };
@@ -774,7 +781,8 @@ async function changeEnquiry(input: EnquiryInput, ctx: TurnContext) {
   ctx.lines = result.lines;
   ctx.changes.push({ action: input.action, code: result.product?.product.stock_id ?? input.stock_id ?? null });
   if (input.action === "clear") ctx.uncheckedCodes = [];
-  return ok({ ...enquiryState(ctx), notice: result.notice || undefined });
+  const goesWith = input.action === "add" && result.product ? guideOf(result.product.product)?.goes_with : undefined;
+  return ok({ ...enquiryState(ctx), notice: result.notice || undefined, ...(goesWith?.length ? { goes_with: goesWith } : {}) });
 }
 
 export async function runTool(name: string, rawInput: unknown, ctx: TurnContext): Promise<ToolOutcome> {

@@ -7,7 +7,7 @@ import { replyStyleIssues } from "@/lib/reply-style";
 import { SALES_CONTACT } from "./contact";
 import { MAX_CARDS, type ShownCard } from "./contract";
 import { listItemCount, withGstCents } from "./enquiry";
-import type { CheckedProduct } from "./facts";
+import { salesRank, type CheckedProduct } from "./facts";
 import { codePattern, hits, measures, pointedCards, same } from "./picks";
 import type { EnquiryChange, SearchRecord } from "./tools";
 
@@ -69,12 +69,17 @@ export function removeAmounts(message: string, amounts: string[]) {
 /** Sentences of a reply. Splits after . ! ? only before a capital, digit, quote, bracket, bullet or $ (so "$5.69" stays whole), after 。！？, and at line breaks. */
 export const sentences = (message: string) => message.split(/(?<=[.!?])\s+(?=[A-Z0-9"'(\-•*$])|(?<=[。！？])|\n+/).map((s) => s.trim()).filter(Boolean);
 
-/** The message without the sentences `drop` picks; other text and line breaks are kept. */
-function removeSentences(message: string, drop: (sentence: string) => boolean) {
+/** The message with each sentence rewritten ("" drops it); other text and line breaks are kept. */
+function rewriteSentences(message: string, rewrite: (sentence: string) => string) {
   let out = message;
-  for (const sentence of sentences(message)) if (drop(sentence)) out = out.replace(sentence, "");
+  for (const sentence of sentences(message)) {
+    const next = rewrite(sentence);
+    if (next !== sentence) out = out.replace(sentence, () => next);
+  }
   return out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
+/** The message without the sentences `drop` picks; other text and line breaks are kept. */
+const removeSentences = (message: string, drop: (sentence: string) => boolean) => rewriteSentences(message, (sentence) => (drop(sentence) ? "" : sentence));
 
 // A reply cut off where Claude typed a raw " : with structured output that quote ends the message string (exam 2: 5 replies).
 const properEnding = /(?:[.!?。！？…:)\]}"'”’»″′～~）」』]|\p{Script=Han}|\p{Extended_Pictographic}[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}\p{Extended_Pictographic}]*|https?:\/\/\S+|store\.siahuat\.com\S*|(?:\$|S\$|SG\$|SGD\s?)\d[\d,]*(?:\.\d{1,2})?)\s*$/u;
@@ -109,7 +114,11 @@ export const RESERVATION_ISSUE = "An enquiry doesn't reserve or hold stock and i
  * the store links already in the chat (card notes included), the links of Claire's previous reply, and the text of all her replies
  * in the history, oldest first (previousMessage is the last).
  */
-export type EarlierTurns = { cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[]; replies?: string[] };
+export type EarlierTurns = {
+  cardSets: string[][]; previousMessage: string | null; currentText: string; links?: string[]; previousLinks?: string[]; replies?: string[];
+  /** What the customer typed or tapped as text this turn (a must-have from an older message may be about another item). */
+  customerTexts?: string[];
+};
 const NO_EARLIER_TURNS: EarlierTurns = { cardSets: [], previousMessage: null, currentText: "" };
 // Keyed only on the customer's words ("where the product?? show me then i tap la", "u nvr show anything"), never on Claire's own
 // "tap it". Show words or card nouns make again/same/those/back an ask to see cards again; on their own they are complaints,
@@ -135,6 +144,36 @@ const plainText = (text: string) => text.toLowerCase().replace(/[\s\p{P}\p{S}]+/
 // The repair runs with tools off, so it can't show different options.
 const REPEATED_CARDS_ISSUE = "You've already shown this same set of cards twice. Don't attach the whole set again (you can name them, and attach only the one you recommend). Answer what the customer just said, recommend one if they are choosing, and don't ask again a question you already asked.";
 const REPEATED_MESSAGE_ISSUE = "Don't repeat your previous message word for word; move the conversation forward.";
+// Round 11's exams, past the prompt's own rules: "Mains, sides, or sharing platters?" asked again after "just browsing", English
+// chips and "Want the Safico Pro?" answering 我要买电饭锅, and "...or a buffet line, and do you need full size, smaller, or round?".
+export const REPEATED_QUESTION_ISSUE = "You asked this question earlier in this chat. Don't ask it again: recommend from what you know and end with 'Want the <short name>?' in the customer's language, with no chips.";
+export const LANGUAGE_ISSUE = "The customer writes Chinese: write your whole message and every chip in Chinese; product names and codes can stay as they are.";
+export const SUGGEST_FIRST_ISSUE = "Suggest before you ask: attach 2-3 of the products you found as cards (best-sellers and in stock first), each with a one-line reason, then ask your question.";
+export const HAND_BACK_ISSUE = "Don't hand the choice back with a button per product: recommend your pick and end with 'Want the <short name>?', with no chips.";
+/** Claire's own English closers in a Chinese chat, in Chinese: a repair kept "Want the Safico Pro 19L?" (r11 final exam, 11 T2). */
+export const chineseClosers = (message: string) => message
+  .replace(/\bWant the ([^?？\n]{1,60}?)\s*[?？]/g, "要这款$1吗？")
+  .replace(/\bHow many\b[^?？\n]{0,60}?(?:do you need|would you like)\s*[?？]/gi, "需要几个？");
+export const JOINED_QUESTION_ISSUE = "Ask one question only: keep the first choice and drop the part after ', and', with that question's chips only.";
+/**
+ * Two of the chips answer a question one of Claire's replies since the last enquiry change asked: each chip's words stand in that
+ * question. The next item's size question is no repeat of the last item's (r11 review).
+ */
+function askedBefore(chips: readonly string[], replies: readonly string[]) {
+  // Chinese has no spaces: a Chinese chip word ("电", "煤气") counts whole, anywhere in the question (r11 final exam, 11 T2).
+  const han = (word: string) => /\p{Script=Han}/u.test(word);
+  const words = (chip: string) => plainText(chip).split(" ").filter((word) => word.length >= 3 || han(word));
+  const since = replies.slice(replies.map((reply) => changeClaim.test(reply)).lastIndexOf(true) + 1);
+  return since.flatMap((reply) => sentences(reply).filter((sentence) => /[?？]$/.test(sentence))).some((question) => {
+    const asked = ` ${plainText(question)} `;
+    return chips.filter((chip) => words(chip).length > 0 && words(chip).every((word) => asked.includes(han(word) ? word : ` ${word}`))).length >= 2;
+  });
+}
+// "好", "大概50人" and "我要买电饭锅" are Chinese; "我要 GN pan 1/1" mixes in English.
+const writesChinese = (text: string) => { const han = text.match(/\p{Script=Han}/gu)?.length ?? 0; return han > 0 && han >= 2 * (text.match(/[a-z]{2,}/gi)?.length ?? 0); };
+/** English words in a text with no Chinese, leaving out the products' own name words. */
+const englishWords = (text: string, names: ReadonlySet<string>) => (/\p{Script=Han}/u.test(text) ? [] : text.match(/[a-z]{2,}/gi) ?? []).filter((word) => !names.has(word.toLowerCase()));
+const joinedQuestion = (sentence: string) => /[?？]$/.test(sentence) && /,\s+and\s+/i.test(sentence) && (sentence.match(/\bor\b/gi)?.length ?? 0) >= 2;
 // A closing offer to do something, or a push for a pick or a quantity (exam 2, c05-A: "Want me to add 4 of each?" two replies running).
 const offerPattern = /\b(?:want (?:me to|to (?:add|go|take|order))|shall (?:i|we)|should i|would you like (?:me to|to (?:add|go|order))|how many\b|go ahead|add (?:it|them|this|these|one|either|any|\d+)\b)/i;
 const genericAsk = /\b(?:anything|something) else\b|^what else\b/i;
@@ -665,9 +704,222 @@ const RANKING = new RegExp([
 const CHEAPEST = /\b(?:the\s+)?(?:cheapest|most\s+(?:budget|affordable|economical)|lowest[- ]priced|least\s+expensive)\b/i;
 const PRICIEST = /\b(?:the\s+)?(?:most\s+expensive|priciest|highest[- ]priced|top\s+of\s+(?:the|our)\s+range)\b/i;
 const NEXT_IN_PRICE = /\bnext\s+up\s+in\s+price\b/i;
-// "Our best-seller" comes from the client's sales (sales_rank), never a guess (r10). "Popular" alone is a softer word and isn't checked,
-// nor is a bare 畅销 or 热销 ("sells well"): only the Chinese superlatives are (r10 skeptic A10).
-const BEST_SELLER_CLAIM = /\bbest[- ]?sell(?:er|ers|ing)\b|\btop[- ]sell(?:er|ers|ing)\b|\bmost[- ]popular\b|\b(?:sells|sold)\s+the\s+most\b|最畅销|最热销|最受欢迎|销量最|卖得最好/i;
+// "Our best-seller" comes from the client's sales (sales_rank), never a guess (r10). So does "popular" or a bare 畅销, 热销, 热卖,
+// 受欢迎 or 卖得好 ("sells well"), which r10 left unchecked: round 11's exam found "popular size" on products with no sales_rank. A
+// superlative is only a best-seller claim.
+const BEST_SELLER_CLAIM =/\bbest[- ]?sell(?:er|ers|ing)\b|\btop[- ]sell(?:er|ers|ing)\b|\bmost[- ]popular\b|\b(?:sells|sold)\s+the\s+most\b|最畅销|最热销|最受欢迎|销量最|卖得最好/i;
+const POPULAR_CLAIM = /(?<!\bmost[- ])\bpopular\b|(?<!最)(?:畅销|热销|热卖|受欢迎|热门|人气|爆款)|卖得(?:很|非常|特别|挺)?好/i;
+/** What a reply may say a product has: its own name, description, size and spec details, labels too ("Microwaveable": "Y"). */
+const factText = ({ product, details }: CheckedProduct) => [product.name, product.description, product.size, product.dimensions, ...Object.entries(details ?? {}).flat()].join(" ");
+// Features a buying guide picks by (round 11), each with the words its facts must have. The candidate exam's fact check found "thin
+// crystal", "good for drinks and ice" and "both suit daily dishwasher cycles" on products whose facts say none of it, and "with
+// lids", "lighter", "more compact" and "water bath" said of products when only another one's facts did.
+const FEATURES: Array<[claim: RegExp, fact: RegExp]> = [
+  [/\bdish\s?washers?\b|洗碗机/i, /dish\s?washer|洗碗机/i],
+  [/\bmicrowav(?:e|e?able)\b|微波/i, /microwav|微波/i],
+  [/\boven[- ]?(?:safe|proof)\b/i, /\boven/i],
+  [/\b(?:tempered|toughened)\b(?!\s+chocolate)|钢化/i, /tempered|toughened|钢化/i],
+  [/\bcrystal\b(?![- ]clear)|水晶/i, /crystal|krysta|水晶/i],
+  [/\blead[- ]free\b|无铅/i, /lead[- ]free|无铅/i],
+  [/\b(?:shatter|break(?:age)?|chip|shock)[- ]?(?:proof|resistan(?:t|ce))\b|\bunbreakable\b/i, /shatter|break|unbreakable|chip|shock/i],
+  // Not an ice product or a dish or drink ("ice kacang", "ice tea").
+  [/\bice\b(?![- ]?(?:cream|buckets?|scoops?|tongs?|bins?|machines?|makers?|crushers?|shavers?|moulds?|molds?|cube\s+trays?|trays?|kach?ang|tea|balls?|picks?|cadd(?:y|ies)))/i, /\bice\b|frozen|crush/i],
+  [/\bthin\b(?![- ]crust)|\bfine[- ]rim/i, /\bthin\b|fine[- ]rim/i],
+  // "6Qt Cap" is a capacity, not a cap (r11 final exam, 07: "with lid" said of it).
+  [/\blid(?:s|ded)?\b/i, /\blid(?:s|ded)?\b|\bcover|\b(?:screw|flip|bottle)[- ]?caps?\b/i],
+  [/\bcompact\b/i, /compact/i],
+  [/(?<!\bgas\s)\blighter\b(?!\s+(?:mixes|batters?|doughs?|on\s+the\s+(?:budget|wallet)))|\blightweight\b/i, /\blight|weigh/i],
+  // "Both use fuel/water underneath" when one chafer's listing says so (r11 candidate4 exam, 03).
+  [/\bwater[- ]?(?:bath|pan)\b|\b(?:fuel|water)(?:\s*\/\s*(?:fuel|water))?\s+(?:underneath|beneath|below)\b/i, /water|fuel|burner/i],
+];
+// Sales say how well a product sells among its type, never who buys it or what for ("popular for Chinese-style service", r11
+// candidate4 exam, 09).
+const BUYERS_CLAIM = /\b(?:popular|best[- ]?sell(?:er|ers|ing))\s+(?:with|among|for)\s+(?!(?:us|(?:our\s+)?(?:customers|buyers|clients|people|everyone))\b)\w/i;
+/** The text says it, not "without lid", "lid not included", "not dishwasher safe" or "non-microwaveable" (r11 review). */
+const mentions = (pattern: RegExp, text: string) => [...text.matchAll(new RegExp(pattern.source, "gi"))].some((hit) =>
+  !/\b(?:without|not|no|excl\w*)\s+(?:[\w-]+\s+)?$|\bnon-?$/i.test(text.slice(0, hit.index))
+  && !/^[\w\s-]{0,30}?\b(?:not\s+included|sold\s+separately|excluded)\b/i.test(text.slice(hit.index + hit[0].length)));
+type ProductClaim = { claim: RegExp; backs: (item: CheckedProduct) => boolean; fix: string; feature?: true };
+const PRODUCT_CLAIMS: ProductClaim[] = [
+  { claim: BEST_SELLER_CLAIM, backs: ({ product }) => salesRank(product) === "best-seller", fix: "Call a product one of our best-sellers only when its sales_rank is 'best-seller'; otherwise leave the word out." },
+  { claim: POPULAR_CLAIM, backs: ({ product }) => salesRank(product) !== null, fix: "Call a product popular only when it has a sales_rank; otherwise leave the word out and say what it suits." },
+  { claim: BUYERS_CLAIM, backs: () => false, fix: "Say 'popular' or 'one of our best-sellers' on its own: never who buys it or what it's popular for." },
+  ...FEATURES.map(([claim, fact]): ProductClaim => ({
+    claim, backs: (item) => mentions(fact, factText(item)), feature: true,
+    fix: "Say a product has that only when its own name, description or details say so; otherwise leave it out, or say its listing doesn't mention it.",
+  })),
+];
+// "Its listing doesn't say dishwasher safe", "Neither is marked as a best-seller" or "不确定能不能放洗碗机" claims nothing; "Not only is it
+// popular" and "No wonder it's popular" do. 不锈 (stainless) and 不粘 (non-stick) are product words.
+const NEGATED = /\b(?:not(?!\s+only\b)|never|no(?!\s+(?:wonder|doubt)\b)|neither|none|nothing|without|cannot|unclear|unsure|unconfirmed)\b|n['’]t\b|不(?![锈粘])|[没未]|无法/i;
+// "Lids aren't included", "Dishwasher use isn't listed", "Lids are sold separately": the claim word itself is denied.
+const DENIED_AFTER = /^\s*(?:(?!(?:and|but|so|or)\b)[^\s,，;；]+\s+)?(?:is|are|was|were|do|does)(?:n['’]t|\s+not)\b|^\s*(?:(?:is|are)\s+)?(?:sold\s+)?separately\b/i;
+/** A claim is denied by a negation before it in its own comma piece, or right after it: "it's tempered, so it won't chip" isn't (r11 review). */
+function denied(words: string, at: number, end: number) {
+  const start = Math.max(...[",", "，", ";", "；"].map((mark) => words.lastIndexOf(mark, at))) + 1;
+  return NEGATED.test(words.slice(start, at)) || DENIED_AFTER.test(words.slice(end));
+}
+// An opening "For a cafe with dishwasher use," or "Since they go in the dishwasher," is the customer's need, not a feature claimed,
+// and "resists chipping better than crystal" compares (r11 draft exam). What goes well with a product is the add-on, not its feature
+// ("Lids go well with the Boxa containers", r11 review).
+const CUSTOMER_CONTEXT = /^\s*(?:for|since|as|if|because|with|given|you(?:['’]ve)?\s+(?:mentioned|said))\b[^,]*,/i;
+const PAIRING = /^[^.!?]*?\b(?:goes?|go|pairs?)\s+well\s+with\b/i;
+const CONTRAST = /\b(?:than|unlike|instead\s+of|versus|vs\.?)\s+[^,.;:!?]*/gi;
+// A question to the customer ("Will they go in the dishwasher?", "Need lids?") claims no feature (r11 review).
+const QUESTION = /^\s*(?:will|do|does|need|would|should|shall|how|which|what)\b[^?]*\?\s*$/i;
+// A claim over the cards sent ("here are three of our best-sellers", "both suit dishwashers", "a few options with lids", "这两款都").
+const CLAIM_PLURAL = /\b(?:these|they|both|all|here\s+are|(?:two|three)\s+of\s+our)\b|这些|这几款|两款|几款|每款|都/i;
+const FEATURE_PLURAL = /\b(?:a\s+few|options|each|either)\b/i;
+/** The text with the claims' own words blanked: 'Tempered' or 'Crystal' in a claim names no product by that word (r11 review). */
+const blankClaims = (text: string, claims: readonly RegExp[]) =>
+  claims.reduce((out, claim) => out.replace(new RegExp(claim.source, "gi"), (word) => " ".repeat(word.length)), text);
+// "Cheaper" or "pricier" of a product the prices shown in the chat prove isn't ("the cheaper PP version" was $16.42 beside a $10.28
+// pan, r11 candidate4 exam, 06).
+const PRICE_WORDS: Array<[word: RegExp, cheaper: boolean, fix: string]> = [
+  [/\b(?:cheaper|lower[- ]priced|less\s+expensive|more\s+affordable|budget[- ]friendly)\b|更便宜|较便宜|便宜一些/i, true, "Call a product cheaper only when its price is below the one you compare it with; otherwise leave the word out."],
+  [/\b(?:pricier|more\s+expensive|dearer|higher[- ]priced)\b|更贵|较贵|贵一些/i, false, "Call a product pricier only when its price is above the one you compare it with; otherwise leave the word out."],
+];
+
+/** The cards that share the most name words the text uses, when two or more tie on at least two of them. */
+function tiedCards(text: string, cards: ShownCard[]) {
+  const scored = cards.map((card) => ({ card, count: hits(card, text).size }));
+  const top = Math.max(0, ...scored.map(({ count }) => count));
+  const best = scored.filter(({ count }) => count === top);
+  return top >= 2 && best.length >= 2 ? best.map(({ card }) => card) : [];
+}
+
+// "The description does mention a sound enclosure" when only another product's did (r11 candidate4 exam, 04).
+const LISTING_SAYS = /\b(?:its|the|their|this)\s+(?:product\s+)?(?:description|listing|specs?|details)\s+(?:does\s+|also\s+)?(?:mentions?|says?|states?|notes?|lists?|describes?|shows?)\b(.*?)(?=\s+[-–—]\s|,?\s+but\b|[.;!?]|$)/i;
+const QUOTE_STOP = new Set(["about", "would", "could", "should", "which", "their", "there", "these", "those", "being", "worth", "option", "options", "check", "checking", "might", "maybe", "really", "quite", "using", "other", "great", "suits", "useful", "handy", "makes", "including"]);
+const LISTING_FIX = "Say a listing mentions something only when that product's own name, description or details say it; otherwise leave it out.";
+/** What the sentence says a product's listing mentions, when the product's facts lack most of its words. */
+function misquoted(sentence: string, cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>) {
+  const quote = LISTING_SAYS.exec(sentence);
+  if (!quote) return null;
+  const named = claimedBy(sentence, cards.map(asCard));
+  const item = seen.get(named.length === 1 ? named[0].code : cards.length === 1 ? cards[0].stock_id : "");
+  if (!item) return null;
+  const facts = plainText(factText(item));
+  const words = (plainText(quote[1]).match(/\p{L}{5,}/gu) ?? []).filter((word) => !QUOTE_STOP.has(word));
+  const missing = words.filter((word) => !facts.includes(word.replace(/(?:es|s)$/, "")));
+  return missing.length * 2 > words.length ? quote[0].trim() : null;
+}
+
+/**
+ * Each clause of the reply that calls a product a best-seller or popular, cheaper or pricier, or gives it a guide's feature, that the
+ * facts of the products it names don't back, and each sentence that says a listing mentions what it doesn't. earlierCards: the cards
+ * of earlier replies, which a price word may name and compare with.
+ */
+function unbackedProductClaims(said: readonly string[], cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>, earlierCards: readonly ShownCard[] = []) {
+  const checked = (product: Product): CheckedProduct => seen.get(product.stock_id) ?? { product, verified: false };
+  const pools = [cards.map(asCard), seenCards(seen)];
+  // The prices the customer has seen: earlier cards', then this reply's checked ones (not every search result).
+  const shown = [...earlierCards, ...cards.map((card) => ({ ...asCard(card), price: checked(card).verified ? card.list_price : null }))];
+  const prices = new Map(shown.flatMap((card) => (card.price === null ? [] : [[card.code.toLowerCase(), card.price] as const])));
+  const priced = [...new Map(shown.map((card) => [card.code.toLowerCase(), card])).values()].filter((card) => prices.has(card.code.toLowerCase()));
+  // A price word naming none is about the range ("there may be pricier ones too"), and one naming several is about one of them: "the
+  // Vinery is more budget-friendly, in glass rather than crystal" names the Salute by "glass" too (r11 candidate3 exam, 01).
+  const priceRight = (clause: string, word: RegExp, cheaper: boolean) => {
+    const named = claimedBy(blankClaims(clause.replace(CONTRAST, " "), [word]), priced);
+    return !named.length || named.some((card) => {
+      const price = prices.get(card.code.toLowerCase())!;
+      const others = [...prices].filter(([code]) => code !== card.code.toLowerCase()).map(([, other]) => other);
+      return !others.length || others.some((other) => (cheaper ? other > price : other < price));
+    });
+  };
+  const found: Array<{ sentence: string; clause: string; fix: string }> = [];
+  for (const sentence of said) {
+    const quote = misquoted(sentence, cards, seen);
+    if (quote) found.push({ sentence, clause: quote, fix: LISTING_FIX });
+    // ", with a perforated version too", ", and the 18cm is one of our popular picks", a list's ", the Shaker (...)" and a Chinese
+    // "；" each name another product: their own clause (r10 baseline exam, 06, 08, 11; r11 candidate2 exam, 09). ", with lids" names
+    // none and stays with its product (r11 review).
+    const clauses = sentence.split(/;|；|\s+but\s+|,\s*(?:while|whereas)\s+|(?:,\s+(?:and\s+)?|\s+and\s+)(?=the\s)/i).flatMap((part) =>
+      part.split(/,\s*with\s+/i).reduce<string[]>((out, piece, at) =>
+        (at && !pools.some((pool) => claimedBy(blankClaims(piece, PRODUCT_CLAIMS.map(({ claim }) => claim)), pool).length) ? [...out.slice(0, -1), `${out.at(-1)}, with ${piece}`] : [...out, piece]), []));
+    for (const clause of clauses) {
+      for (const [word, cheaper, fix] of PRICE_WORDS) {
+        const words = clause.replace(OFFER, " ");
+        const hit = word.exec(words);
+        if (hit && !denied(words, hit.index, hit.index + hit[0].length) && !priceRight(clause, word, cheaper)) found.push({ sentence, clause: clause.trim(), fix });
+      }
+      for (const { claim, backs, fix, feature } of PRODUCT_CLAIMS) {
+        const words = (feature ? clause.replace(CUSTOMER_CONTEXT, " ").replace(PAIRING, " ").replace(CONTRAST, " ") : clause).replace(OFFER, " ");
+        const hit = claim.exec(words);
+        if (!hit || denied(words, hit.index, hit.index + hit[0].length) || (feature && QUESTION.test(clause))) continue;
+        // Each clause is judged on the reply's cards it names, else on the products seen this turn it names, else on the cards it
+        // sends: "the Brandx is one of our best-sellers; the Waring suits bars" names both in one sentence, and "the Brandx" fits
+        // every Brandx seen (r10 skeptic A9). A feature said of cards that share one name ("the Toyogo round containers have a
+        // tight-fitting lid" over two PLASTIC ROUND CONTAINERs, r11 candidate2 exam, 07) is judged on all of them.
+        const naming = blankClaims(clause, [claim]);
+        const sent = claimedBy(naming, pools[0]);
+        const tied = feature && !sent.length ? tiedCards(naming, pools[0]) : [];
+        const named = sent.length ? sent : tied.length ? tied : claimedBy(naming, pools[1]);
+        // A plural claim over the cards sent needs every card backed (r10 review).
+        const plural = CLAIM_PLURAL.test(clause) || (feature === true && FEATURE_PLURAL.test(clause));
+        // A feature in a clause that names no product is trade advice ("tempered glass suits busy service"), and so is "they" with
+        // no card sent.
+        if (feature && !named.length && (!plural || !cards.length)) continue;
+        const sentBacked = cards.some((card) => backs(checked(card))) && (!plural || cards.every((card) => backs(checked(card))));
+        if (named.length ? named.every((card) => { const item = seen.get(card.code); return item !== undefined && backs(item); }) : sentBacked) continue;
+        found.push({ sentence, clause: clause.trim(), fix });
+      }
+    }
+  }
+  return found;
+}
+
+export const NEED_ISSUE_PREFIX = "The customer needs";
+// Must-haves a customer names: their words, and the words a card's facts back it with. "Detergent for our dishwasher" or "a
+// dishwashing machine" is what they buy, not a must-have, and a dishmachine detergent backs it (r11 review).
+const NEEDS: Array<[asked: RegExp, topic: RegExp]> = [
+  [/\bdish[\s-]?wash(?:ers?|ing)\b(?!\s+(?:racks?|baskets?|detergents?|rinse|chemicals?|tablets?|salt|parts?|machines?))|\bglass[\s-]?washers?\b|洗碗机/i, /dish[\s-]?(?:wash|machine)|glass[\s-]?wash|洗碗/i],
+  [/\bmicrowav(?:e|es|ed|ing|e?able)\b|微波/i, /microwav|微波/i],
+  [/\boven[- ]?(?:safe|proof)\b|\b(?:in|into|for)\s+the\s+oven\b|烤箱/i, /\boven|烤箱/i],
+  // "Chafing dishes to cover 100 pax" needs no lid.
+  [/\blids?\b|\bwith\s+(?:a\s+)?covers?\b|\bcovered\b|带盖|有盖|盖子/i, /\blid|\bcover|\b(?:screw|flip|bottle)[- ]?caps?\b|盖/i],
+];
+// "Lids not needed", "洗碗机我们没有" rule a need out right after it; "...so we don't need to hand wash" and "放洗碗机没有问题吧" don't.
+const UNNEEDED_AFTER = /^\s*(?:[\w'’-]+\s+){0,2}?(?:not\s+(?:needed|necessary|required|a\s+must)|optional|unnecessary)\b|^[^\x00-\x7f，。]{0,3}?(?:没有(?!问题)|不用|不需要|不要|不必)/i;
+// A plain "its listing doesn't confirm it", "no lid is listed", "lids sold separately" or "sales can confirm".
+const UNCONFIRMED = /\b(?:list(?:s|ed|ing|ings)?|confirm\w*|mention\w*|says?|stat(?:e|es|ed)|specif\w+|included|marked|separately|check\s+with)\b|确[认定]|注明|写明?|标明|列明|说明|提到/i;
+/**
+ * A must-have the customer names in this message ("they go in the dishwasher", "with lids") that a card's facts don't back, unless a
+ * sentence of the reply about that card (or about none in particular) says its listing doesn't confirm it (r11 final exam: "For a
+ * busy cafe with dishwashing, the Breeze is a good fit" and "good options for soup ... the Toyogo round containers", neither listing
+ * saying so).
+ */
+function unconfirmedNeeds(texts: readonly string[], said: readonly string[], cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>) {
+  const checked = (product: Product): CheckedProduct => seen.get(product.stock_id) ?? { product, verified: false };
+  return NEEDS.flatMap(([asked, topic]) => {
+    const need = texts.flatMap((text) => [...text.matchAll(new RegExp(asked.source, "gi"))]
+      .filter((hit) => !denied(text, hit.index, hit.index + hit[0].length) && !UNNEEDED_AFTER.test(text.slice(hit.index + hit[0].length))))[0];
+    if (!need) return [];
+    // Each clause on its own ("X is dishwasher safe; the Y's listing doesn't mention it" covers Y), possessives off so "470ml's" names.
+    const hedges = said.flatMap((sentence) => sentence.split(/;|；|\s+but\s+/i)).map((clause) => clause.replace(/['’]s\b/g, ""))
+      .filter((clause) => topic.test(clause) && UNCONFIRMED.test(clause) && (NEGATED.test(clause) || /\b(?:separately|check\s+with|can\s+confirm)\b/i.test(clause)));
+    const covered = (card: Product) => hedges.some((clause) => { const named = claimedBy(clause, cards.map(asCard)); return !named.length || named.some(({ code }) => code === card.stock_id); });
+    const unbacked = cards.filter((card) => !mentions(topic, factText(checked(card))) && !covered(card));
+    return unbacked.length ? [`${NEED_ISSUE_PREFIX} "${need[0]}", and the listing of ${unbacked.map((card) => card.name).join(" and ")} doesn't say so. Don't call it a fit for that: say plainly its listing doesn't confirm it, or recommend one whose listing does.`] : [];
+  });
+}
+
+// An appositive (", one of our best-sellers,", ", a popular pick", "(popular)") holds a claim on its own.
+const APPOSITIVE = /,\s*(?:one\s+of\s+our|a|an|our)\s[^,;!?()]*?(?:,(?=\s)|(?=[.;:!?](?:\s|$)|$))|\s*[(（][^()（）]*[)）]/gi;
+
+/**
+ * The message without the product claims (unbackedProductClaims) still there after the repair (round 11). An appositive claim goes
+ * on its own, so the pick or enquiry receipt around it stays (r11 review: the exam's "the BST2 4-prong strainer, one of our
+ * best-sellers, ..."); otherwise its sentence goes.
+ */
+export function withoutProductClaims(message: string, cards: readonly Product[], seen: ReadonlyMap<string, CheckedProduct>, earlierCards: readonly ShownCard[] = []) {
+  const unbacked = (text: string) => unbackedProductClaims([text], cards, seen, earlierCards).length > 0;
+  return rewriteSentences(message, (sentence) => {
+    if (!unbacked(sentence)) return sentence;
+    const cut = sentence.replace(APPOSITIVE, (part) => ([...PRODUCT_CLAIMS.map(({ claim }) => claim), ...PRICE_WORDS.map(([word]) => word)].some((claim) => claim.test(part)) ? "" : part));
+    return cut !== sentence && !unbacked(cut) ? cut : "";
+  });
+}
 // An offer to look ("Want me to look for the cheapest one?", "I can check which is the cheapest"), a question ("Looking for the
 // cheapest?") or a question about what they want that ends there or offers an "or" ("Would you like the cheapest one?", "Are you
 // after the priciest, or ...", r9 S3) ranks nothing; only its own clause is left out, so "The Mika is the cheapest; I can check
@@ -1343,18 +1595,22 @@ export function reviewAnswer(
     } else if (kind === "ranking") style.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES.complete}`);
     else safety.push(`${CLAIM_ISSUE_PREFIX} isn't backed by this turn's searches: "${sentence}". ${CLAIM_FIXES[kind]}`);
   }
-  // "One of our best-sellers" only of a product whose facts say so (r10). Each clause is judged on the reply's cards it names, else on
-  // the products seen this turn it names, else on the cards it sends ("these are our best-sellers"): "the Brandx is one of our
-  // best-sellers; the Waring suits bars" names both in one sentence, and "the Brandx" fits every Brandx seen (r10 skeptic A9).
-  for (const clause of said.flatMap((sentence) => sentence.split(/;|\s+but\s+|,\s*while\s+/i)).filter((part) => BEST_SELLER_CLAIM.test(part.replace(OFFER, " ")))) {
-    const sent = claimedBy(clause, cards.map(asCard));
-    const named = sent.length ? sent : claimedBy(clause, seenCards(seen));
-    // A plural claim over the cards sent ("here are three of our best-sellers") needs every card flagged (r10 review).
-    const plural = /\b(?:these|they|both|all|here\s+are|(?:two|three)\s+of\s+our)\b/i.test(clause);
-    const sentBacked = cards.some((item) => item.best_seller) && (!plural || cards.every((item) => item.best_seller));
-    if (named.length ? named.every((card) => seen.get(card.code)?.product.best_seller) : sentBacked) continue;
-    style.push(`${CLAIM_ISSUE_PREFIX} isn't backed by the products' facts: "${clause.trim()}". Call a product one of our best-sellers only when its sales_rank is 'best-seller'; otherwise leave the word out.`);
+  // "One of our best-sellers" only of a product whose facts say so (r10), and a guide's feature too (round 11).
+  for (const { clause, fix } of unbackedProductClaims(said, cards, seen, turn.earlierCards)) style.push(`${CLAIM_ISSUE_PREFIX} isn't backed by the products' facts: "${clause}". ${fix}`);
+  // An add recommends nothing; a remove can come with a replacement (r11 review).
+  if (!turn.changes?.some((change) => change.action !== "remove")) style.push(...unconfirmedNeeds(earlier.customerTexts ?? [], said, cards, seen));
+  // Suggest before you ask: a first reply's question with answer chips but no cards, after a search found products (r11 candidate4
+  // exam, 02: "Chopping bones, slicing, or both?" alone).
+  if (!earlier.replies?.length && turn.searches?.length && !cards.length && chips.length && seen.size >= 2 && said.some((sentence) => /[?？]$/.test(sentence))) {
+    style.push(SUGGEST_FIRST_ISSUE);
   }
+  // A button per product hands the choice back ("Which one would you like for the 48?" over Kwarx and Allround chips, r11 final exam, 12).
+  if (chips.length >= 2 && new Set(chips.map((chip) => { const named = claimedBy(chip, cards.map(asCard)); return named.length === 1 ? named[0].code : null; })).size === chips.length
+    && chips.every((chip) => claimedBy(chip, cards.map(asCard)).length === 1)) style.push(HAND_BACK_ISSUE);
+  if (askedBefore(chips, earlier.replies ?? [])) style.push(REPEATED_QUESTION_ISSUE);
+  if (said.some(joinedQuestion)) style.push(JOINED_QUESTION_ISSUE);
+  const names = new Set([...seen.values()].flatMap(({ product }) => plainText(product.name).split(" ")));
+  if (writesChinese(earlier.currentText) && (said.some((sentence) => englishWords(sentence, names).length >= 2) || chips.some((chip) => englishWords(chip, names).length))) style.push(LANGUAGE_ISSUE);
   style.push(...stockIssues(answer.message, cards));
   // Every product a clause names was checked live by the time the answer went out (the card re-check read it after the answer was
   // written, r8 R02, R09): the repair gives the price. Split at ';' and 'but', so a priced product beside an unchecked one isn't taken for it.
@@ -1412,6 +1668,12 @@ const ISSUE_CODES: Array<[prefix: string, code: string]> = [
   [KEPT_LINE_PREFIX, "KEPT_LINE"],
   [CLAIM_ISSUE_PREFIX, "CLAIM"],
   [ALL_IN_STOCK_ISSUE_PREFIX, "CLAIM"],
+  [NEED_ISSUE_PREFIX, "NEED"],
+  [REPEATED_QUESTION_ISSUE, "REPEAT"],
+  [LANGUAGE_ISSUE, "LANGUAGE"],
+  [JOINED_QUESTION_ISSUE, "QUESTION"],
+  [SUGGEST_FIRST_ISSUE, "SUGGEST"],
+  [HAND_BACK_ISSUE, "HAND_BACK"],
   [ABSENCE_ISSUE_PREFIX, "ABSENCE"],
   [RANGE_DENIAL_PREFIX, "RANGE_DENIAL"],
   [MID_SENTENCE_ISSUE, "MID_SENTENCE"],

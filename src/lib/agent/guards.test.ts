@@ -5,10 +5,10 @@ import { SALES_CONTACT } from "./contact";
 import type { ShownCard } from "./contract";
 import type { CheckedProduct } from "./facts";
 import {
-  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
-  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, RESERVATION_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
+  BROKEN_LINK_ISSUE, CLAIM_ISSUE_PREFIX, DANGLING_CURRENCY_ISSUE, ENQUIRY_CLAIM_PREFIX, HAND_BACK_ISSUE, JOINED_QUESTION_ISSUE, KEPT_LINE_PREFIX, LANGUAGE_ISSUE, LINK_BLAME_ISSUE, LINK_ISSUE_PREFIX, LIST_QUOTE_LINE, MID_SENTENCE_ISSUE, MONEY_ISSUE_PREFIX, NEED_ISSUE_PREFIX, NO_CARD_PREFIX, NO_PERMISSION_ISSUE,
+  NO_SHOW_PERMISSION_ISSUE, PHOTO_AGAIN_ISSUE, PRICE_HEDGE_PREFIX, PROMISE_LATER_ISSUE, REPEATED_QUESTION_ISSUE, RESERVATION_ISSUE, SUGGEST_FIRST_ISSUE, allowedCents, applyFixers, askedForChange, brokenLinkCodes, chineseClosers, customerMessage, deniedRange, dropRepeatedPitch, endsMidSentence, enquiryClaimIssues, issueCode,
   keptLineClaims, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, stockIssues, tidyMessage, unverifiedAmounts, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withoutRepeatedCloser,
-  quotedBefore, withListQuote, withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
+  quotedBefore, withListQuote, withNamedCards, withoutRangeCards, withoutRepeatedSet, withoutProductClaims, withoutWrongStockCounts, wrongStockCounts, type EarlierTurns, type FinalAnswer, type TurnFacts,
 } from "./guards";
 import { product } from "./testing";
 import type { EnquiryChange, SearchRecord } from "./tools";
@@ -1639,12 +1639,247 @@ test("'one of our best-sellers' only about a product whose facts say so (r10)", 
     ["The Brandx BX-100 is one of our best-sellers.", ["BX-100"]],
     ["These are our best-sellers.", ["BX-100"]],
     ["Want to see our best-sellers?", []],
-    ["It's a popular choice for bars.", ["MX1000XTXEE"]],
     // Each clause is judged on the reply's own cards first (r10 skeptic A9): the Brandx BX-200 was seen, not sent.
     ["The Brandx BX-100 is one of our best-sellers; the Waring suits bars.", ["BX-100", "MX1000XTXEE"]],
     ["The Brandx is one of our best-sellers.", ["BX-100"]],
     ["这款 PX-9 很畅销", ["PX-9"]],
   ] as const) assert.equal(bestSellerClaims(message, [...cards]), 0, message);
+});
+
+test("'popular' and a bare 畅销 or 热销 only about a product with a sales_rank (round 11)", () => {
+  // r11 draft exam: "the CSD16 shaker (480ml, popular size)" and a "popular small-portion size" lid had no sales_rank.
+  for (const [message, cards] of [
+    ["The Waring is a popular pick for bars.", ["MX1000XTXEE"]],
+    ["It's a popular choice for bars.", ["MX1000XTXEE"]],
+    ["这款 BX-200 很热销", ["BX-200"]],
+    ["These are popular.", ["BX-100", "BX-200"]],
+  ] as const) assert.equal(bestSellerClaims(message, [...cards]), 1, message);
+  for (const [message, cards] of [
+    ["The Acme PX-9 is a popular pick.", ["PX-9"]],
+    ["The Brandx BX-100 is popular.", ["BX-100"]],
+    ["这款 PX-9 很畅销", ["PX-9"]],
+    ["These are popular.", ["BX-100", "PX-9"]],
+  ] as const) assert.equal(bestSellerClaims(message, [...cards]), 0, message);
+  // A superlative stays one best-seller claim, not a popular one too.
+  assert.equal(bestSellerClaims("The Waring is our most popular blender.", ["MX1000XTXEE"]), 1);
+  // r11 candidate exam: 热卖款; r10 baseline exam: "the solid pan is popular and in stock, with a perforated version too".
+  assert.equal(bestSellerClaims("这款 BX-200 是热卖款", ["BX-200"]), 1);
+  assert.equal(bestSellerClaims("这款 PX-9 是热卖款", ["PX-9"]), 0);
+  assert.equal(bestSellerClaims("The Brandx BX-100 is popular and in stock, with a smaller BX-200 too.", ["BX-100", "BX-200"]), 0);
+  // r11 candidate2 exam: "the Taihei 26cm suits mains, and the Taihei 18cm is one of our popular picks" (the 18cm has no sales_rank).
+  assert.equal(bestSellerClaims("The Brandx BX-100 suits bars, and the BX-200 is one of our popular picks.", ["BX-100", "BX-200"]), 1);
+  // A denial claims nothing; a negation elsewhere, "Not only" and "No wonder" don't deny (r11 review).
+  for (const message of [
+    "Neither of these is marked as a best-seller, but the Brandx BX-200 is the quieter one.",
+    "The Waring isn't one of our best-sellers, but it suits bars.",
+    "这款 BX-200 不是我们的热卖款，但价格实惠。",
+    "这两款都不算畅销款，不过 BX-200 更安静。",
+  ]) assert.equal(bestSellerClaims(message, ["BX-200", "MX1000XTXEE"]), 0, message);
+  for (const message of [
+    "The Brandx BX-200 is one of our best-sellers, though it isn't the biggest.",
+    "Not only is the Waring one of our best-sellers, it suits bars.",
+    "No wonder the Waring is so popular.",
+    "这款 BX-200 很畅销，不过价格稍高。",
+    "这款 BX-200 很受欢迎。",
+  ]) assert.equal(bestSellerClaims(message, ["BX-200", "MX1000XTXEE"]), 1, message);
+  assert.equal(bestSellerClaims("这款 PX-9 很受欢迎。", ["PX-9"]), 0);
+  // Sales never say who buys it or what for, even of a best-seller (r11 candidate4 exam, 09: "popular for Chinese-style service").
+  for (const message of ["The Brandx BX-100 is popular with bars.", "The Brandx BX-100 is one of our best-sellers for cafes."]) assert.equal(bestSellerClaims(message, ["BX-100"]), 1, message);
+  assert.equal(bestSellerClaims("The Brandx BX-100 is popular with our customers.", ["BX-100"]), 0);
+});
+
+// Made-up rows: only their own facts back a feature.
+const featureSeen = new Map<string, CheckedProduct>([
+  product({ stock_id: "GL-1", name: "Acme Tempered Wine Glass 350ml", description: "Fully tempered and dishwasher safe." }),
+  product({ stock_id: "GL-2", name: "Acme Wine Glass 470ml", description: "Made from recycled glass." }),
+  product({ stock_id: "BL-1", name: "Acme Bar Blender 2L", description: "For smoothies and frozen drinks." }),
+  product({ stock_id: "BL-2", name: "Acme Drink Mixer 1L", description: "Ideal for blending tasks." }),
+  product({ stock_id: "CT-1", name: "Acme Square Container 750ml" }),
+  product({ stock_id: "CT-2", name: "Acme Round Container with Lid 500ml" }),
+  product({ stock_id: "CT-3", name: "PLASTIC ROUND CONTAINER", description: "Food-grade PP, stackable." }),
+  product({ stock_id: "CT-4", name: "PLASTIC ROUND CONTAINER", description: "Food-grade PP, thick wall." }),
+].map((item) => [item.stock_id, { product: item, verified: true }]));
+const featureClaims = (message: string, card_ids: string[]) => reviewAnswer({ message, card_ids, chips: [], show_contact: false }, featureSeen, allowed)
+  .style.filter((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)).length;
+
+test("a buying guide's feature only about a product whose own facts say so (round 11)", () => {
+  // r11 candidate exam fact check: "both suit daily dishwasher cycles", "good for drinks and ice", "a few options with lids", "more compact".
+  for (const [message, cards] of [
+    ["Both suit daily dishwasher cycles.", ["GL-1", "GL-2"]],
+    ["The Acme 470ml is dishwasher safe.", ["GL-2"]],
+    ["The Acme Drink Mixer is good for drinks and ice.", ["BL-2"]],
+    ["A few options with lids, within your budget.", ["CT-1", "CT-2"]],
+    ["The 750ml container is more compact.", ["CT-1"]],
+    ["这款 GL-2 适合洗碗机。", ["GL-2"]],
+    // r11 candidate2 exam: two cards share one name, so the claim is on both.
+    ["The round containers have a tight-fitting lid, good for soup.", ["CT-3", "CT-4"]],
+    // r11 review: a negation in another comma piece, ", with" naming no product, a claim word that is another card's name word.
+    ["The Acme 470ml is tempered, so it won't chip.", ["GL-2"]],
+    ["The Acme 470ml is a great all-rounder, with tempered glass for busy service.", ["GL-2"]],
+    ["The Acme Wine Glass is tempered too.", ["GL-1", "GL-2"]],
+    ["The Acme 470ml is microwaveable.", ["GL-2"]],
+  ] as const) assert.equal(featureClaims(message, [...cards]), 1, message);
+  for (const [message, cards] of [
+    ["The Acme Tempered 350ml is fully tempered and dishwasher safe.", ["GL-1"]],
+    // The customer's need, a denial, a comparison, trade advice naming no product, and product names are no feature claimed.
+    ["For a cafe with dishwasher use, the Acme Tempered 350ml is fully tempered.", ["GL-1", "GL-2"]],
+    ["Its listing doesn't say the Acme 470ml is dishwasher safe.", ["GL-2"]],
+    ["这款 GL-2 不确定能不能放洗碗机。", ["GL-2"]],
+    ["The Acme Tempered 350ml resists chipping better than crystal.", ["GL-1"]],
+    ["Dishwasher use calls for tough glass.", ["CT-1"]],
+    ["The Acme Bar Blender crushes ice for smoothies.", ["BL-1"]],
+    ["We carry bar blenders, stick blenders and ice crushers.", ["BL-1"]],
+    ["Need lids to go with them?", ["CT-1"]],
+    // r11 review: a question, "they" with no card sent, a denial after the claim word, an add-on, and other senses of the words.
+    ["Will they go in the dishwasher?", ["GL-1", "GL-2"]],
+    ["They go in the dishwasher fine.", []],
+    ["Lids aren't included with the Acme Square Container 750ml.", ["CT-1"]],
+    ["Lids go well with the Acme Square Container 750ml.", ["CT-1"]],
+    ["The Acme Drink Mixer makes great ice tea.", ["BL-2"]],
+  ] as const) assert.equal(featureClaims(message, [...cards]), 0, message);
+  // A spec label backs its feature: "Microwaveable": "Y" (r11 review).
+  const plate = product({ stock_id: "PL-1", name: "Acme Dinner Plate 27cm" });
+  const plates = new Map<string, CheckedProduct>([[plate.stock_id, { product: plate, verified: true, details: { Microwaveable: "Y" } }]]);
+  assert.deepEqual(reviewAnswer({ message: "The Acme Dinner Plate 27cm is microwave safe.", card_ids: ["PL-1"], chips: [], show_contact: false }, plates, allowed).style, []);
+});
+
+test("a best-seller or feature claim still unbacked after the repair loses its sentence (round 11)", () => {
+  // r11 candidate exam: "the BST2 4-prong strainer, one of our best-sellers" outlived its repair.
+  const glasses = [featureSeen.get("GL-1")!.product, featureSeen.get("GL-2")!.product];
+  assert.equal(withoutProductClaims("The Acme Tempered 350ml is fully tempered. Both suit daily dishwasher cycles. Want the Acme Tempered?", glasses, featureSeen),
+    "The Acme Tempered 350ml is fully tempered. Want the Acme Tempered?");
+  assert.equal(withoutProductClaims("The Acme Tempered 350ml is dishwasher safe.", glasses, featureSeen), "The Acme Tempered 350ml is dishwasher safe.");
+  // An appositive claim goes on its own: the pick and the enquiry receipt stay (r11 review).
+  const blenders = [salesSeen.get("BX-200")!.product];
+  assert.equal(withoutProductClaims("I'd go with the Brandx BX-200, one of our best-sellers, for a busy bar. Want the BX-200?", blenders, salesSeen),
+    "I'd go with the Brandx BX-200 for a busy bar. Want the BX-200?");
+  assert.equal(withoutProductClaims("Added 2 × Brandx BX-200 to your enquiry, a popular pick for bars.", blenders, salesSeen), "Added 2 × Brandx BX-200 to your enquiry.");
+  assert.equal(withoutProductClaims("The Brandx BX-200 (popular, 50 available) could cover that.", blenders, salesSeen), "The Brandx BX-200 could cover that.");
+});
+
+test("'cheaper', 'pricier', what a listing mentions and 'both use fuel/water' only as the products' facts show (r11 candidate4 exam)", () => {
+  const pans = new Map<string, CheckedProduct>([
+    product({ stock_id: "PN-1", name: "Acme Steelline GN Pan 1/1 40mm", list_price: 10.28 }),
+    product({ stock_id: "PN-2", name: "Acme Translucent GN Pan 1/1 150mm", list_price: 16.42 }),
+    product({ stock_id: "BL-9", name: "Acme Hi-Power Blender", description: "3.5 peak HP motor, 64 oz container, up to 75 drinks a day." }),
+    product({ stock_id: "CD-1", name: "Acme Chafer Nestable", description: "A lower tray holds fuel burners under boiling water." }),
+    product({ stock_id: "CD-2", name: "Acme Chafer Foldable", description: "One-piece stainless steel." }),
+  // The blender wasn't checked live: its price is unknown.
+  ].map((item) => [item.stock_id, { product: item, verified: item.stock_id !== "BL-9" }]));
+  const claims = (message: string, card_ids: string[], earlierCards: ShownCard[] = []) =>
+    reviewAnswer({ message, card_ids, chips: [], show_contact: false }, pans, allowed, undefined, { earlierCards }).style.filter((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)).length;
+  // r11 candidate4 exam, 06: "the cheaper PP translucent version" was $16.42 beside a $10.28 pan.
+  assert.equal(claims("There's also the cheaper Acme Translucent pan for cold prep.", ["PN-1", "PN-2"]), 1);
+  assert.equal(claims("The Acme Translucent pan is cheaper than the Acme Steelline pan.", ["PN-1", "PN-2"]), 1);
+  for (const message of ["The Acme Steelline pan is the cheaper one.", "The Acme Steelline pan is cheaper than the Acme Translucent pan.", "The Acme Translucent pan is pricier.", "There may be pricier ones too."]) {
+    assert.equal(claims(message, ["PN-1", "PN-2"]), 0, message);
+  }
+  // A card shown earlier in the chat counts ("the cheaper one" of two shown before), and an unknown price proves nothing.
+  const earlier = (code: string, price: number | null): ShownCard => ({ code, name: code, price, link: null });
+  assert.equal(claims("The Acme Steelline pan is the cheaper one.", ["PN-1"], [earlier("PN-2", 16.42)]), 0);
+  assert.equal(claims("The Acme Steelline pan is the cheaper one.", ["PN-1"], [earlier("OLD-1", 5)]), 1);
+  assert.equal(claims("The Acme Hi-Power Blender is the cheaper one.", ["BL-9"], [earlier("OLD-1", 5)]), 0);
+  // r11 candidate4 exam, 04: "The description does mention a sound enclosure" (another blender's).
+  assert.equal(claims("The description does mention a sound enclosure may be an option worth checking for a counter setup - but I can't confirm it.", ["BL-9"]), 1);
+  assert.equal(claims("Its listing says it makes up to 75 drinks a day.", ["BL-9"]), 0);
+  assert.equal(claims("Its listing doesn't mention a sound enclosure.", ["BL-9"]), 0);
+  // r11 candidate4 exam, 03: "Both use fuel/water underneath" when one chafer's listing says so.
+  assert.equal(claims("Both use fuel/water underneath to keep food warm.", ["CD-1", "CD-2"]), 1);
+  assert.equal(claims("The Acme Chafer Nestable holds fuel underneath.", ["CD-1", "CD-2"]), 0);
+});
+
+test("a first reply's question with chips but no cards, after a search found products, gets a repair to suggest first (r11 candidate4 exam)", () => {
+  const issues = (card_ids: string[], chips: string[], replies: string[] = []) =>
+    reviewAnswer({ message: "Chopping bones, slicing, or both?", card_ids, chips, show_contact: false }, featureSeen, allowed, { cardSets: [], previousMessage: null, currentText: "need a chopper", replies }, { searches: [search()] }).style;
+  assert.ok(issues([], ["Chopping bones", "Slicing", "Both"]).includes(SUGGEST_FIRST_ISSUE));
+  assert.ok(!issues(["GL-1", "GL-2"], ["Chopping bones", "Slicing", "Both"]).includes(SUGGEST_FIRST_ISSUE));
+  assert.ok(!issues([], []).includes(SUGGEST_FIRST_ISSUE));
+  assert.ok(!issues([], ["Chopping bones", "Slicing", "Both"], ["Here are two."]).includes(SUGGEST_FIRST_ISSUE));
+});
+
+test("a button per product hands the choice back, and Claire's English closers in a Chinese chat turn Chinese (r11 final exam)", () => {
+  const handBack = (chips: string[]) => reviewAnswer({ message: "I'd go with the Acme Bar Blender. Which one would you like?", card_ids: ["BL-1", "BL-2"], chips, show_contact: false }, featureSeen, allowed)
+    .style.includes(HAND_BACK_ISSUE);
+  assert.ok(handBack(["Bar Blender", "Drink Mixer"]));
+  assert.ok(!handBack(["Fine dining", "Busy service"]));
+  assert.ok(!handBack(["Bar Blender", "Show others"]));
+  assert.equal(chineseClosers("50人的话推荐这款。Want the Safico Pro 19L?"), "50人的话推荐这款。要这款Safico Pro 19L吗？");
+  assert.equal(chineseClosers("好的。How many Safico Pro rice cookers do you need?"), "好的。需要几个？");
+  assert.equal(chineseClosers("要这款吗？"), "要这款吗？");
+});
+
+test("a must-have the customer named that a card's listing doesn't back is said to be unconfirmed (r11 final exam)", () => {
+  const needs = (message: string, card_ids: string[], customerTexts: string[], previousMessage: string | null = null, turn: Partial<TurnFacts> = {}) =>
+    reviewAnswer({ message, card_ids, chips: [], show_contact: false }, featureSeen, allowed, { cardSets: [], previousMessage, currentText: customerTexts[0] ?? "", customerTexts }, turn)
+      .style.filter((issue) => issue.startsWith(NEED_ISSUE_PREFIX)).length;
+  // r11 final exam: "For a busy cafe with dishwashing, the Breeze is a good fit"; "Good options for soup ... the Toyogo round containers".
+  assert.equal(needs("For a busy cafe, the Acme 470ml is a good fit. Want it?", ["GL-2"], ["busy cafe, they go in the dishwasher"]), 1);
+  assert.equal(needs("Good options for soup are these square containers.", ["CT-1"], ["food containers with lids for soup"]), 1);
+  // Backed, said to be unconfirmed, sold separately, never asked, ruled out, or an add: no issue.
+  assert.equal(needs("The Acme Tempered 350ml is fully tempered and dishwasher safe.", ["GL-1"], ["they go in the dishwasher"]), 0);
+  assert.equal(needs("The Acme 470ml is sturdy, though its listing doesn't say dishwasher safe.", ["GL-2"], ["they go in the dishwasher"]), 0);
+  assert.equal(needs("The Acme Tempered 350ml is dishwasher safe; the Acme 470ml's listing doesn't mention dishwasher use.", ["GL-1", "GL-2"], ["they go in the dishwasher"]), 0);
+  // The loop passes only this message: a must-have from an older one may be about another item (r11 review).
+  assert.equal(needs("Here it is again.", ["GL-2"], ["how loud is it?"]), 0);
+  assert.equal(needs("Lids are sold separately for the square container.", ["CT-1"], ["containers with lids"]), 0);
+  assert.equal(needs("The Acme 470ml suits a busy cafe.", ["GL-2"], ["busy cafe"]), 0);
+  assert.equal(needs("The Acme 470ml suits a busy cafe.", ["GL-2"], ["no need dishwasher safe"]), 0);
+  assert.equal(needs("Got it: 48 Acme 470ml added.", ["GL-2"], ["48", "they go in the dishwasher"], null, { changes: [{ action: "add", code: "GL-2" }] }), 0);
+  // r11 review: each card needs its own caveat, in any plain wording; a selling line with a "won't" is no caveat.
+  assert.equal(needs("The Acme Bar Blender suits a busy bar. The Acme 470ml's listing doesn't confirm dishwasher use.", ["BL-1", "GL-2"], ["they go in the dishwasher"]), 1);
+  for (const message of ["On dishwasher use, the Acme 470ml's listing doesn't confirm it.", "Sia Huat sales can confirm dishwasher use for the Acme 470ml."]) {
+    assert.equal(needs(message, ["GL-2"], ["they go in the dishwasher"]), 0, message);
+  }
+  assert.equal(needs("The Acme 470ml is tough, so it won't chip in the dishwasher.", ["GL-2"], ["they go in the dishwasher"]), 1);
+  // A need ruled out, or what they buy for a dishwasher, is no must-have; "(Without Lid)" backs no lid.
+  for (const said of ["wine glasses, dishwasher not needed", "酒杯，洗碗机我们没有"]) assert.equal(needs("The Acme 470ml suits a cafe.", ["GL-2"], [said]), 0, said);
+  // A ruling-out comes right after the need: "so we don't need to hand wash" and "没有问题吧" keep it (r11 review).
+  for (const said of ["they go in the dishwasher so we don't need to hand wash", "酒杯放洗碗机没有问题吧"]) assert.equal(needs("The Acme 470ml suits a cafe.", ["GL-2"], [said]), 1, said);
+  assert.equal(needs("The Acme Square Container 750ml suits a buffet.", ["CT-1"], ["chafing dishes to cover 100 pax"]), 0);
+  assert.equal(needs("Acme 470ml 的资料没有写可以放洗碗机。要这款吗？", ["GL-2"], ["酒杯，要放洗碗机的"]), 0);
+  const kit = new Map<string, CheckedProduct>([
+    product({ stock_id: "DT-1", name: "Acme Dishmachine Detergent 5L", description: "High alkaline formula." }),
+    product({ stock_id: "SP-1", name: "Acme Stock Pot (Without Lid) 30cm" }),
+  ].map((item) => [item.stock_id, { product: item, verified: true }]));
+  const kitIssues = (message: string, card: string, said: string) =>
+    reviewAnswer({ message, card_ids: [card], chips: [], show_contact: false }, kit, allowed, { cardSets: [], previousMessage: null, currentText: said, customerTexts: [said] }).style;
+  assert.ok(!kitIssues("The Acme Dishmachine Detergent 5L handles heavy soil.", "DT-1", "need detergent for our dishwasher").some((issue) => issue.startsWith(NEED_ISSUE_PREFIX)));
+  assert.ok(kitIssues("The Acme Stock Pot 30cm suits soup.", "SP-1", "stock pot with lid for soup").some((issue) => issue.startsWith(NEED_ISSUE_PREFIX)));
+  assert.ok(kitIssues("The Acme Stock Pot 30cm comes with a lid.", "SP-1", "stock pot").some((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)));
+  // r11 final exam, 07: "6Qt Cap" is a capacity, so it backs no "with lid".
+  const tub = product({ stock_id: "TB-1", name: "Acme PP Square Food Container, 6Qt Cap, Translucent" });
+  const tubs = new Map<string, CheckedProduct>([[tub.stock_id, { product: tub, verified: true }]]);
+  assert.ok(reviewAnswer({ message: "The Acme PP Square Food Container comes with lid.", card_ids: ["TB-1"], chips: [], show_contact: false }, tubs, allowed).style.some((issue) => issue.startsWith(CLAIM_ISSUE_PREFIX)));
+  assert.equal(issueCode(`${NEED_ISSUE_PREFIX} "lids", and ...`), "NEED");
+});
+
+test("a question asked before, a Chinese customer answered in English, and two questions joined with 'and' get a repair (round 11)", () => {
+  const issues = (message: string, chips: string[], earlier: Partial<EarlierTurns> = {}) =>
+    reviewAnswer({ message, card_ids: [], chips, show_contact: false }, featureSeen, allowed, { cardSets: [], previousMessage: null, currentText: "", ...earlier }).style;
+  // r11 candidate exams: "mains, sides or sharing platters?" asked again after "just browsing".
+  const plates = { replies: ["A couple to start. What will you mainly use them for - mains, sides/dessert, or sharing platters?", "Sure, take your time."] };
+  assert.ok(issues("For a Chinese restaurant, round rim plates work well. Mains, sides, or sharing platters mainly?", ["Mains", "Sides or dessert", "Sharing platters"], plates).includes(REPEATED_QUESTION_ISSUE));
+  // A new question, or products the earlier reply named outside its question, is no repeat.
+  assert.ok(!issues("Porcelain or melamine?", ["Porcelain", "Melamine"], plates).includes(REPEATED_QUESTION_ISSUE));
+  assert.ok(!issues("Which one?", ["Acme Tempered", "Acme Wine"], { replies: ["The Acme Tempered 350ml is fully tempered; the Acme Wine Glass 470ml is cheaper. Fine dining or busy service?"] }).includes(REPEATED_QUESTION_ISSUE));
+  // The next item's size question is no repeat of the last item's (r11 review).
+  const sizes = ["Small", "Medium", "Large"];
+  assert.ok(issues("Small, medium or large?", sizes, { replies: ["Small, medium or large plates?"] }).includes(REPEATED_QUESTION_ISSUE));
+  assert.ok(!issues("Small, medium or large?", sizes, { replies: ["Small, medium or large plates?", "Added 2 × Acme Dinner Plate to your enquiry."] }).includes(REPEATED_QUESTION_ISSUE));
+  // r11 final exam, 11 T2: the same question again in Chinese.
+  const cooker = { replies: ["推荐这款电饭锅，现货。用电还是用煤气呢？"], currentText: "大概50人" };
+  assert.ok(issues("50人的话推荐这款。您用电还是煤气？", ["电", "煤气"], cooker).includes(REPEATED_QUESTION_ISSUE));
+  assert.ok(!issues("要商用款还是家用款？", ["商用款", "家用款"], cooker).includes(REPEATED_QUESTION_ISSUE));
+  // r11 candidate2 exam: 大概50人 got "Want the Safico Pro?", 好 got an English quantity question, 我要买电饭锅 got English chips.
+  assert.ok(issues("50人的话，这款合适。Want the Acme Tempered?", [], { currentText: "大概50人" }).includes(LANGUAGE_ISSUE));
+  assert.ok(issues("How many do you need?", [], { currentText: "好" }).includes(LANGUAGE_ISSUE));
+  assert.ok(issues("请问是用电还是煤气？", ["Electric", "Town gas"], { currentText: "我要买电饭锅，餐厅用" }).includes(LANGUAGE_ISSUE));
+  // Product names stay as the catalogue writes them, and a message mixing in English is no Chinese chat.
+  assert.ok(!issues("推荐这款：\nAcme Tempered Wine Glass 350ml", ["Acme Tempered"], { currentText: "我要酒杯" }).includes(LANGUAGE_ISSUE));
+  assert.ok(!issues("How many do you need?", [], { currentText: "我要 GN pan 1/1 two pieces" }).includes(LANGUAGE_ISSUE));
+  // r11 exams: "...or a buffet line, and do you need full size, smaller, or round?".
+  assert.ok(issues("Is this for catering or a buffet line, and do you need full size, smaller, or round?", ["Catering", "Buffet line"]).includes(JOINED_QUESTION_ISSUE));
+  assert.ok(!issues("Is this for fine dining, busy service, or home use?", ["Fine dining", "Busy service", "Home"]).includes(JOINED_QUESTION_ISSUE));
 });
 
 test("'the cheapest' is backed by a price_low sort, not a price_high one", () => {
