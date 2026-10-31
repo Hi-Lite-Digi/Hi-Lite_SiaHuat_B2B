@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Product } from "@/lib/chat-contract";
+import { BUYING_GUIDES } from "./buying-guides";
 import { QTY_NOTICE } from "./enquiry";
 import { turnDeps, type CheckedProduct } from "./facts";
 import { agentTools, runTool, startPickCheck, type ToolOutcome, type TurnContext } from "./tools";
@@ -1327,7 +1328,7 @@ test("match_photo records which products the photo matched, exactly or as look-a
 
 test("the update_enquiry description says a separate check confirms the pick and a swap is an add plus a remove", () => {
   const description = agentTools.find((tool) => tool.name === "update_enquiry")?.description ?? "";
-  assert.ok(description.endsWith("stock_id must be a product the customer picked. A separate check reads the chat to confirm the pick (or that they asked to remove the line) and the number they typed for this item. For a swap, send the add of the new item and the remove of the old one in the same response."));
+  assert.ok(description.endsWith("stock_id must be a product the customer picked. A separate check reads the chat to confirm the pick (or that they asked to remove the line) and the number they typed for this item. For a swap, send the add of the new item and the remove of the old one in the same response. After an add, goes_with lists product types that usually go with that item."));
 });
 
 test("clearing checks the texts that may ask for it, which include a tapped chip", async () => {
@@ -1605,4 +1606,42 @@ test("a size comes from the sales name only when the store name gives none (r10:
   deps.searchDirect = async () => [other];
   // Its card says 5cm, so it isn't put first as the customer's exact 4cm.
   assert.notEqual(idsOf(await searchBody({ queries: ["steamer lid 4cm"], category: "Bamboo steamers" }, deps))[0], "T-LID5");
+});
+
+const guided = BUYING_GUIDES.find((guide) => guide.goes_with?.length) ?? BUYING_GUIDES[0];
+const glass = product({ stock_id: "R11-G1", name: "TEST WINE GLASS 350ML", third_category: guided?.types[0] });
+
+test("a search or product result carries its type's buying guide, once a turn (round 11)", async () => {
+  const ctx = context(fakeDeps([glass]));
+  const search = JSON.parse((await runTool("search_catalogue", { queries: ["test wine glass"] }, ctx)).content);
+  assert.deepEqual(search.buying_guide, JSON.parse(JSON.stringify([guided])));
+  const again = JSON.parse((await runTool("get_product", { stock_id: "R11-G1" }, ctx)).content);
+  assert.equal(again.buying_guide, undefined);
+  const fresh = JSON.parse((await runTool("get_product", { stock_id: "R11-G1" }, context(fakeDeps([glass])))).content);
+  assert.deepEqual(fresh.buying_guide, JSON.parse(JSON.stringify([guided])));
+  const plain = JSON.parse((await runTool("search_catalogue", { queries: ["torch"] }, context())).content);
+  assert.equal(plain.buying_guide, undefined);
+  assert.match(agentTools[0].description ?? "", /buying_guide/);
+});
+
+test("an add of a guided item returns what goes with it; a set doesn't (round 11)", async () => {
+  const ctx = context(fakeDeps([glass]), { customerTexts: ["48 of R11-G1"] });
+  const added = await runTool("update_enquiry", { action: "add", stock_id: "R11-G1", quantity: 48 }, ctx);
+  assert.equal(added.isError, false, added.content);
+  assert.deepEqual(JSON.parse(added.content).goes_with, guided.goes_with ? [...guided.goes_with] : undefined);
+  const set = await runTool("update_enquiry", { action: "set", stock_id: "R11-G1", quantity: 40 }, context(fakeDeps([glass]), { customerTexts: ["make it 40 of R11-G1"], lines: ctx.lines }));
+  assert.equal(set.isError, false, set.content);
+  assert.equal(JSON.parse(set.content).goes_with, undefined);
+  assert.match(agentTools.find((tool) => tool.name === "update_enquiry")?.description ?? "", /goes_with/);
+});
+
+test("alternatives carry their type's guide; a list's search round carries none (round 11)", async () => {
+  const twin = product({ stock_id: "R11-G2", name: "TEST WINE GLASS 450ML", third_category: guided.types[0] });
+  const alternatives = JSON.parse((await runTool("find_alternatives", { stock_id: "R11-G1" }, context(fakeDeps([glass, twin])))).content);
+  assert.deepEqual(alternatives.products.map((item: { stock_id: string }) => item.stock_id), ["R11-G2"]);
+  assert.deepEqual(alternatives.buying_guide, JSON.parse(JSON.stringify([guided])));
+  // A list of 4+ items searches each in one round: no guide questions for a list (the list rule asks none).
+  const listRound = JSON.parse((await runTool("search_catalogue", { queries: ["test wine glass"] }, context(fakeDeps([glass]), { roundSearches: 4 }))).content);
+  assert.equal(listRound.products.length, 1);
+  assert.equal(listRound.buying_guide, undefined);
 });
