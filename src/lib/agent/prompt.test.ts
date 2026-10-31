@@ -356,7 +356,10 @@ test("round 11: Claire sells like Sia Huat's salespeople: the guide's question, 
   // r11 draft exam fact check: "also fine for dishwashers", "good for drinks and ice", "runs on fuel" came from guides, not the facts.
   const guideRule = lines.find((line) => line.startsWith("- buying_guide is")) ?? "";
   // r11 candidate exam: "explicitly dishwasher safe in its data".
-  assert.ok(guideRule.endsWith(" A reason you give for a product comes from its own name, description or details: a guide line ('tempered glass for busy service') tells you which product to pick, never what to say about one whose facts don't say it ('fine for dishwashers', 'good for ice', 'runs on fuel'). To the customer, a product's facts are its listing, never its 'data'."), guideRule);
+  assert.ok(guideRule.includes(" A reason you give for a product comes from its own name, description or details: a guide line ('tempered glass for busy service') tells you which product to pick, never what to say about one whose facts don't say it ('fine for dishwashers', 'good for ice', 'runs on fuel'). To the customer, a product's facts are its listing, never its 'data'."), guideRule);
+  // r11 final exam: "For a busy cafe with dishwashing, the Breeze is a good fit" (no dishwasher in its listing), and a 12L cooker
+  // called larger than a 19L one.
+  assert.ok(guideRule.endsWith(" When the customer names a must-have (dishwasher, lids, microwave or oven use), call a product a fit for it only when its own facts say so, and for a card whose facts don't, say in that reply that its listing doesn't confirm it ('its listing doesn't say dishwasher safe', 'no lid is listed'). Call one product bigger, stronger or quieter than another only when both their facts give numbers that show it."), guideRule);
   // r11 candidate exam: "a new cocktail bar" was asked "busy bar, cafe or restaurant, or home?"; the plates and rice-cooker questions
   // were asked twice; "home or commercial, and mostly dough or cakes?" joined a guide's two asks; a Chinese chat got English chips.
   assert.ok(lines.some((line) => line.includes("and never one you have asked before or one their earlier messages answer ('for my new cocktail bar' says bar, not cafe or home).")));

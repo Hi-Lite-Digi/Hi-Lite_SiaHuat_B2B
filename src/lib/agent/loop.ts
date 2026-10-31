@@ -10,7 +10,7 @@ import { enquiryTotals, gstWords, listItemCount, sameQuantityText, statesAnyQuan
 import { liveCheck, productFact, turnDeps, withTimeout, type CheckedProduct, type FactDeps } from "./facts";
 import { buildFallbackReply } from "./fallback";
 import {
-  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
+  CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LANGUAGE_ISSUE, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, chineseClosers, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
   quotedBefore, withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutProductClaims, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
@@ -436,6 +436,7 @@ export async function runAgentTurn(input: {
     previousMessage: picks.replies.at(-1)?.text ?? null,
     replies: picks.replies.map((reply) => reply.text),
     currentText: searchText ?? "",
+    customerTexts: request.event.type === "text" ? [request.event.text] : request.event.type === "image" && request.event.caption ? [request.event.caption] : [],
     // Links already in the chat may be given again: Claire's replies and their card notes, or a link the customer pasted.
     links: [...request.history.map((item) => item.content), searchText ?? ""].flatMap(storeLinks),
     previousLinks: storeLinks(request.history.findLast((item) => item.role === "assistant")?.content ?? ""),
@@ -635,12 +636,10 @@ export async function runAgentTurn(input: {
     const finish = (answer: FinalAnswer, checked: Review): FinalAnswer => {
       const fixed = applyFixers(answer.message, checked.safety, fixers);
       if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
-      const message = withoutProductClaims(withoutWrongStockCounts(checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message, checked.cards, ctx.seen), checked.cards, ctx.seen);
-      const done = message.trim() ? { ...answer, message }
-        : { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
-      // Chips answer the question: they go when its sentence went (r11 review).
-      if (/[?？]/.test(answer.message) && !/[?？]/.test(done.message)) checked.chips = [];
-      return done;
+      const kept = withoutProductClaims(withoutWrongStockCounts(checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message, checked.cards, ctx.seen), checked.cards, ctx.seen, earlierCards);
+      const message = checked.style.includes(LANGUAGE_ISSUE) ? chineseClosers(kept) : kept;
+      if (message.trim()) return { ...answer, message };
+      return { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
     };
     // A first answer whose problems code can fix can still be sent, lightly tidied and fixed, when there is no usable repair: a repair
     // that fails or runs out of time no longer turns an answer code could send into the backup reply (r6 T-R4).
@@ -713,10 +712,13 @@ export async function runAgentTurn(input: {
       picks: ctx.checkPick.settled.map((v) => `${v.action}:${v.verdict}${v.sure ? "" : "?"}:${v.ms}`), pickFast: ctx.pickFast,
       cards: review.cards.map((card) => `${card.stock_id}:${card.stock_status}:${card.available_quantity ?? "?"}`),
     });
+    const message = !blank ? cleaned.message : review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE;
     return {
-      message: !blank ? cleaned.message : review.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE,
+      message,
       cards: review.cards.map(publicProduct),
-      chips: review.chips,
+      // Chips answer a question: with none in the message, or its sentence dropped, they would answer nothing (r11 review; r11
+      // candidate4 exam, 06).
+      chips: /[?？]/.test(message) ? review.chips : [],
       enquiry: replyEnquiry(ctx),
       showContact: showContact || cleaned.showContact || (blank && !review.cards.length),
       provider: "anthropic",
