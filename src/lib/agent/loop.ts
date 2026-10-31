@@ -12,7 +12,7 @@ import { buildFallbackReply } from "./fallback";
 import {
   CLAIM_ISSUE_PREFIX, ENQUIRY_CLAIM_PREFIX, KEPT_LINE_PREFIX, LINK_ISSUE_PREFIX, MONEY_ISSUE_PREFIX, allowedCents, applyFixers, askedForChange, asksConfirmStep, brokenLinkCodes, customerMessage,
   dropRepeatedPitch, enquiryClaimIssues, issueCode, noCardFixer, permissionCodes, removeAmounts, removeClaims, removeLinks, reviewAnswer, storeLinks, tidyMessage, unfixable, unknownStoreLinks, unverifiedAmounts,
-  quotedBefore, withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutRepeatedSet, withoutWrongStockCounts,
+  quotedBefore, withListQuote, withoutAllFoundClaims, withoutCardPointers, withoutChangedCards, withoutEnquiryClaims, withoutKeptLineClaims, withNamedCards, withoutRangeCards, withoutRepeatedCloser, withoutProductClaims, withoutRepeatedSet, withoutWrongStockCounts,
   type EarlierTurns, type FinalAnswer, type Fixer, type Review,
 } from "./guards";
 import { codePattern, pickEvidence, same } from "./picks";
@@ -629,13 +629,18 @@ export async function runAgentTurn(input: {
     ];
     // An answer about to be sent, with what code can fix fixed. Style problems left are not worth the backup reply: the answer is
     // lightly tidied, then checked again for claims, as tidying rewords it ("Noted: 2" becomes "Got it: 2"). A stock count that still
-    // disagrees with its card's live stock loses its number (exam 4, c03-stress idx 7). It is never sent empty.
+    // disagrees with its card's live stock loses its number (exam 4, c03-stress idx 7), and a sentence whose best-seller or feature
+    // claim its products' facts still don't back is dropped (round 11 exam: two best-seller claims outlived their repair). It is
+    // never sent empty.
     const finish = (answer: FinalAnswer, checked: Review): FinalAnswer => {
       const fixed = applyFixers(answer.message, checked.safety, fixers);
       if (fixed.left.length) throw new Error("AGENT_REPLY_REJECTED"); // only unknown card ids stay unfixable
-      const message = withoutWrongStockCounts(checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message, checked.cards, ctx.seen);
-      if (message.trim()) return { ...answer, message };
-      return { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
+      const message = withoutProductClaims(withoutWrongStockCounts(checked.style.length ? withoutClaims(tidyMessage(fixed.message)) : fixed.message, checked.cards, ctx.seen), checked.cards, ctx.seen);
+      const done = message.trim() ? { ...answer, message }
+        : { ...answer, message: checked.cards.length ? CARDS_ONLY_MESSAGE : NOTHING_LEFT_MESSAGE, show_contact: answer.show_contact || !checked.cards.length };
+      // Chips answer the question: they go when its sentence went (r11 review).
+      if (/[?？]/.test(answer.message) && !/[?？]/.test(done.message)) checked.chips = [];
+      return done;
     };
     // A first answer whose problems code can fix can still be sent, lightly tidied and fixed, when there is no usable repair: a repair
     // that fails or runs out of time no longer turns an answer code could send into the backup reply (r6 T-R4).
